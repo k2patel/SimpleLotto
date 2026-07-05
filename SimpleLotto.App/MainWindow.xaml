@@ -341,7 +341,8 @@
         <Grid x:Name="StartupOverlay"
               Grid.RowSpan="3"
               Background="{ThemeResource SlBackgroundBrush}">
-            <Border Width="720"
+            <Border Width="1060"
+                    MaxHeight="720"
                     Padding="28"
                     Style="{StaticResource SlPanelBorderStyle}"
                     HorizontalAlignment="Center"
@@ -372,78 +373,187 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <StackPanel x:Name="SetupPanel"
-                                Grid.Row="1"
-                                Spacing="14">
-                        <TextBlock Text="Required Setup"
-                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="State and Manager login are required before lottery workflows can run."
-                                   Style="{StaticResource SlCaptionTextStyle}"
-                                   TextWrapping="Wrap"/>
+                    <ScrollViewer x:Name="SetupPanel"
+                                  Grid.Row="1"
+                                  MaxHeight="520"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel Spacing="14">
+                            <TextBlock Text="Required Setup"
+                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                            <TextBlock Text="Store identity, state, bins, and Manager login are required before lottery workflows can run."
+                                       Style="{StaticResource SlCaptionTextStyle}"
+                                       TextWrapping="Wrap"/>
 
-                        <TextBox x:Name="StateTextBox"
-                                 Header="Store state"
-                                 PlaceholderText="Two-letter state code, for example GA"
-                                 CharacterCasing="Upper"
-                                 MaxLength="2"/>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="220"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="StoreNameBox"
+                                         Header="Store name"
+                                         PlaceholderText="Used for license server feedback"/>
+                                <ComboBox x:Name="StateComboBox"
+                                          Grid.Column="1"
+                                          Header="Store state"
+                                          HorizontalAlignment="Stretch"
+                                          PlaceholderText="Select state"/>
+                            </Grid>
 
-                        <PasswordBox x:Name="ManagerPasswordBox"
-                                     Header="Manager password"/>
+                            <TextBox x:Name="StoreAddressBox"
+                                     Header="Store address"
+                                     PlaceholderText="Street, city, ZIP"/>
 
-                        <TextBox x:Name="ClerkNameBox"
-                                 Header="Clerk name"
-                                 PlaceholderText="Optional"/>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <NumberBox x:Name="BinCountBox"
+                                           Header="Number of bins"
+                                           Value="90"
+                                           Minimum="1"
+                                           Maximum="500"
+                                           SmallChange="1"
+                                           LargeChange="10"
+                                           SpinButtonPlacementMode="Inline"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="Initial import will create this many selectable bins. You can still scan BIN barcodes instead of clicking a bin."
+                                           Style="{StaticResource SlCaptionTextStyle}"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Bottom"/>
+                            </Grid>
 
-                        <PasswordBox x:Name="ClerkPasswordBox"
-                                     Header="Clerk password (optional)"/>
-                    </StackPanel>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <PasswordBox x:Name="ManagerPasswordBox"
+                                             Header="Manager password"/>
+                                <PasswordBox x:Name="ClerkPasswordBox"
+                                             Grid.Column="1"
+                                             Header="Clerk password (optional)"/>
+                            </Grid>
 
-                    <StackPanel x:Name="ImportPanel"
-                                Grid.Row="1"
-                                Spacing="14"
-                                Visibility="Collapsed">
-                        <TextBlock Text="Initial Import"
-                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="Import existing physical bundles that are already open in the store. The scanned ticket becomes the current available ticket."
-                                   Style="{StaticResource SlCaptionTextStyle}"
-                                   TextWrapping="Wrap"/>
+                            <TextBox x:Name="ClerkNameBox"
+                                     Header="Clerk name"
+                                     PlaceholderText="Optional"/>
+                        </StackPanel>
+                    </ScrollViewer>
 
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="ImportGameIdBox"
-                                     Header="Game ID"
-                                     PlaceholderText="Scan or enter game ID"/>
-                            <TextBox x:Name="ImportBundleIdBox"
-                                     Grid.Column="1"
-                                     Header="Bundle ID"
-                                     PlaceholderText="Scan or enter bundle ID"/>
+                    <Grid x:Name="ImportPanel"
+                          Grid.Row="1"
+                          ColumnSpacing="18"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="340"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Grid RowSpacing="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Initial Import"
+                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                <TextBlock x:Name="ImportInstructionText"
+                                           Text="Select a bin, scan a bin barcode, or scan a ticket. Once SimpleLotto has one bin and one ticket, the import is recorded."
+                                           Style="{StaticResource SlCaptionTextStyle}"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+
+                            <Grid Grid.Row="1"
+                                  ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="ImportScanBox"
+                                         Header="Scanner input"
+                                         PlaceholderText="Scan BIN-12 or a ticket barcode"
+                                         KeyDown="ImportScanBox_KeyDown"/>
+                                <Button Grid.Column="1"
+                                        Content="Process Scan"
+                                        MinWidth="120"
+                                        VerticalAlignment="Bottom"
+                                        Click="ProcessImportScanButton_Click"/>
+                            </Grid>
+
+                            <GridView x:Name="ImportBinsGridView"
+                                      Grid.Row="2"
+                                      Height="310"
+                                      IsItemClickEnabled="True"
+                                      ItemClick="ImportBinsGridView_ItemClick"
+                                      SelectionMode="None">
+                                <GridView.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <ItemsWrapGrid Orientation="Horizontal"
+                                                       MaximumRowsOrColumns="8"/>
+                                    </ItemsPanelTemplate>
+                                </GridView.ItemsPanel>
+                                <GridView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Width="70"
+                                                Height="54"
+                                                Margin="3"
+                                                Padding="6"
+                                                CornerRadius="6"
+                                                BorderBrush="{Binding StatusBorderBrush}"
+                                                BorderThickness="2"
+                                                Background="{Binding StatusBackgroundBrush}">
+                                            <StackPanel Spacing="1"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Label}"
+                                                           Foreground="{Binding StatusTextBrush}"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock Text="{Binding StatusText}"
+                                                           Foreground="{Binding StatusTextBrush}"
+                                                           FontSize="11"
+                                                           HorizontalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </GridView.ItemTemplate>
+                            </GridView>
                         </Grid>
 
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="ImportTicketBox"
-                                     Header="Current ticket"
-                                     PlaceholderText="Current available ticket"/>
-                            <TextBox x:Name="ImportBinBox"
-                                     Grid.Column="1"
-                                     Header="Bin"
-                                     PlaceholderText="Physical bin"/>
-                        </Grid>
+                        <StackPanel Grid.Column="1"
+                                    Spacing="12">
+                            <Border Background="{ThemeResource SlSurfaceAltBrush}"
+                                    BorderBrush="{ThemeResource SlBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="12">
+                                <StackPanel Spacing="8">
+                                    <TextBlock x:Name="ImportBinCountText"
+                                               Text="0 bins ready"
+                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <TextBlock x:Name="ImportPendingText"
+                                               Text="No pending scan."
+                                               Style="{StaticResource SlCaptionTextStyle}"
+                                               TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="ImportFailureText"
+                                               Text=""
+                                               Foreground="{ThemeResource SlDangerBrush}"
+                                               TextWrapping="Wrap"/>
+                                    <Button x:Name="ResolveImportFailureButton"
+                                            Content="Resolve Failure"
+                                            HorizontalAlignment="Left"
+                                            Visibility="Collapsed"
+                                            Click="ResolveImportFailureButton_Click"/>
+                                </StackPanel>
+                            </Border>
 
-                        <Button Content="Add Import Row"
-                                HorizontalAlignment="Left"
-                                Click="AddImportRowButton_Click"/>
-
-                        <ListView x:Name="ImportListView"
-                                  DisplayMemberPath="SummaryText"
-                                  MaxHeight="150"/>
-                    </StackPanel>
+                            <ListView x:Name="ImportListView"
+                                      DisplayMemberPath="SummaryText"
+                                      Height="300"/>
+                        </StackPanel>
+                    </Grid>
 
                     <StackPanel x:Name="LoginPanel"
                                 Grid.Row="1"
