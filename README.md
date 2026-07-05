@@ -7,9 +7,9 @@ See [docs/product-instructions.md](docs/product-instructions.md) for the high-le
 ## Current Scope
 
 - Add local lottery ticket sales
-- Track daily ticket count, revenue, average ticket value, and game mix
+- Track shift ticket count, revenue, average ticket value, and game summary
 - Void a selected sale
-- Reset the current day
+- Close the current shift
 
 ## Build
 

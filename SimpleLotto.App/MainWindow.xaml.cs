@@ -30,41 +30,35 @@ public sealed partial class MainWindow : Window
 
     private void AddSaleButton_Click(object sender, RoutedEventArgs e)
     {
-        var game = SelectedGame();
+        var gameId = string.IsNullOrWhiteSpace(GameIdTextBox.Text)
+            ? "Unknown"
+            : GameIdTextBox.Text.Trim();
+        var bin = string.IsNullOrWhiteSpace(BinTextBox.Text)
+            ? "Unassigned"
+            : BinTextBox.Text.Trim();
         var quantity = CoerceInt(QuantityBox.Value, 1);
-        var unitPrice = CoerceMoney(PriceBox.Value);
+        var amount = CoerceMoney(PriceBox.Value);
         var ticket = string.IsNullOrWhiteSpace(TicketTextBox.Text)
-            ? "Walk-up sale"
+            ? "No ticket entered"
             : TicketTextBox.Text.Trim();
 
         var line = new SaleLine(
             DateTime.Now,
-            game,
+            gameId,
+            bin,
             ticket,
             quantity,
-            unitPrice);
+            amount);
 
         _sales.Insert(0, line);
+        GameIdTextBox.Text = string.Empty;
+        BinTextBox.Text = string.Empty;
         TicketTextBox.Text = string.Empty;
         QuantityBox.Value = 1;
+        PriceBox.Value = 0;
         SalesListView.SelectedItem = line;
-        StatusText.Text = $"Added {quantity} {game} ticket(s) for {line.AmountText}.";
+        StatusText.Text = $"Added {quantity} ticket(s) for game {gameId}, bin {bin}.";
         RefreshTotals();
-    }
-
-    private void QuickPickButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: string tag })
-            return;
-
-        var parts = tag.Split('|');
-        if (parts.Length != 2 || !double.TryParse(parts[1], NumberStyles.Number, CultureInfo.InvariantCulture, out var price))
-            return;
-
-        SelectGame(parts[0]);
-        PriceBox.Value = price;
-        QuantityBox.Value = 1;
-        StatusText.Text = $"{parts[0]} quick pick selected.";
     }
 
     private void VoidSelectedButton_Click(object sender, RoutedEventArgs e)
@@ -76,11 +70,11 @@ public sealed partial class MainWindow : Window
         }
 
         _sales.Remove(sale);
-        StatusText.Text = $"Voided {sale.Game} sale for {sale.AmountText}.";
+        StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
         RefreshTotals();
     }
 
-    private async void ResetDayButton_Click(object sender, RoutedEventArgs e)
+    private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
     {
         if (_sales.Count == 0)
         {
@@ -91,9 +85,9 @@ public sealed partial class MainWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Reset the current day?",
-            Content = $"This will remove {_sales.Count} sale entry(s) from the local list.",
-            PrimaryButtonText = "Reset",
+            Title = "Close the current shift?",
+            Content = $"This will clear {_sales.Count} local prototype sale entry(s).",
+            PrimaryButtonText = "Close Shift",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
         };
@@ -103,7 +97,7 @@ public sealed partial class MainWindow : Window
             return;
 
         _sales.Clear();
-        StatusText.Text = "Day reset.";
+        StatusText.Text = "Shift closed.";
         RefreshTotals();
     }
 
@@ -130,35 +124,11 @@ public sealed partial class MainWindow : Window
 
         return string.Join(Environment.NewLine,
             _sales
-                .GroupBy(s => s.Game)
+                .GroupBy(s => s.GameId)
                 .OrderByDescending(g => g.Sum(s => s.Amount))
                 .ThenBy(g => g.Key)
                 .Select(g =>
                     $"{g.Key}: {g.Sum(s => s.Quantity)} ticket(s), {g.Sum(s => s.Amount).ToString("C", CultureInfo.CurrentCulture)}"));
-    }
-
-    private string SelectedGame()
-    {
-        if (GameComboBox.SelectedItem is ComboBoxItem item &&
-            item.Content is string game &&
-            !string.IsNullOrWhiteSpace(game))
-        {
-            return game;
-        }
-
-        return "Other";
-    }
-
-    private void SelectGame(string game)
-    {
-        foreach (var item in GameComboBox.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Content?.ToString(), game, StringComparison.OrdinalIgnoreCase))
-            {
-                GameComboBox.SelectedItem = item;
-                return;
-            }
-        }
     }
 
     private static int CoerceInt(double value, int fallback)
@@ -188,13 +158,15 @@ public sealed partial class MainWindow : Window
 
     private sealed record SaleLine(
         DateTime SoldAt,
-        string Game,
+        string GameId,
+        string Bin,
         string Ticket,
         int Quantity,
-        decimal UnitPrice)
+        decimal Amount)
     {
-        public decimal Amount => Quantity * UnitPrice;
         public string TimeText => SoldAt.ToString("h:mm tt", CultureInfo.CurrentCulture);
         public string AmountText => Amount.ToString("C", CultureInfo.CurrentCulture);
+        public string GameText => $"Game {GameId}";
+        public string DetailText => $"Bin {Bin} | Ticket {Ticket}";
     }
 }

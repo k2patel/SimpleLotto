@@ -39,14 +39,14 @@
                             Spacing="2">
                     <TextBlock Text="SimpleLotto"
                                Style="{StaticResource SlPageTitleTextStyle}"/>
-                    <TextBlock Text="Counter sales and daily totals"
+                    <TextBlock Text="Counter sales and shift totals"
                                Style="{StaticResource SlCaptionTextStyle}"/>
                 </StackPanel>
 
                 <Button Grid.Column="2"
-                        Content="Reset Day"
+                        Content="Close Shift"
                         MinWidth="108"
-                        Click="ResetDayButton_Click"/>
+                        Click="CloseShiftButton_Click"/>
             </Grid>
         </Border>
 
@@ -65,25 +65,21 @@
                     <StackPanel Spacing="2">
                         <TextBlock Text="New Sale"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="Add a ticket sale to the current day."
+                        <TextBlock Text="Record a lottery ticket sale for the current shift."
                                    Style="{StaticResource SlCaptionTextStyle}"/>
                     </StackPanel>
 
-                    <ComboBox x:Name="GameComboBox"
-                              Header="Game"
-                              HorizontalAlignment="Stretch"
-                              SelectedIndex="0">
-                        <ComboBoxItem Content="Powerball"/>
-                        <ComboBoxItem Content="Mega Millions"/>
-                        <ComboBoxItem Content="Pick 3"/>
-                        <ComboBoxItem Content="Pick 4"/>
-                        <ComboBoxItem Content="Scratch Off"/>
-                        <ComboBoxItem Content="Other"/>
-                    </ComboBox>
+                    <TextBox x:Name="GameIdTextBox"
+                             Header="Game ID"
+                             PlaceholderText="Scan or enter game ID"/>
+
+                    <TextBox x:Name="BinTextBox"
+                             Header="Bin"
+                             PlaceholderText="Scan or enter bin number"/>
 
                     <TextBox x:Name="TicketTextBox"
-                             Header="Ticket or note"
-                             PlaceholderText="Optional"/>
+                             Header="Ticket"
+                             PlaceholderText="Scan or enter ticket number"/>
 
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
@@ -92,7 +88,7 @@
                         </Grid.ColumnDefinitions>
 
                         <NumberBox x:Name="QuantityBox"
-                                   Header="Qty"
+                                   Header="Ticket count"
                                    Value="1"
                                    Minimum="1"
                                    Maximum="999"
@@ -102,8 +98,8 @@
 
                         <NumberBox x:Name="PriceBox"
                                    Grid.Column="1"
-                                   Header="Unit price"
-                                   Value="2"
+                                   Header="Amount"
+                                   Value="0"
                                    Minimum="0"
                                    Maximum="999"
                                    SmallChange="1"
@@ -116,37 +112,6 @@
                             Style="{StaticResource AccentButtonStyle}"
                             HorizontalAlignment="Stretch"
                             Click="AddSaleButton_Click"/>
-
-                    <TextBlock Text="Quick picks"
-                               Style="{StaticResource SlCaptionTextStyle}"
-                               Margin="0,6,0,0"/>
-                    <Grid ColumnSpacing="8" RowSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <Button Content="Powerball $2"
-                                Tag="Powerball|2"
-                                Click="QuickPickButton_Click"/>
-                        <Button Grid.Column="1"
-                                Content="Mega $2"
-                                Tag="Mega Millions|2"
-                                Click="QuickPickButton_Click"/>
-                        <Button Grid.Row="1"
-                                Content="Pick 3 $1"
-                                Tag="Pick 3|1"
-                                Click="QuickPickButton_Click"/>
-                        <Button Grid.Row="1"
-                                Grid.Column="1"
-                                Content="Scratch $5"
-                                Tag="Scratch Off|5"
-                                Click="QuickPickButton_Click"/>
-                    </Grid>
                 </StackPanel>
             </Border>
 
@@ -188,8 +153,8 @@
                             <ColumnDefinition Width="96"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="Time" Style="{StaticResource SlCaptionTextStyle}"/>
-                        <TextBlock Grid.Column="1" Text="Game" Style="{StaticResource SlCaptionTextStyle}"/>
-                        <TextBlock Grid.Column="2" Text="Qty" Style="{StaticResource SlCaptionTextStyle}"/>
+                        <TextBlock Grid.Column="1" Text="Game / Bin" Style="{StaticResource SlCaptionTextStyle}"/>
+                        <TextBlock Grid.Column="2" Text="Tickets" Style="{StaticResource SlCaptionTextStyle}"/>
                         <TextBlock Grid.Column="3" Text="Amount" Style="{StaticResource SlCaptionTextStyle}"/>
                     </Grid>
 
@@ -213,9 +178,9 @@
                                     <StackPanel Grid.Column="1"
                                                 Spacing="1"
                                                 VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding Game}"
+                                        <TextBlock Text="{Binding GameText}"
                                                    Foreground="{ThemeResource SlTextBrush}"/>
-                                        <TextBlock Text="{Binding Ticket}"
+                                        <TextBlock Text="{Binding DetailText}"
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
                                     </StackPanel>
                                     <TextBlock Grid.Column="2"
@@ -237,7 +202,7 @@
                         Spacing="16">
                 <Border Style="{StaticResource SlPanelBorderStyle}">
                     <StackPanel Spacing="12">
-                        <TextBlock Text="Today"
+                        <TextBlock Text="Current Shift"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
 
                         <StackPanel Spacing="2">
@@ -268,7 +233,7 @@
 
                 <Border Style="{StaticResource SlPanelBorderStyle}">
                     <StackPanel Spacing="10">
-                        <TextBlock Text="Game Mix"
+                        <TextBlock Text="Game Summary"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
                         <TextBlock x:Name="GameMixText"
                                    Text="No sales recorded."
