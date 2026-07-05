@@ -313,6 +313,6 @@ jobs:
           "installer_url=$response" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "### SimpleLotto installer" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- File: `${{ steps.checksum.outputs.installer_file }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- SHA256: `${{ steps.checksum.outputs.installer_sha256 }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- File: ${{ steps.checksum.outputs.installer_file }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- SHA256: ${{ steps.checksum.outputs.installer_sha256 }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- URL: $response" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
