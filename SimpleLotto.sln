@@ -1,0 +1,21 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34616.47
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SimpleLotto.App", "SimpleLotto.App\SimpleLotto.App.csproj", "{6E2D72B4-2E7A-47E7-B6ED-35816DE917A1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6E2D72B4-2E7A-47E7-B6ED-35816DE917A1}.Debug|x64.ActiveCfg = Debug|x64
+		{6E2D72B4-2E7A-47E7-B6ED-35816DE917A1}.Debug|x64.Build.0 = Debug|x64
+		{6E2D72B4-2E7A-47E7-B6ED-35816DE917A1}.Release|x64.ActiveCfg = Release|x64
+		{6E2D72B4-2E7A-47E7-B6ED-35816DE917A1}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,318 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_DIR: SimpleLotto.App
+  PROJECT_FILE: SimpleLotto.App/SimpleLotto.App.csproj
+  SOLUTION: SimpleLotto.sln
+  CONFIG: Release
+  TFM: net10.0-windows10.0.19041.0
+  RID: win-x64
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  ZIPLINE_UPLOAD_ALLOWED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify .NET SDK
+        run: dotnet --info
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore
+        run: >
+          msbuild $env:SOLUTION
+          /t:Restore
+          /p:Configuration=$env:CONFIG
+          /p:Platform=x64
+          /p:RuntimeIdentifier=$env:RID
+          /p:SelfContained=true
+
+      - name: Build
+        run: >
+          msbuild $env:SOLUTION
+          /t:Build
+          /p:Configuration=$env:CONFIG
+          /p:Platform=x64
+          /v:normal
+
+      - name: Publish self-contained app
+        run: >
+          msbuild $env:PROJECT_FILE
+          /t:Publish
+          /p:Configuration=$env:CONFIG
+          /p:Platform=x64
+          /p:RuntimeIdentifier=$env:RID
+          /p:SelfContained=true
+          /p:DebugType=None
+
+      - name: Compute publish path
+        id: pubpath
+        run: |
+          $path = Join-Path (Get-Location) "$env:PROJECT_DIR/bin/x64/$env:CONFIG/$env:TFM/$env:RID/publish"
+          if (-not (Test-Path $path)) { throw "Publish dir not found: $path" }
+          "publish=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Ensure Inno Setup is available
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+          }
+          "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Download VC++ Redistributable
+        run: |
+          $dest = "installer/redist"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri "https://aka.ms/vc14/vc_redist.x64.exe" -OutFile "$dest/VC_redist.x64.exe"
+          $size = (Get-Item "$dest/VC_redist.x64.exe").Length
+          if ($size -lt 10MB) { throw "VC_redist.x64.exe download looks truncated: $size bytes" }
+          Write-Host "Downloaded VC_redist.x64.exe ($([math]::Round($size / 1MB, 1)) MB)"
+
+      - name: Prepare code signing certificate
+        id: signing_cert
+        env:
+          WINDOWS_CODESIGN_PFX_B64: ${{ secrets.WINDOWS_CODESIGN_PFX_B64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_CODESIGN_CERT_CER_B64: ${{ secrets.WINDOWS_CODESIGN_CERT_CER_B64 }}
+        run: |
+          $hasPfx = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_B64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_PASSWORD)
+          $hasPublicCert = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERT_CER_B64)
+
+          if (-not $hasPfx -and -not $hasPassword -and -not $hasPublicCert) {
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Warning "Code signing secrets are not configured; installer will be unsigned."
+            return
+          }
+
+          if (-not $hasPfx -or -not $hasPassword) {
+            throw "Code signing secrets are incomplete. Configure WINDOWS_CODESIGN_PFX_B64 and WINDOWS_CODESIGN_PFX_PASSWORD."
+          }
+
+          $certPath = Join-Path $env:RUNNER_TEMP "simplelotto-codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_B64))
+
+          $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+          $pfxCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $certPath,
+            $env:WINDOWS_CODESIGN_PFX_PASSWORD,
+            $flags)
+
+          $publicCertDir = "installer/signing"
+          New-Item -ItemType Directory -Path $publicCertDir -Force | Out-Null
+          $publicCertPath = Join-Path $publicCertDir "SimpleLotto-CodeSigning.cer"
+          [IO.File]::WriteAllBytes(
+            $publicCertPath,
+            $pfxCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+
+          if ($hasPublicCert) {
+            $secretPublicCertPath = Join-Path $env:RUNNER_TEMP "simplelotto-secret-public.cer"
+            [IO.File]::WriteAllBytes($secretPublicCertPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERT_CER_B64))
+            $secretPublicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($secretPublicCertPath)
+            if ($secretPublicCert.Thumbprint -ne $pfxCert.Thumbprint) {
+              throw "WINDOWS_CODESIGN_CERT_CER_B64 does not match WINDOWS_CODESIGN_PFX_B64."
+            }
+          }
+
+          "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "pfx_path=$certPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Code signing certificate decoded."
+          Write-Host "Subject: $($pfxCert.Subject)"
+          Write-Host "Thumbprint: $($pfxCert.Thumbprint)"
+
+      - name: Build installer
+        id: build_installer
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          $shortSha = $env:GIT_SHA.Substring(0, 7)
+          $version = "0.0.1-$shortSha"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          iscc.exe "/DPublishDir=${{ steps.pubpath.outputs.publish }}" `
+                   "/DMyAppVersion=$version" `
+                   "installer/simplelotto-setup.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+      - name: Sign installer
+        if: steps.signing_cert.outputs.enabled == 'true'
+        env:
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: |
+          $installer = Get-ChildItem -Path "dist" -Filter "SimpleLotto-*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer not found in dist/" }
+
+          $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+          if (-not $signtool) {
+            $signtool = Get-ChildItem `
+              -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+              -Recurse `
+              -Filter signtool.exe |
+              Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+          }
+          if (-not $signtool) { throw "signtool.exe was not found." }
+          $signtoolPath = if ($signtool.Source) { $signtool.Source } else { $signtool.FullName }
+
+          & $signtoolPath sign `
+            /f "${{ steps.signing_cert.outputs.pfx_path }}" `
+            /p "$env:WINDOWS_CODESIGN_PFX_PASSWORD" `
+            /fd SHA256 `
+            /tr "$env:WINDOWS_TIMESTAMP_URL" `
+            /td SHA256 `
+            "$($installer.FullName)"
+          if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+
+          $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+          Write-Host "Installer signature status: $($signature.Status)"
+          if ($signature.Status -eq 'NotSigned' -or -not $signature.SignerCertificate) {
+            throw "Installer is not signed after signtool completed."
+          }
+
+      - name: Compute installer checksum
+        id: checksum
+        run: |
+          $installer = Get-ChildItem -Path "dist" -Filter "SimpleLotto-*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer not found in dist/" }
+          $sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "installer_path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "installer_file=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "installer_sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.checksum.outputs.installer_file }}
+          path: ${{ steps.checksum.outputs.installer_path }}
+          if-no-files-found: error
+
+      - name: Validate Zipline release folder
+        if: env.ZIPLINE_UPLOAD_ALLOWED == 'true'
+        id: zipline_folder
+        env:
+          ZIPLINE_TOKEN: ${{ secrets.ZIPLINE_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ZIPLINE_TOKEN)) { throw "ZIPLINE_TOKEN secret is not configured" }
+
+          $folderId = "${{ vars.ZIPLINE_FOLDER_ID }}"
+          if ([string]::IsNullOrWhiteSpace($folderId)) { throw "ZIPLINE_FOLDER_ID repo variable is not configured" }
+
+          $bodyPath = Join-Path $env:RUNNER_TEMP "zipline-folder-public.json"
+          [ordered]@{ isPublic = $true } | ConvertTo-Json | Set-Content -Path $bodyPath -Encoding UTF8
+
+          $responsePath = Join-Path $env:RUNNER_TEMP "zipline-folder-public-response.json"
+          $status = & curl.exe `
+            --silent `
+            --show-error `
+            --location `
+            --request PATCH `
+            --header "Authorization: $env:ZIPLINE_TOKEN" `
+            --header "Content-Type: application/json" `
+            --data "@$bodyPath" `
+            --output "$responsePath" `
+            --write-out "%{http_code}" `
+            "https://files.k2patel.in/api/user/folders/$folderId"
+          $exitCode = $LASTEXITCODE
+          $body = if (Test-Path $responsePath) { Get-Content -Path $responsePath -Raw } else { "" }
+          $statusCode = 0
+          $statusParsed = [int]::TryParse($status.Trim(), [ref]$statusCode)
+
+          if ($exitCode -ne 0 -or -not $statusParsed -or $statusCode -lt 200 -or $statusCode -ge 300) {
+            throw "Zipline folder public validation failed with exit code $exitCode HTTP $status body: $body"
+          }
+
+          $payload = $body | ConvertFrom-Json
+          if ($payload.public -ne $true) {
+            throw "Zipline folder $folderId is not public after update"
+          }
+
+          "folder_id=$folderId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload installer to Zipline
+        if: env.ZIPLINE_UPLOAD_ALLOWED == 'true'
+        id: upload_installer
+        env:
+          ZIPLINE_TOKEN: ${{ secrets.ZIPLINE_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ZIPLINE_TOKEN)) { throw "ZIPLINE_TOKEN secret is not configured" }
+          $installer = Get-Item "${{ steps.checksum.outputs.installer_path }}"
+          $uploadUrl = "https://files.k2patel.in/api/upload"
+          $folderId = "${{ steps.zipline_folder.outputs.folder_id }}"
+          if ([string]::IsNullOrWhiteSpace($folderId)) { throw "Zipline release folder id was not resolved" }
+
+          $responsePath = Join-Path $env:RUNNER_TEMP "zipline-installer-response.txt"
+          $response = ""
+          $httpStatus = ""
+          $curlExitCode = 0
+          $statusCode = 0
+          $statusParsed = $false
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            Remove-Item -Path $responsePath -Force -ErrorAction SilentlyContinue
+            Write-Host "Zipline installer upload attempt $attempt/5"
+            $httpStatus = & curl.exe `
+              --silent `
+              --show-error `
+              --location `
+              --request POST `
+              --header "Authorization: $env:ZIPLINE_TOKEN" `
+              --header "x-zipline-no-json: true" `
+              --header "x-zipline-original-name: true" `
+              --header "x-zipline-folder: $folderId" `
+              --form "file=@$($installer.FullName);type=application/octet-stream" `
+              --output "$responsePath" `
+              --write-out "%{http_code}" `
+              $uploadUrl
+            $curlExitCode = $LASTEXITCODE
+            $response = if (Test-Path $responsePath) { Get-Content -Path $responsePath -Raw } else { "" }
+            $statusCode = 0
+            $statusParsed = [int]::TryParse($httpStatus.Trim(), [ref]$statusCode)
+            if ($curlExitCode -eq 0 -and $statusParsed -and $statusCode -ge 200 -and $statusCode -lt 300) { break }
+
+            $retryableStatus = $statusParsed -and ($statusCode -eq 429 -or $statusCode -ge 500)
+            if ($attempt -eq 5 -or ($curlExitCode -eq 0 -and -not $retryableStatus)) { break }
+
+            Write-Warning "Zipline installer upload failed with exit code $curlExitCode HTTP $httpStatus. Retrying in 15 seconds."
+            Start-Sleep -Seconds 15
+          }
+
+          if ($curlExitCode -ne 0 -or -not $statusParsed -or $statusCode -lt 200 -or $statusCode -ge 300) {
+            throw "Zipline upload failed with exit code $curlExitCode HTTP $httpStatus body: $response"
+          }
+          if ([string]::IsNullOrWhiteSpace($response)) { throw "Zipline upload returned an empty response" }
+
+          "installer_url=$response" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "### SimpleLotto installer" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- File: `${{ steps.checksum.outputs.installer_file }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- SHA256: `${{ steps.checksum.outputs.installer_sha256 }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- URL: $response" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
