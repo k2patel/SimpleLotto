@@ -309,18 +309,589 @@
                   Grid.Column="1"
                   Padding="24"
                   Visibility="Collapsed">
-                <Border Style="{StaticResource SlPanelBorderStyle}"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Top">
-                    <StackPanel Spacing="8">
-                        <TextBlock x:Name="SectionTitleText"
-                                   Text="Bins"
-                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock x:Name="SectionDescriptionText"
-                                   Text="This section will use the same operational model defined in the product instructions."
-                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                    </StackPanel>
-                </Border>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid>
+                        <Grid x:Name="BinsContent"
+                              RowSpacing="16">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="180"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Bins"
+                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <TextBlock Text="Active and dormant bundle display state. Placement scans assign unplaced bundles; moves are manual from a bin."
+                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                </StackPanel>
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="BinsTotalText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Total bins"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="BinsActiveText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Active bins"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="3"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="BinsBundleText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Bundles"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Grid Grid.Row="1"
+                                  ColumnSpacing="18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="340"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Border Style="{StaticResource SlPanelBorderStyle}">
+                                    <Grid RowSpacing="12">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Working Bin Layout"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <GridView x:Name="BinsGridView"
+                                                  Grid.Row="1"
+                                                  MinHeight="360"
+                                                  IsItemClickEnabled="True"
+                                                  ItemClick="BinsGridView_ItemClick"
+                                                  SelectionMode="None">
+                                            <GridView.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <ItemsWrapGrid Orientation="Horizontal"
+                                                                   MaximumRowsOrColumns="8"/>
+                                                </ItemsPanelTemplate>
+                                            </GridView.ItemsPanel>
+                                            <GridView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="92"
+                                                            Height="78"
+                                                            Margin="4"
+                                                            Padding="8"
+                                                            CornerRadius="6"
+                                                            BorderBrush="{Binding BorderBrush}"
+                                                            BorderThickness="2"
+                                                            Background="{Binding BackgroundBrush}">
+                                                        <StackPanel Spacing="2">
+                                                            <TextBlock Text="{Binding BinText}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding GameText}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Text="{Binding TicketText}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Text="{Binding StackText}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontSize="11"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </GridView.ItemTemplate>
+                                        </GridView>
+                                    </Grid>
+                                </Border>
+
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="Bin Detail"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBlock x:Name="BinDetailText"
+                                                   Text="Select a bin to view current and dormant bundle records."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <ListView x:Name="BinBundlesListView"
+                                                  MaxHeight="340"
+                                                  SelectionMode="None">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Padding="0,8"
+                                                                Spacing="2">
+                                                        <TextBlock Text="{Binding SummaryText}"
+                                                                   Foreground="{ThemeResource SlTextBrush}"/>
+                                                        <TextBlock Text="{Binding DetailText}"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Grid>
+
+                        <Grid x:Name="InventoryContent"
+                              RowSpacing="16"
+                              Visibility="Collapsed">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="220"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Inventory"
+                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <TextBlock Text="Receiving is separate from sale tracking. Open bundles must be placed into a bin or ignored."
+                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                </StackPanel>
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="InventoryBundleCountText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Tracked bundles"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <TabView x:Name="InventoryTabs"
+                                     Grid.Row="1"
+                                     IsAddTabButtonVisible="False"
+                                     CanDragTabs="False">
+                                <TabViewItem Header="Bundle records"
+                                             IsClosable="False">
+                                    <Grid Padding="0,16,0,0"
+                                          ColumnSpacing="18">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="340"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Style="{StaticResource SlPanelBorderStyle}">
+                                            <Grid RowSpacing="12">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <TextBlock Text="Bundle Records"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <Grid Grid.Row="1"
+                                                      Padding="12,8"
+                                                      Background="{ThemeResource SlSurfaceAltBrush}"
+                                                      ColumnSpacing="12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="100"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="130"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="Source" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="1" Text="Game / Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Status" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                </Grid>
+                                                <ListView x:Name="InventoryListView"
+                                                          Grid.Row="2"
+                                                          MinHeight="340"
+                                                          SelectionMode="None">
+                                                    <ListView.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid MinHeight="44"
+                                                                  Padding="12,8"
+                                                                  ColumnSpacing="12">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="100"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="130"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Text="{Binding Source}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                <StackPanel Grid.Column="1"
+                                                                            Spacing="1">
+                                                                    <TextBlock Text="{Binding GameText}"
+                                                                               Foreground="{ThemeResource SlTextBrush}"/>
+                                                                    <TextBlock Text="{Binding BundleText}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="2"
+                                                                           Text="{Binding Ticket}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                <TextBlock Grid.Column="3"
+                                                                           Text="{Binding Status}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ListView.ItemTemplate>
+                                                </ListView>
+                                            </Grid>
+                                        </Border>
+                                        <Border Grid.Column="1"
+                                                Style="{StaticResource SlPanelBorderStyle}">
+                                            <StackPanel Spacing="12">
+                                                <TextBlock Text="Receiving Rules"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock Text="Unopened receiving expects ticket 000. A non-000 scan is an open bundle and must be placed into a bin or ignored."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock Text="Game images are cache-first: check local image cache before fetching, and allow manual replacement from the Games tab."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+                                </TabViewItem>
+
+                                <TabViewItem Header="Games"
+                                             IsClosable="False">
+                                    <Grid Padding="0,16,0,0"
+                                          ColumnSpacing="18">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="340"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Style="{StaticResource SlPanelBorderStyle}">
+                                            <Grid RowSpacing="12">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <Grid ColumnSpacing="12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="Game Catalog"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="InventoryGameCountText"
+                                                                   Text="0 games defined"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1"
+                                                            Content="Add Game"
+                                                            MinWidth="104"
+                                                            Click="AddGameButton_Click"/>
+                                                </Grid>
+                                                <Grid Grid.Row="1"
+                                                      Padding="12,8"
+                                                      Background="{ThemeResource SlSurfaceAltBrush}"
+                                                      ColumnSpacing="12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="72"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="150"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="Image" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="1" Text="Game ID" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="2" Text="Name" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                </Grid>
+                                                <ListView x:Name="GameCatalogListView"
+                                                          Grid.Row="2"
+                                                          MinHeight="340"
+                                                          SelectionMode="Single">
+                                                    <ListView.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid MinHeight="58"
+                                                                  Padding="12,8"
+                                                                  ColumnSpacing="12">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="72"/>
+                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="150"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <Border Width="44"
+                                                                        Height="44"
+                                                                        CornerRadius="6"
+                                                                        Background="{ThemeResource SlSurfaceAltBrush}"
+                                                                        BorderBrush="{ThemeResource SlBorderBrush}"
+                                                                        BorderThickness="1">
+                                                                    <Image Source="{Binding ImageSource}"
+                                                                           Stretch="UniformToFill"/>
+                                                                </Border>
+                                                                <TextBlock Grid.Column="1"
+                                                                           Text="{Binding GameId}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           VerticalAlignment="Center"/>
+                                                                <StackPanel Grid.Column="2"
+                                                                            Spacing="1"
+                                                                            VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding Name}"
+                                                                               Foreground="{ThemeResource SlTextBrush}"/>
+                                                                    <TextBlock Text="{Binding Source}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="3"
+                                                                           Text="{Binding ImageStatus}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                                           VerticalAlignment="Center"/>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ListView.ItemTemplate>
+                                                </ListView>
+                                            </Grid>
+                                        </Border>
+                                        <Border Grid.Column="1"
+                                                Style="{StaticResource SlPanelBorderStyle}">
+                                            <StackPanel Spacing="12">
+                                                <TextBlock Text="Game Management"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock Text="Each game must have a game ID, display name, price setup, and cache-first image lookup before it is used on displays."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <Button Content="Upload Image"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="UploadGameImageButton_Click"/>
+                                                <Button Content="Fetch Missing Images"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="FetchMissingImagesButton_Click"/>
+                                                <TextBlock x:Name="GameCatalogStatusText"
+                                                           Text="Select or add a game to manage its image and name."
+                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+                                </TabViewItem>
+                            </TabView>
+                        </Grid>
+
+                        <Grid x:Name="ClosingContent"
+                              RowSpacing="16"
+                              Visibility="Collapsed">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="180"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Closing"
+                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <TextBlock Text="Shift balancing keeps sales totals, inventory evidence, and reconciliation separate."
+                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                </StackPanel>
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="ClosingSalesText"
+                                                   Text="$0.00"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Sales"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="ClosingTicketsText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Tickets"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="3"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="ClosingEvidenceText"
+                                                   Text="0 / 0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Bins scanned"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Grid Grid.Row="1"
+                                  ColumnSpacing="18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="340"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource SlPanelBorderStyle}">
+                                    <Grid RowSpacing="12">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Closing Bin Evidence"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <GridView x:Name="ClosingBinsGridView"
+                                                  Grid.Row="1"
+                                                  MinHeight="360"
+                                                  SelectionMode="None">
+                                            <GridView.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <ItemsWrapGrid Orientation="Horizontal"
+                                                                   MaximumRowsOrColumns="8"/>
+                                                </ItemsPanelTemplate>
+                                            </GridView.ItemsPanel>
+                                            <GridView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="92"
+                                                            Height="70"
+                                                            Margin="4"
+                                                            Padding="8"
+                                                            CornerRadius="6"
+                                                            BorderBrush="{Binding BorderBrush}"
+                                                            BorderThickness="2"
+                                                            Background="{Binding BackgroundBrush}">
+                                                        <StackPanel Spacing="2">
+                                                            <TextBlock Text="{Binding BinText}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding Status}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Text="{Binding Detail}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontSize="11"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </GridView.ItemTemplate>
+                                        </GridView>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="12">
+                                        <Button Content="Start Shift Closing Scan"
+                                                HorizontalAlignment="Stretch"
+                                                Click="StartClosingScanButton_Click"/>
+                                        <TextBlock Text="Scan dialog collects ticket evidence only. Bin scans are ignored during closing collection."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <TextBlock x:Name="ClosingStatusText"
+                                                   Text="No closing scan session started."
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Grid>
+
+                        <Grid x:Name="SettingsContent"
+                              RowSpacing="16"
+                              Visibility="Collapsed">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Settings"
+                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                <TextBlock Text="Store, scanner, display, and game setup controls for the current installation."
+                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                            </StackPanel>
+
+                            <Grid Grid.Row="1"
+                                  ColumnSpacing="18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="Store"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBlock x:Name="SettingsStoreText"
+                                                   Text="Store setup not completed."
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="SettingsStateText"
+                                                   Text="State: not selected"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <TextBlock x:Name="SettingsBarcodeText"
+                                                   Text="Barcode format: not selected"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="Scanner and Display"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBlock x:Name="SettingsScannerText"
+                                                   Text="Scanner: focused capture only"
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
+                                        <TextBlock Text="Pairing and RawInput background capture will use the WindowsPOS scanner model."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <TextBlock Text="Rdisplay API runs on port 5000 and uses the existing WindowsPOS wire contract."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="92"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="DisplayHostBox"
+                                                     Header="Display host"
+                                                     PlaceholderText="Pi IP or hostname"/>
+                                            <NumberBox x:Name="DisplayPortBox"
+                                                       Grid.Column="1"
+                                                       Header="Port"
+                                                       Value="5001"
+                                                       Minimum="1"
+                                                       Maximum="65535"
+                                                       SpinButtonPlacementMode="Compact"/>
+                                        </Grid>
+                                        <Button Content="Register Rdisplay"
+                                                HorizontalAlignment="Stretch"
+                                                Click="RegisterDisplayButton_Click"/>
+                                        <TextBlock x:Name="DisplayStatusText"
+                                                   Text="No display registered."
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="Game Setup"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBlock Text="Game Prices, Bundle Prices, Ticket Numbering, and image upload will be managed here."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <TextBlock Text="Images are fetched cache-first during inventory receiving and bundle activation."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Grid>
+                    </Grid>
+                </ScrollViewer>
             </Grid>
         </Grid>
 

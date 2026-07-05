@@ -15,6 +15,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using SimpleLotto.App.Services;
 using WinRT.Interop;
 using Windows.Graphics;
 using Windows.Media.Core;
@@ -27,9 +29,16 @@ namespace SimpleLotto.App;
 
 public sealed partial class MainWindow : Window
 {
+    private readonly RdisplayService _rdisplay;
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
     private readonly ObservableCollection<ImportBin> _importBins = new();
+    private readonly ObservableCollection<BinCard> _binCards = new();
+    private readonly ObservableCollection<BundleDetailLine> _selectedBinBundles = new();
+    private readonly ObservableCollection<InventoryRecord> _inventoryRecords = new();
+    private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
+    private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
+    private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private bool _isNavCollapsed;
     private StartupStage _startupStage = StartupStage.Setup;
     private string _managerPassword = string.Empty;
@@ -51,8 +60,9 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
 
-    public MainWindow()
+    public MainWindow(RdisplayService rdisplay)
     {
+        _rdisplay = rdisplay;
         InitializeComponent();
         Title = "SimpleLotto";
         ResizeWindow(1240, 760);
@@ -60,6 +70,11 @@ public sealed partial class MainWindow : Window
         SalesListView.ItemsSource = _sales;
         ImportListView.ItemsSource = _imports;
         ImportBinsGridView.ItemsSource = _importBins;
+        BinsGridView.ItemsSource = _binCards;
+        BinBundlesListView.ItemsSource = _selectedBinBundles;
+        InventoryListView.ItemsSource = _inventoryRecords;
+        GameCatalogListView.ItemsSource = _gameCatalog;
+        ClosingBinsGridView.ItemsSource = _closingBinCards;
         RootGrid.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler(OnGlobalKeyDown),
@@ -221,6 +236,7 @@ public sealed partial class MainWindow : Window
         DashboardScannerModeText.Text = "Focused capture";
         DashboardScannerStatusText.Text = "Ready for scanner input.";
         DashboardPairingStatusText.Text = "Background capture: not paired";
+        RefreshOperationalPages();
     }
 
     private void ShowSetupStage()
@@ -325,6 +341,7 @@ public sealed partial class MainWindow : Window
         ImportBinCountText.Text = $"{_configuredBinCount} bin{(_configuredBinCount == 1 ? string.Empty : "s")} ready";
         ImportPendingText.Text = "No pending scan.";
         ImportScanStatusText.Text = "Scan BIN barcode and ticket barcode in either order.";
+        RefreshOperationalPages();
     }
 
     private void ProcessImportScanInput(string raw)
@@ -487,6 +504,7 @@ public sealed partial class MainWindow : Window
         UpdateImportStatusText($"Success. Imported game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket} in bin {bin.Number}.");
         ImportScanStatusText.Text = $"Imported bin {bin.Number}: game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}.";
         _ = SpeakAsync($"Success. Bin {bin.Number} imported.");
+        RefreshOperationalPages();
     }
 
     private void FailImport(string message, string spoken)
@@ -808,18 +826,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        RefreshOperationalPages();
         DashboardContent.Visibility = Visibility.Collapsed;
         SectionContent.Visibility = Visibility.Visible;
+        BinsContent.Visibility = section == "Bins" ? Visibility.Visible : Visibility.Collapsed;
+        InventoryContent.Visibility = section == "Inventory" ? Visibility.Visible : Visibility.Collapsed;
+        ClosingContent.Visibility = section == "Closing" ? Visibility.Visible : Visibility.Collapsed;
+        SettingsContent.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
         SetSelectedNav(section);
-        SectionTitleText.Text = section;
-        SectionDescriptionText.Text = section switch
-        {
-            "Bins" => "Bin display and bundle placement will use the product rules for active and dormant bundles.",
-            "Inventory" => "Inventory will handle receiving, bundle setup, and activation without becoming the sales ledger.",
-            "Closing" => "Closing will reconcile the current shift while keeping sales totals separate from inventory state.",
-            "Settings" => "Settings will hold state setup, game prices, bundle prices, ticket numbering, displays, scanner, and audio options.",
-            _ => "This section is defined by the product instructions."
-        };
         StatusText.Text = section;
     }
 
@@ -886,6 +900,271 @@ public sealed partial class MainWindow : Window
         TicketsText.Text = ticketCount.ToString(CultureInfo.CurrentCulture);
         AverageText.Text = average.ToString("C", CultureInfo.CurrentCulture);
         GameMixText.Text = BuildGameMixText();
+        ClosingSalesText.Text = revenue.ToString("C", CultureInfo.CurrentCulture);
+        ClosingTicketsText.Text = ticketCount.ToString(CultureInfo.CurrentCulture);
+    }
+
+    private void RefreshOperationalPages()
+    {
+        RefreshBinCards();
+        RefreshInventoryRecords();
+        RefreshGameCatalog();
+        SyncRdisplayTiles();
+        RefreshClosingBins();
+        RefreshSettingsSummary();
+    }
+
+    private void RefreshBinCards()
+    {
+        _binCards.Clear();
+        var grouped = _imports
+            .GroupBy(i => i.Bin)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 1; i <= _configuredBinCount; i++)
+        {
+            var bin = i.ToString(CultureInfo.InvariantCulture);
+            grouped.TryGetValue(bin, out var bundles);
+            var current = bundles?.FirstOrDefault();
+            _binCards.Add(BinCard.From(i, current, bundles?.Count ?? 0));
+        }
+
+        var activeBins = _binCards.Count(b => b.BundleCount > 0);
+        BinsTotalText.Text = _configuredBinCount.ToString(CultureInfo.CurrentCulture);
+        BinsActiveText.Text = activeBins.ToString(CultureInfo.CurrentCulture);
+        BinsBundleText.Text = _imports.Count.ToString(CultureInfo.CurrentCulture);
+
+        if (_selectedBinBundles.Count == 0)
+            BinDetailText.Text = activeBins == 0
+                ? "No bundles imported yet."
+                : "Select a bin to view current and dormant bundle records.";
+    }
+
+    private void RefreshInventoryRecords()
+    {
+        _inventoryRecords.Clear();
+        foreach (var line in _imports)
+            _inventoryRecords.Add(new InventoryRecord("Initial", line.GameId, line.BundleId, line.Ticket, $"Placed in bin {line.Bin}"));
+
+        InventoryBundleCountText.Text = _inventoryRecords.Count.ToString(CultureInfo.CurrentCulture);
+    }
+
+    private void RefreshGameCatalog()
+    {
+        _gameCatalog.Clear();
+        var byGame = new Dictionary<string, GameCatalogRecord>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var manual in _manualGameCatalog)
+            byGame[manual.GameId] = manual;
+
+        foreach (var import in _imports)
+        {
+            if (byGame.ContainsKey(import.GameId))
+                continue;
+
+            byGame[import.GameId] = GameCatalogRecord.FromImport(import.GameId);
+        }
+
+        foreach (var game in byGame.Values.OrderBy(g => g.GameId, StringComparer.OrdinalIgnoreCase))
+            _gameCatalog.Add(game);
+
+        InventoryGameCountText.Text = $"{_gameCatalog.Count.ToString(CultureInfo.CurrentCulture)} game{(_gameCatalog.Count == 1 ? string.Empty : "s")} defined";
+    }
+
+    private void SyncRdisplayTiles()
+    {
+        var gameNames = _gameCatalog.ToDictionary(
+            g => g.GameId,
+            g => g.Name,
+            StringComparer.OrdinalIgnoreCase);
+
+        var tiles = _imports
+            .GroupBy(i => i.Bin, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new
+            {
+                Bin = int.TryParse(g.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0,
+                Current = g.First()
+            })
+            .Where(x => x.Bin > 0)
+            .Select(x => new RdisplayTileState(
+                x.Bin,
+                x.Current.GameId,
+                gameNames.TryGetValue(x.Current.GameId, out var name) ? name : $"Game {x.Current.GameId}",
+                x.Current.Ticket,
+                PriceCents: 0));
+
+        _rdisplay.UpdateTiles(tiles);
+    }
+
+    private void RefreshClosingBins()
+    {
+        _closingBinCards.Clear();
+        var grouped = _imports
+            .GroupBy(i => i.Bin)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 1; i <= _configuredBinCount; i++)
+        {
+            var bin = i.ToString(CultureInfo.InvariantCulture);
+            grouped.TryGetValue(bin, out var bundles);
+            _closingBinCards.Add(ClosingBinCard.From(i, bundles?.FirstOrDefault(), scanned: false));
+        }
+
+        ClosingEvidenceText.Text = $"0 / {_configuredBinCount.ToString(CultureInfo.CurrentCulture)}";
+    }
+
+    private void RefreshSettingsSummary()
+    {
+        SettingsStoreText.Text = string.IsNullOrWhiteSpace(_storeName)
+            ? "Store setup not completed."
+            : $"{_storeName}{Environment.NewLine}{_storeStreet}, {_storeCity}";
+        SettingsStateText.Text = string.IsNullOrWhiteSpace(_storeState)
+            ? "State: not selected"
+            : $"State: {_storeState}";
+        SettingsBarcodeText.Text = string.IsNullOrWhiteSpace(_storeBarcodeLayout)
+            ? "Barcode format: not selected"
+            : $"Barcode format: {_storeBarcodeLayout}";
+        SettingsScannerText.Text = "Scanner: focused capture only";
+        var registered = _rdisplay.Displays.Count(d => d.IsRegistered);
+        DisplayStatusText.Text = registered == 0
+            ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
+            : $"Rdisplay API listening on port {RdisplayService.ApiPort}. {registered} display{(registered == 1 ? string.Empty : "s")} registered.";
+    }
+
+    private void BinsGridView_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not BinCard card)
+            return;
+
+        _selectedBinBundles.Clear();
+        var lines = _imports
+            .Where(i => string.Equals(i.Bin, card.Number.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (lines.Count == 0)
+        {
+            BinDetailText.Text = $"Bin {card.Number} is empty.";
+            return;
+        }
+
+        BinDetailText.Text = lines.Count == 1
+            ? $"Bin {card.Number} has one bundle."
+            : $"Bin {card.Number} has {lines.Count} bundles. The latest scan is current; older bundles are dormant.";
+
+        for (var i = 0; i < lines.Count; i++)
+            _selectedBinBundles.Add(BundleDetailLine.From(lines[i], i == 0));
+    }
+
+    private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Shift Closing Scan",
+            Content = "Closing scan collection is the next workflow wiring step. This page now shows all bins so scan evidence can mark bins green and leave missed bins gray.",
+            PrimaryButtonText = "OK",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        await dialog.ShowAsync();
+        ClosingStatusText.Text = "Closing scan route is not active yet.";
+    }
+
+    private async void AddGameButton_Click(object sender, RoutedEventArgs e)
+    {
+        var gameIdBox = new TextBox
+        {
+            Header = "Game ID",
+            PlaceholderText = "Scan or enter game ID"
+        };
+        var nameBox = new TextBox
+        {
+            Header = "Game name",
+            PlaceholderText = "Display name"
+        };
+        var content = new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                gameIdBox,
+                nameBox
+            }
+        };
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Add game",
+            Content = content,
+            PrimaryButtonText = "Add",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary)
+            return;
+
+        var gameId = DigitsOnly(gameIdBox.Text);
+        if (string.IsNullOrWhiteSpace(gameId))
+        {
+            GameCatalogStatusText.Text = "Enter a valid game ID.";
+            return;
+        }
+
+        var name = string.IsNullOrWhiteSpace(nameBox.Text)
+            ? $"Game {gameId}"
+            : nameBox.Text.Trim();
+        var existing = _manualGameCatalog.FindIndex(g => string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        var record = new GameCatalogRecord(
+            gameId,
+            name,
+            "Manual",
+            "ms-appx:///Assets/SimpleLottoLogo64.png",
+            "Image not uploaded");
+
+        if (existing >= 0)
+            _manualGameCatalog[existing] = record;
+        else
+            _manualGameCatalog.Add(record);
+
+        RefreshGameCatalog();
+        SyncRdisplayTiles();
+        GameCatalogStatusText.Text = $"Game {gameId} added.";
+    }
+
+    private void UploadGameImageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
+        {
+            GameCatalogStatusText.Text = "Select a game before uploading an image.";
+            return;
+        }
+
+        GameCatalogStatusText.Text = $"Image upload for game {game.GameId} will use the WindowsPOS crop/upload flow.";
+    }
+
+    private void FetchMissingImagesButton_Click(object sender, RoutedEventArgs e)
+    {
+        GameCatalogStatusText.Text = "Missing image fetch will run cache-first during receiving and activation.";
+    }
+
+    private async void RegisterDisplayButton_Click(object sender, RoutedEventArgs e)
+    {
+        var host = DisplayHostBox.Text.Trim();
+        var port = CoerceInt(DisplayPortBox.Value, 5001);
+        DisplayStatusText.Text = "Registering Rdisplay...";
+
+        var result = await _rdisplay.RegisterAsync(host, port);
+        if (!result.IsSuccess || result.Display is null)
+        {
+            DisplayStatusText.Text = result.ErrorMessage ?? "Rdisplay registration failed.";
+            return;
+        }
+
+        DisplayStatusText.Text = $"Registered {result.Display.Name} at {result.Display.BaseUrl}.";
+        SyncRdisplayTiles();
     }
 
     private string BuildGameMixText()
@@ -918,6 +1197,17 @@ public sealed partial class MainWindow : Window
         return Math.Max(0, Math.Round((decimal)value, 2, MidpointRounding.AwayFromZero));
     }
 
+    private static SolidColorBrush ColorBrush(byte r, byte g, byte b) =>
+        new(Color.FromArgb(255, r, g, b));
+
+    private static SolidColorBrush EmptyTileBrush => ColorBrush(34, 37, 43);
+    private static SolidColorBrush EmptyTileBorderBrush => ColorBrush(70, 76, 87);
+    private static SolidColorBrush BhagvaTileBrush => ColorBrush(255, 153, 51);
+    private static SolidColorBrush BhagvaStackedTileBrush => ColorBrush(124, 45, 18);
+    private static SolidColorBrush BhagvaBorderBrush => ColorBrush(255, 178, 92);
+    private static SolidColorBrush DarkTileTextBrush => ColorBrush(21, 23, 26);
+    private static SolidColorBrush LightTileTextBrush => ColorBrush(255, 255, 255);
+
     private void ResizeWindow(int widthDip, int heightDip)
     {
         var hwnd = WindowNative.GetWindowHandle(this);
@@ -925,6 +1215,114 @@ public sealed partial class MainWindow : Window
         AppWindow.Resize(new SizeInt32(
             (int)(widthDip * scale),
             (int)(heightDip * scale)));
+    }
+
+    private sealed record BinCard(
+        int Number,
+        int BundleCount,
+        string GameId,
+        string BundleId,
+        string Ticket)
+    {
+        public string BinText => $"Bin {Number}";
+        public string GameText => string.IsNullOrWhiteSpace(GameId) ? "Empty" : $"Game {GameId}";
+        public string TicketText => string.IsNullOrWhiteSpace(Ticket) ? "No ticket" : $"Ticket {Ticket}";
+        public string StackText => BundleCount switch
+        {
+            0 => "Open",
+            1 => "Current",
+            _ => $"{BundleCount} bundles"
+        };
+        public Brush BackgroundBrush => BundleCount switch
+        {
+            0 => EmptyTileBrush,
+            1 => BhagvaTileBrush,
+            _ => BhagvaStackedTileBrush
+        };
+        public Brush BorderBrush => BundleCount == 0
+            ? EmptyTileBorderBrush
+            : BhagvaBorderBrush;
+        public Brush ForegroundBrush => BundleCount == 1
+            ? DarkTileTextBrush
+            : LightTileTextBrush;
+
+        public static BinCard From(int number, ImportLine? current, int bundleCount) =>
+            current is null
+                ? new BinCard(number, 0, string.Empty, string.Empty, string.Empty)
+                : new BinCard(number, bundleCount, current.GameId, current.BundleId, current.Ticket);
+    }
+
+    private sealed record BundleDetailLine(
+        string GameId,
+        string BundleId,
+        string Ticket,
+        string Bin,
+        bool IsCurrent)
+    {
+        public string SummaryText => $"{(IsCurrent ? "Current" : "Dormant")} | Game {GameId} | Bundle {BundleId}";
+        public string DetailText => $"Bin {Bin} | Current ticket {Ticket}";
+
+        public static BundleDetailLine From(ImportLine line, bool isCurrent) =>
+            new(line.GameId, line.BundleId, line.Ticket, line.Bin, isCurrent);
+    }
+
+    private sealed record InventoryRecord(
+        string Source,
+        string GameId,
+        string BundleId,
+        string Ticket,
+        string Status)
+    {
+        public string GameText => $"Game {GameId}";
+        public string BundleText => $"Bundle {BundleId}";
+    }
+
+    private sealed record GameCatalogRecord(
+        string GameId,
+        string Name,
+        string Source,
+        string ImageUri,
+        string ImageStatus)
+    {
+        public BitmapImage ImageSource => new(new Uri(ImageUri));
+
+        public static GameCatalogRecord FromImport(string gameId) =>
+            new(
+                gameId,
+                $"Game {gameId}",
+                "Initial import",
+                "ms-appx:///Assets/SimpleLottoLogo64.png",
+                "Image not cached");
+    }
+
+    private sealed record ClosingBinCard(
+        int Number,
+        string Status,
+        string Detail,
+        bool Scanned,
+        bool HasBundle)
+    {
+        public string BinText => $"Bin {Number}";
+        public Brush BackgroundBrush => Scanned
+            ? BhagvaTileBrush
+            : EmptyTileBrush;
+        public Brush BorderBrush => Scanned
+            ? BhagvaBorderBrush
+            : EmptyTileBorderBrush;
+        public Brush ForegroundBrush => Scanned
+            ? DarkTileTextBrush
+            : LightTileTextBrush;
+
+        public static ClosingBinCard From(int number, ImportLine? current, bool scanned)
+        {
+            var detail = current is null
+                ? "Empty"
+                : $"G{current.GameId} T{current.Ticket}";
+            var status = scanned
+                ? "Scanned"
+                : "Unscanned";
+            return new ClosingBinCard(number, status, detail, scanned, current is not null);
+        }
     }
 
     private sealed record SaleLine(
@@ -965,14 +1363,14 @@ public sealed partial class MainWindow : Window
         public string Label => Number.ToString(CultureInfo.InvariantCulture);
         public string StatusText => ImportedCount == 0 ? "Open" : ImportedCount.ToString(CultureInfo.InvariantCulture);
         public Brush StatusBackgroundBrush => ImportedCount == 0
-            ? new SolidColorBrush(Color.FromArgb(255, 34, 37, 43))
-            : new SolidColorBrush(Color.FromArgb(255, 21, 128, 61));
+            ? EmptyTileBrush
+            : BhagvaTileBrush;
         public Brush StatusBorderBrush => ImportedCount == 0
-            ? new SolidColorBrush(Color.FromArgb(255, 70, 76, 87))
-            : new SolidColorBrush(Color.FromArgb(255, 74, 222, 128));
+            ? EmptyTileBorderBrush
+            : BhagvaBorderBrush;
         public Brush StatusTextBrush => ImportedCount == 0
-            ? new SolidColorBrush(Color.FromArgb(255, 244, 244, 245))
-            : new SolidColorBrush(Color.FromArgb(255, 255, 255, 255));
+            ? LightTileTextBrush
+            : DarkTileTextBrush;
 
         public int ImportedCount
         {

@@ -21,7 +21,7 @@
                     <Color x:Key="SlAccent">#0F766E</Color>
                     <Color x:Key="SlAccentText">#FFFFFF</Color>
                     <Color x:Key="SlDanger">#B42318</Color>
-                    <Color x:Key="SlSuccess">#16A34A</Color>
+                    <Color x:Key="SlSuccess">#FF9933</Color>
                     <Color x:Key="SlWarning">#D97706</Color>
 
                     <SolidColorBrush x:Key="SlBackgroundBrush" Color="{ThemeResource SlBackground}"/>
@@ -47,7 +47,7 @@
                     <Color x:Key="SlAccent">#0F766E</Color>
                     <Color x:Key="SlAccentText">#FFFFFF</Color>
                     <Color x:Key="SlDanger">#B42318</Color>
-                    <Color x:Key="SlSuccess">#15803D</Color>
+                    <Color x:Key="SlSuccess">#FF9933</Color>
                     <Color x:Key="SlWarning">#B45309</Color>
 
                     <SolidColorBrush x:Key="SlBackgroundBrush" Color="{ThemeResource SlBackground}"/>
