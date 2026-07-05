@@ -45,6 +45,8 @@ public sealed partial class MainWindow : Window
     private ImportTicket? _pendingImportTicket;
     private bool _hasImportFailure;
     private readonly StringBuilder _startupScanBuffer = new();
+    private readonly StringBuilder _focusedScanBuffer = new();
+    private string _dashboardPendingBin = string.Empty;
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -58,6 +60,10 @@ public sealed partial class MainWindow : Window
         SalesListView.ItemsSource = _sales;
         ImportListView.ItemsSource = _imports;
         ImportBinsGridView.ItemsSource = _importBins;
+        RootGrid.AddHandler(
+            UIElement.KeyDownEvent,
+            new KeyEventHandler(OnGlobalKeyDown),
+            handledEventsToo: true);
         RefreshTotals();
     }
 
@@ -94,25 +100,42 @@ public sealed partial class MainWindow : Window
         UpdateBarcodeFormatFromState();
     }
 
-    private void StartupOverlay_KeyDown(object sender, KeyRoutedEventArgs e)
+    private void OnGlobalKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (_startupStage != StartupStage.Import)
+        if (StartupOverlay.Visibility == Visibility.Visible)
+        {
+            if (_startupStage == StartupStage.Import)
+                CaptureScanKey(e, _startupScanBuffer, ProcessImportScanInput, ImportScanStatusText);
             return;
+        }
 
+        CaptureScanKey(e, _focusedScanBuffer, ProcessFocusedScanInput, DashboardScannerStatusText);
+    }
+
+    private static void CaptureScanKey(
+        KeyRoutedEventArgs e,
+        StringBuilder buffer,
+        Action<string> processScan,
+        TextBlock? statusText)
+    {
         if (e.Key == VirtualKey.Enter)
         {
+            if (buffer.Length == 0)
+                return;
+
             e.Handled = true;
-            var raw = _startupScanBuffer.ToString();
-            _startupScanBuffer.Clear();
-            ProcessImportScanInput(raw);
+            var raw = buffer.ToString();
+            buffer.Clear();
+            processScan(raw);
             return;
         }
 
         if (TryMapScanKey(e.Key, out var c))
         {
             e.Handled = true;
-            _startupScanBuffer.Append(c);
-            ImportScanStatusText.Text = "Scanning...";
+            buffer.Append(c);
+            if (statusText is not null)
+                statusText.Text = "Scanning...";
         }
     }
 
@@ -195,6 +218,9 @@ public sealed partial class MainWindow : Window
 
         StartupOverlay.Visibility = Visibility.Collapsed;
         StatusText.Text = $"{user} logged in. Shift started for {_storeState}.";
+        DashboardScannerModeText.Text = "Focused capture";
+        DashboardScannerStatusText.Text = "Ready for scanner input.";
+        DashboardPairingStatusText.Text = "Background capture: not paired";
     }
 
     private void ShowSetupStage()
@@ -349,6 +375,59 @@ public sealed partial class MainWindow : Window
         }
 
         AcceptImportTicket(ticket);
+    }
+
+    private void ProcessFocusedScanInput(string raw)
+    {
+        var segments = SplitImportScanInput(raw).ToArray();
+        if (segments.Length == 0)
+        {
+            DashboardScannerStatusText.Text = "No scan data received.";
+            return;
+        }
+
+        foreach (var segment in segments)
+            ProcessFocusedScanSegment(segment);
+    }
+
+    private void ProcessFocusedScanSegment(string raw)
+    {
+        if (TryParseBinNumber(raw, out var binNumber))
+        {
+            _dashboardPendingBin = binNumber.ToString(CultureInfo.InvariantCulture);
+            DashboardScannerStatusText.Text = $"Bin {_dashboardPendingBin} captured. Scan ticket.";
+            DashboardLastScanText.Text = $"Last scan: BIN-{_dashboardPendingBin}";
+            StatusText.Text = $"Bin {_dashboardPendingBin} selected for scanner workflow.";
+            return;
+        }
+
+        var ticket = TryParseImportTicket(raw);
+        if (ticket is null)
+        {
+            DashboardScannerStatusText.Text = "Scan was not recognized.";
+            DashboardLastScanText.Text = $"Last scan failed: {raw}";
+            StatusText.Text = "Scanner input was not recognized.";
+            return;
+        }
+
+        var bin = string.IsNullOrWhiteSpace(_dashboardPendingBin)
+            ? "Scanner"
+            : _dashboardPendingBin;
+        var line = new SaleLine(
+            DateTime.Now,
+            ticket.GameId,
+            bin,
+            ticket.Ticket,
+            1,
+            0);
+
+        _sales.Insert(0, line);
+        SalesListView.SelectedItem = line;
+        DashboardScannerStatusText.Text = $"Ticket captured for game {ticket.GameId}.";
+        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
+        StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, ticket {ticket.Ticket}.";
+        _dashboardPendingBin = string.Empty;
+        RefreshTotals();
     }
 
     private void AcceptImportBin(ImportBin bin)
@@ -705,7 +784,7 @@ public sealed partial class MainWindow : Window
     {
         _isNavCollapsed = !_isNavCollapsed;
         NavColumn.Width = new GridLength(_isNavCollapsed ? 64 : 220);
-        NavToggleButton.Content = _isNavCollapsed ? "Nav" : "Menu";
+        NavToggleButton.Content = _isNavCollapsed ? "->" : "<-";
 
         var labelVisibility = _isNavCollapsed ? Visibility.Collapsed : Visibility.Visible;
         DashboardNavLabel.Visibility = labelVisibility;
@@ -751,39 +830,6 @@ public sealed partial class MainWindow : Window
         InventoryNavLabel.FontWeight = section == "Inventory" ? FontWeights.SemiBold : FontWeights.Normal;
         ClosingNavLabel.FontWeight = section == "Closing" ? FontWeights.SemiBold : FontWeights.Normal;
         SettingsNavLabel.FontWeight = section == "Settings" ? FontWeights.SemiBold : FontWeights.Normal;
-    }
-
-    private void AddSaleButton_Click(object sender, RoutedEventArgs e)
-    {
-        var gameId = string.IsNullOrWhiteSpace(GameIdTextBox.Text)
-            ? "Unknown"
-            : GameIdTextBox.Text.Trim();
-        var bin = string.IsNullOrWhiteSpace(BinTextBox.Text)
-            ? "Unassigned"
-            : BinTextBox.Text.Trim();
-        var quantity = CoerceInt(QuantityBox.Value, 1);
-        var amount = CoerceMoney(PriceBox.Value);
-        var ticket = string.IsNullOrWhiteSpace(TicketTextBox.Text)
-            ? "No ticket entered"
-            : TicketTextBox.Text.Trim();
-
-        var line = new SaleLine(
-            DateTime.Now,
-            gameId,
-            bin,
-            ticket,
-            quantity,
-            amount);
-
-        _sales.Insert(0, line);
-        GameIdTextBox.Text = string.Empty;
-        BinTextBox.Text = string.Empty;
-        TicketTextBox.Text = string.Empty;
-        QuantityBox.Value = 1;
-        PriceBox.Value = 0;
-        SalesListView.SelectedItem = line;
-        StatusText.Text = $"Added {quantity} ticket(s) for game {gameId}, bin {bin}.";
-        RefreshTotals();
     }
 
     private void VoidSelectedButton_Click(object sender, RoutedEventArgs e)

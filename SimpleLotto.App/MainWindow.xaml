@@ -4,7 +4,8 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Grid Background="{ThemeResource SlBackgroundBrush}">
+    <Grid x:Name="RootGrid"
+          Background="{ThemeResource SlBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -61,10 +62,14 @@
                     BorderThickness="0,0,1,0"
                     Padding="12">
                 <StackPanel Spacing="8">
-                    <Button x:Name="NavToggleButton"
-                            Content="Menu"
-                            HorizontalAlignment="Stretch"
-                            Click="NavToggleButton_Click"/>
+                    <Grid>
+                        <Button x:Name="NavToggleButton"
+                                Content="&lt;-"
+                                Width="42"
+                                Height="32"
+                                HorizontalAlignment="Right"
+                                Click="NavToggleButton_Click"/>
+                    </Grid>
 
                     <Button Tag="Dashboard"
                             HorizontalAlignment="Stretch"
@@ -124,59 +129,50 @@
                     <ColumnDefinition Width="300"/>
                 </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0"
-                    Style="{StaticResource SlPanelBorderStyle}">
+                <Border Grid.Column="0"
+                        Style="{StaticResource SlPanelBorderStyle}">
                 <StackPanel Spacing="14">
                     <StackPanel Spacing="2">
-                        <TextBlock Text="New Sale"
+                        <TextBlock Text="Scanner"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="Record a lottery ticket sale for the current shift."
+                        <TextBlock Text="Ready"
                                    Style="{StaticResource SlCaptionTextStyle}"/>
                     </StackPanel>
 
-                    <TextBox x:Name="GameIdTextBox"
-                             Header="Game ID"
-                             PlaceholderText="Scan or enter game ID"/>
+                    <Border Background="{ThemeResource SlSurfaceAltBrush}"
+                            BorderBrush="{ThemeResource SlBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="12">
+                        <StackPanel Spacing="8">
+                            <TextBlock x:Name="DashboardScannerModeText"
+                                       Text="Focused capture"
+                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                            <TextBlock x:Name="DashboardScannerStatusText"
+                                       Text="Ready for scanner input."
+                                       Style="{StaticResource SlCaptionTextStyle}"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock x:Name="DashboardLastScanText"
+                                       Text="No scan captured this shift."
+                                       Foreground="{ThemeResource SlTextBrush}"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
 
-                    <TextBox x:Name="BinTextBox"
-                             Header="Bin"
-                             PlaceholderText="Scan or enter bin number"/>
-
-                    <TextBox x:Name="TicketTextBox"
-                             Header="Ticket"
-                             PlaceholderText="Scan or enter ticket number"/>
-
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <NumberBox x:Name="QuantityBox"
-                                   Header="Ticket count"
-                                   Value="1"
-                                   Minimum="1"
-                                   Maximum="999"
-                                   SmallChange="1"
-                                   LargeChange="5"
-                                   SpinButtonPlacementMode="Inline"/>
-
-                        <NumberBox x:Name="PriceBox"
-                                   Grid.Column="1"
-                                   Header="Amount"
-                                   Value="0"
-                                   Minimum="0"
-                                   Maximum="999"
-                                   SmallChange="1"
-                                   LargeChange="5"
-                                   SpinButtonPlacementMode="Inline"/>
-                    </Grid>
-
-                    <Button x:Name="AddSaleButton"
-                            Content="Add Sale"
-                            Style="{StaticResource AccentButtonStyle}"
-                            HorizontalAlignment="Stretch"
-                            Click="AddSaleButton_Click"/>
+                    <Border Background="{ThemeResource SlSurfaceAltBrush}"
+                            BorderBrush="{ThemeResource SlBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Pairing"
+                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                            <TextBlock x:Name="DashboardPairingStatusText"
+                                       Text="Background capture: not paired"
+                                       Style="{StaticResource SlCaptionTextStyle}"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </Border>
 
@@ -341,7 +337,6 @@
         <Grid x:Name="StartupOverlay"
               Grid.RowSpan="3"
               IsTabStop="True"
-              KeyDown="StartupOverlay_KeyDown"
               Background="{ThemeResource SlBackgroundBrush}">
             <Border Width="1060"
                     MaxHeight="720"
