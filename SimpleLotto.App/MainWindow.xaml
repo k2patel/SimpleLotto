@@ -27,11 +27,10 @@
                         Height="40"
                         CornerRadius="8"
                         Background="{ThemeResource SlAccentBrush}">
-                    <TextBlock Text="SL"
-                               Foreground="{ThemeResource SlAccentTextBrush}"
-                               FontWeight="SemiBold"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"/>
+                    <Image Source="ms-appx:///Assets/SimpleLottoLogo64.png"
+                           Width="40"
+                           Height="40"
+                           Stretch="UniformToFill"/>
                 </Border>
 
                 <StackPanel Grid.Column="1"
@@ -338,5 +337,158 @@
                        Text="Ready"
                        Style="{StaticResource SlCaptionTextStyle}"/>
         </Border>
+
+        <Grid x:Name="StartupOverlay"
+              Grid.RowSpan="3"
+              Background="{ThemeResource SlBackgroundBrush}">
+            <Border Width="720"
+                    Padding="28"
+                    Style="{StaticResource SlPanelBorderStyle}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <Grid RowSpacing="22">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                        <Border Width="56"
+                                Height="56"
+                                CornerRadius="8"
+                                Background="{ThemeResource SlAccentBrush}">
+                            <Image Source="ms-appx:///Assets/SimpleLottoSplash.png"
+                                   Width="56"
+                                   Height="56"
+                                   Stretch="UniformToFill"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Text="SimpleLotto"
+                                       Style="{StaticResource SlPageTitleTextStyle}"/>
+                            <TextBlock x:Name="StartupSubtitleText"
+                                       Text="First install setup"
+                                       Style="{StaticResource SlCaptionTextStyle}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SetupPanel"
+                                Grid.Row="1"
+                                Spacing="14">
+                        <TextBlock Text="Required Setup"
+                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                        <TextBlock Text="State and Manager login are required before lottery workflows can run."
+                                   Style="{StaticResource SlCaptionTextStyle}"
+                                   TextWrapping="Wrap"/>
+
+                        <TextBox x:Name="StateTextBox"
+                                 Header="Store state"
+                                 PlaceholderText="Two-letter state code, for example GA"
+                                 CharacterCasing="Upper"
+                                 MaxLength="2"/>
+
+                        <PasswordBox x:Name="ManagerPasswordBox"
+                                     Header="Manager password"/>
+
+                        <TextBox x:Name="ClerkNameBox"
+                                 Header="Clerk name"
+                                 PlaceholderText="Optional"/>
+
+                        <PasswordBox x:Name="ClerkPasswordBox"
+                                     Header="Clerk password (optional)"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="ImportPanel"
+                                Grid.Row="1"
+                                Spacing="14"
+                                Visibility="Collapsed">
+                        <TextBlock Text="Initial Import"
+                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                        <TextBlock Text="Import existing physical bundles that are already open in the store. The scanned ticket becomes the current available ticket."
+                                   Style="{StaticResource SlCaptionTextStyle}"
+                                   TextWrapping="Wrap"/>
+
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ImportGameIdBox"
+                                     Header="Game ID"
+                                     PlaceholderText="Scan or enter game ID"/>
+                            <TextBox x:Name="ImportBundleIdBox"
+                                     Grid.Column="1"
+                                     Header="Bundle ID"
+                                     PlaceholderText="Scan or enter bundle ID"/>
+                        </Grid>
+
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ImportTicketBox"
+                                     Header="Current ticket"
+                                     PlaceholderText="Current available ticket"/>
+                            <TextBox x:Name="ImportBinBox"
+                                     Grid.Column="1"
+                                     Header="Bin"
+                                     PlaceholderText="Physical bin"/>
+                        </Grid>
+
+                        <Button Content="Add Import Row"
+                                HorizontalAlignment="Left"
+                                Click="AddImportRowButton_Click"/>
+
+                        <ListView x:Name="ImportListView"
+                                  DisplayMemberPath="SummaryText"
+                                  MaxHeight="150"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="LoginPanel"
+                                Grid.Row="1"
+                                Spacing="14"
+                                Visibility="Collapsed">
+                        <TextBlock Text="Login"
+                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                        <TextBlock Text="Login starts the active shift for the selected user."
+                                   Style="{StaticResource SlCaptionTextStyle}"/>
+
+                        <ComboBox x:Name="LoginUserComboBox"
+                                  Header="User"
+                                  HorizontalAlignment="Stretch"/>
+
+                        <PasswordBox x:Name="LoginPasswordBox"
+                                     Header="Password"/>
+                    </StackPanel>
+
+                    <Grid Grid.Row="2" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock x:Name="StartupStatusText"
+                                   Text="Select the store state and create the Manager password."
+                                   Style="{StaticResource SlCaptionTextStyle}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"/>
+
+                        <Button x:Name="StartupBackButton"
+                                Grid.Column="1"
+                                Content="Back"
+                                Visibility="Collapsed"
+                                Click="StartupBackButton_Click"/>
+
+                        <Button x:Name="StartupPrimaryButton"
+                                Grid.Column="2"
+                                Content="Continue"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="StartupPrimaryButton_Click"/>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

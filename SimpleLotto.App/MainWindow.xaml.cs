@@ -16,7 +16,13 @@ namespace SimpleLotto.App;
 public sealed partial class MainWindow : Window
 {
     private readonly ObservableCollection<SaleLine> _sales = new();
+    private readonly ObservableCollection<ImportLine> _imports = new();
     private bool _isNavCollapsed;
+    private StartupStage _startupStage = StartupStage.Setup;
+    private string _managerPassword = string.Empty;
+    private string _clerkName = string.Empty;
+    private string _clerkPassword = string.Empty;
+    private string _storeState = string.Empty;
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -27,7 +33,148 @@ public sealed partial class MainWindow : Window
         Title = "SimpleLotto";
         ResizeWindow(1240, 760);
         SalesListView.ItemsSource = _sales;
+        ImportListView.ItemsSource = _imports;
         RefreshTotals();
+    }
+
+    private void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
+    {
+        switch (_startupStage)
+        {
+            case StartupStage.Setup:
+                CompleteSetupStage();
+                break;
+            case StartupStage.Import:
+                ShowLoginStage();
+                break;
+            case StartupStage.Login:
+                CompleteLoginStage();
+                break;
+        }
+    }
+
+    private void StartupBackButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_startupStage == StartupStage.Import)
+        {
+            ShowSetupStage();
+        }
+        else if (_startupStage == StartupStage.Login)
+        {
+            ShowImportStage();
+        }
+    }
+
+    private void AddImportRowButton_Click(object sender, RoutedEventArgs e)
+    {
+        var gameId = ImportGameIdBox.Text.Trim();
+        var bundleId = ImportBundleIdBox.Text.Trim();
+        var ticket = ImportTicketBox.Text.Trim();
+        var bin = ImportBinBox.Text.Trim();
+
+        if (string.IsNullOrWhiteSpace(gameId) ||
+            string.IsNullOrWhiteSpace(bundleId) ||
+            string.IsNullOrWhiteSpace(ticket) ||
+            string.IsNullOrWhiteSpace(bin))
+        {
+            StartupStatusText.Text = "Enter game ID, bundle ID, current ticket, and bin before adding an import row.";
+            return;
+        }
+
+        _imports.Add(new ImportLine(gameId, bundleId, ticket, bin));
+        ImportGameIdBox.Text = string.Empty;
+        ImportBundleIdBox.Text = string.Empty;
+        ImportTicketBox.Text = string.Empty;
+        ImportBinBox.Text = string.Empty;
+        StartupStatusText.Text = $"Added import row for game {gameId}, bundle {bundleId}.";
+    }
+
+    private void CompleteSetupStage()
+    {
+        var state = StateTextBox.Text.Trim().ToUpperInvariant();
+        if (state.Length != 2)
+        {
+            StartupStatusText.Text = "Enter the two-letter store state. State is required for lottery barcode and game setup.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(ManagerPasswordBox.Password))
+        {
+            StartupStatusText.Text = "Manager password is required.";
+            return;
+        }
+
+        _storeState = state;
+        _managerPassword = ManagerPasswordBox.Password;
+        _clerkName = ClerkNameBox.Text.Trim();
+        _clerkPassword = ClerkPasswordBox.Password;
+        ShowImportStage();
+    }
+
+    private void CompleteLoginStage()
+    {
+        if (LoginUserComboBox.SelectedItem is not ComboBoxItem userItem)
+        {
+            StartupStatusText.Text = "Select a user to login.";
+            return;
+        }
+
+        var user = userItem.Content?.ToString() ?? string.Empty;
+        var expectedPassword = user == "Manager" ? _managerPassword : _clerkPassword;
+        if (string.IsNullOrWhiteSpace(expectedPassword) ||
+            LoginPasswordBox.Password != expectedPassword)
+        {
+            StartupStatusText.Text = "Password does not match the selected user.";
+            return;
+        }
+
+        StartupOverlay.Visibility = Visibility.Collapsed;
+        StatusText.Text = $"{user} logged in. Shift started for {_storeState}.";
+    }
+
+    private void ShowSetupStage()
+    {
+        _startupStage = StartupStage.Setup;
+        StartupSubtitleText.Text = "First install setup";
+        SetupPanel.Visibility = Visibility.Visible;
+        ImportPanel.Visibility = Visibility.Collapsed;
+        LoginPanel.Visibility = Visibility.Collapsed;
+        StartupBackButton.Visibility = Visibility.Collapsed;
+        StartupPrimaryButton.Content = "Continue";
+        StartupStatusText.Text = "Select the store state and create the Manager password.";
+    }
+
+    private void ShowImportStage()
+    {
+        _startupStage = StartupStage.Import;
+        StartupSubtitleText.Text = "Initial import wizard";
+        SetupPanel.Visibility = Visibility.Collapsed;
+        ImportPanel.Visibility = Visibility.Visible;
+        LoginPanel.Visibility = Visibility.Collapsed;
+        StartupBackButton.Visibility = Visibility.Visible;
+        StartupPrimaryButton.Content = "Continue to Login";
+        StartupStatusText.Text = "Add existing open bundles now, or continue if there are none to import.";
+    }
+
+    private void ShowLoginStage()
+    {
+        _startupStage = StartupStage.Login;
+        StartupSubtitleText.Text = "Login";
+        SetupPanel.Visibility = Visibility.Collapsed;
+        ImportPanel.Visibility = Visibility.Collapsed;
+        LoginPanel.Visibility = Visibility.Visible;
+        StartupBackButton.Visibility = Visibility.Visible;
+        StartupPrimaryButton.Content = "Start Shift";
+        LoginUserComboBox.Items.Clear();
+        LoginUserComboBox.Items.Add(new ComboBoxItem { Content = "Manager" });
+        if (!string.IsNullOrWhiteSpace(_clerkName) &&
+            !string.IsNullOrWhiteSpace(_clerkPassword))
+        {
+            LoginUserComboBox.Items.Add(new ComboBoxItem { Content = _clerkName });
+        }
+        LoginUserComboBox.SelectedIndex = 0;
+        LoginPasswordBox.Password = string.Empty;
+        StartupStatusText.Text = "Login starts the first active shift.";
     }
 
     private void NavToggleButton_Click(object sender, RoutedEventArgs e)
@@ -222,5 +369,21 @@ public sealed partial class MainWindow : Window
         public string AmountText => Amount.ToString("C", CultureInfo.CurrentCulture);
         public string GameText => $"Game {GameId}";
         public string DetailText => $"Bin {Bin} | Ticket {Ticket}";
+    }
+
+    private sealed record ImportLine(
+        string GameId,
+        string BundleId,
+        string Ticket,
+        string Bin)
+    {
+        public string SummaryText => $"Game {GameId} | Bundle {BundleId} | Ticket {Ticket} | Bin {Bin}";
+    }
+
+    private enum StartupStage
+    {
+        Setup,
+        Import,
+        Login
     }
 }

@@ -37,6 +37,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
+SetupIconFile=..\SimpleLotto.App\Assets\SimpleLotto.ico
 CloseApplications=yes
 RestartApplications=yes
 

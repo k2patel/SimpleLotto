@@ -14,10 +14,22 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <LangVersion>14</LangVersion>
+    <ApplicationIcon>Assets\SimpleLotto.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.1.3" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Assets\SimpleLotto.ico" />
+    <None Remove="Assets\SimpleLottoLogo.png" />
+    <None Remove="Assets\SimpleLottoLogo64.png" />
+    <None Remove="Assets\SimpleLottoSplash.png" />
+    <Content Include="Assets\SimpleLotto.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\SimpleLottoLogo.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\SimpleLottoLogo64.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\SimpleLottoSplash.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
