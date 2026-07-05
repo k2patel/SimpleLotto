@@ -50,14 +50,80 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1"
-              Padding="24"
-              ColumnSpacing="20">
+        <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="360"/>
+                <ColumnDefinition x:Name="NavColumn" Width="220"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="300"/>
             </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Background="{ThemeResource SlSurfaceBrush}"
+                    BorderBrush="{ThemeResource SlBorderBrush}"
+                    BorderThickness="0,0,1,0"
+                    Padding="12">
+                <StackPanel Spacing="8">
+                    <Button x:Name="NavToggleButton"
+                            Content="Menu"
+                            HorizontalAlignment="Stretch"
+                            Click="NavToggleButton_Click"/>
+
+                    <Button Tag="Dashboard"
+                            HorizontalAlignment="Stretch"
+                            Click="NavButton_Click"
+                            ToolTipService.ToolTip="Dashboard">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE80F;" FontSize="16"/>
+                            <TextBlock x:Name="DashboardNavLabel" Text="Dashboard" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Tag="Bins"
+                            HorizontalAlignment="Stretch"
+                            Click="NavButton_Click"
+                            ToolTipService.ToolTip="Bins">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xECA5;" FontSize="16"/>
+                            <TextBlock x:Name="BinsNavLabel" Text="Bins"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Tag="Inventory"
+                            HorizontalAlignment="Stretch"
+                            Click="NavButton_Click"
+                            ToolTipService.ToolTip="Inventory">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE7B8;" FontSize="16"/>
+                            <TextBlock x:Name="InventoryNavLabel" Text="Inventory"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Tag="Closing"
+                            HorizontalAlignment="Stretch"
+                            Click="NavButton_Click"
+                            ToolTipService.ToolTip="Closing">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE9D5;" FontSize="16"/>
+                            <TextBlock x:Name="ClosingNavLabel" Text="Closing"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Tag="Settings"
+                            HorizontalAlignment="Stretch"
+                            Click="NavButton_Click"
+                            ToolTipService.ToolTip="Settings">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE713;" FontSize="16"/>
+                            <TextBlock x:Name="SettingsNavLabel" Text="Settings"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+
+            <Grid x:Name="DashboardContent"
+                  Grid.Column="1"
+                  Padding="24"
+                  ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="360"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="300"/>
+                </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
                     Style="{StaticResource SlPanelBorderStyle}">
@@ -242,6 +308,25 @@
                     </StackPanel>
                 </Border>
             </StackPanel>
+            </Grid>
+
+            <Grid x:Name="SectionContent"
+                  Grid.Column="1"
+                  Padding="24"
+                  Visibility="Collapsed">
+                <Border Style="{StaticResource SlPanelBorderStyle}"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Top">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="SectionTitleText"
+                                   Text="Bins"
+                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                        <TextBlock x:Name="SectionDescriptionText"
+                                   Text="This section will use the same operational model defined in the product instructions."
+                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
         </Grid>
 
         <Border Grid.Row="2"

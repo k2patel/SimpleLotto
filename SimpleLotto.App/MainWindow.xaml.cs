@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Microsoft.UI;
+using Microsoft.UI.Text;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -15,6 +16,7 @@ namespace SimpleLotto.App;
 public sealed partial class MainWindow : Window
 {
     private readonly ObservableCollection<SaleLine> _sales = new();
+    private bool _isNavCollapsed;
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -26,6 +28,58 @@ public sealed partial class MainWindow : Window
         ResizeWindow(1240, 760);
         SalesListView.ItemsSource = _sales;
         RefreshTotals();
+    }
+
+    private void NavToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        _isNavCollapsed = !_isNavCollapsed;
+        NavColumn.Width = new GridLength(_isNavCollapsed ? 64 : 220);
+        NavToggleButton.Content = _isNavCollapsed ? "Nav" : "Menu";
+
+        var labelVisibility = _isNavCollapsed ? Visibility.Collapsed : Visibility.Visible;
+        DashboardNavLabel.Visibility = labelVisibility;
+        BinsNavLabel.Visibility = labelVisibility;
+        InventoryNavLabel.Visibility = labelVisibility;
+        ClosingNavLabel.Visibility = labelVisibility;
+        SettingsNavLabel.Visibility = labelVisibility;
+    }
+
+    private void NavButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string section })
+            return;
+
+        if (section == "Dashboard")
+        {
+            DashboardContent.Visibility = Visibility.Visible;
+            SectionContent.Visibility = Visibility.Collapsed;
+            SetSelectedNav(section);
+            StatusText.Text = "Dashboard";
+            return;
+        }
+
+        DashboardContent.Visibility = Visibility.Collapsed;
+        SectionContent.Visibility = Visibility.Visible;
+        SetSelectedNav(section);
+        SectionTitleText.Text = section;
+        SectionDescriptionText.Text = section switch
+        {
+            "Bins" => "Bin display and bundle placement will use the product rules for active and dormant bundles.",
+            "Inventory" => "Inventory will handle receiving, bundle setup, and activation without becoming the sales ledger.",
+            "Closing" => "Closing will reconcile the current shift while keeping sales totals separate from inventory state.",
+            "Settings" => "Settings will hold state setup, game prices, bundle prices, ticket numbering, displays, scanner, and audio options.",
+            _ => "This section is defined by the product instructions."
+        };
+        StatusText.Text = section;
+    }
+
+    private void SetSelectedNav(string section)
+    {
+        DashboardNavLabel.FontWeight = section == "Dashboard" ? FontWeights.SemiBold : FontWeights.Normal;
+        BinsNavLabel.FontWeight = section == "Bins" ? FontWeights.SemiBold : FontWeights.Normal;
+        InventoryNavLabel.FontWeight = section == "Inventory" ? FontWeights.SemiBold : FontWeights.Normal;
+        ClosingNavLabel.FontWeight = section == "Closing" ? FontWeights.SemiBold : FontWeights.Normal;
+        SettingsNavLabel.FontWeight = section == "Settings" ? FontWeights.SemiBold : FontWeights.Normal;
     }
 
     private void AddSaleButton_Click(object sender, RoutedEventArgs e)
