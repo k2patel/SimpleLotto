@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Text;
@@ -37,11 +38,13 @@ public sealed partial class MainWindow : Window
     private string _storeState = string.Empty;
     private string? _storeBarcodeLayout;
     private string _storeName = string.Empty;
-    private string _storeAddress = string.Empty;
+    private string _storeStreet = string.Empty;
+    private string _storeCity = string.Empty;
     private int _configuredBinCount = 90;
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
     private bool _hasImportFailure;
+    private readonly StringBuilder _startupScanBuffer = new();
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -86,18 +89,31 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ProcessImportScanButton_Click(object sender, RoutedEventArgs e)
+    private void StateComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        ProcessImportScanInput(ImportScanBox.Text);
+        UpdateBarcodeFormatFromState();
     }
 
-    private void ImportScanBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    private void StartupOverlay_KeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key != VirtualKey.Enter)
+        if (_startupStage != StartupStage.Import)
             return;
 
-        e.Handled = true;
-        ProcessImportScanInput(ImportScanBox.Text);
+        if (e.Key == VirtualKey.Enter)
+        {
+            e.Handled = true;
+            var raw = _startupScanBuffer.ToString();
+            _startupScanBuffer.Clear();
+            ProcessImportScanInput(raw);
+            return;
+        }
+
+        if (TryMapScanKey(e.Key, out var c))
+        {
+            e.Handled = true;
+            _startupScanBuffer.Append(c);
+            ImportScanStatusText.Text = "Scanning...";
+        }
     }
 
     private void ImportBinsGridView_ItemClick(object sender, ItemClickEventArgs e)
@@ -109,8 +125,9 @@ public sealed partial class MainWindow : Window
     private void ResolveImportFailureButton_Click(object sender, RoutedEventArgs e)
     {
         ClearImportFailure();
-        ImportScanBox.Text = string.Empty;
+        _startupScanBuffer.Clear();
         StartupStatusText.Text = "Failure resolved. Scan the corrected bin or ticket.";
+        ImportScanStatusText.Text = "Scan BIN barcode and ticket barcode in either order.";
         _ = SpeakAsync("Failure resolved.");
     }
 
@@ -123,11 +140,13 @@ public sealed partial class MainWindow : Window
         }
 
         var storeName = StoreNameBox.Text.Trim();
-        var storeAddress = StoreAddressBox.Text.Trim();
+        var storeStreet = StoreStreetBox.Text.Trim();
+        var storeCity = StoreCityBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(storeName) ||
-            string.IsNullOrWhiteSpace(storeAddress))
+            string.IsNullOrWhiteSpace(storeStreet) ||
+            string.IsNullOrWhiteSpace(storeCity))
         {
-            StartupStatusText.Text = "Enter store name and address so license feedback can identify this store.";
+            StartupStatusText.Text = "Enter store name, street, and city so license feedback can identify this store.";
             return;
         }
 
@@ -147,7 +166,8 @@ public sealed partial class MainWindow : Window
         _storeState = state.Code;
         _storeBarcodeLayout = state.DefaultLayout;
         _storeName = storeName;
-        _storeAddress = storeAddress;
+        _storeStreet = storeStreet;
+        _storeCity = storeCity;
         _configuredBinCount = Math.Min(500, binCount);
         _managerPassword = ManagerPasswordBox.Password;
         _clerkName = ClerkNameBox.Text.Trim();
@@ -200,6 +220,7 @@ public sealed partial class MainWindow : Window
         StartupPrimaryButton.Content = "Continue to Login";
         StartupPrimaryButton.IsEnabled = !_hasImportFailure;
         UpdateImportStatusText("Select a bin and scan its current ticket, or scan bin and ticket in either order.");
+        ImportPanel.Focus(FocusState.Programmatic);
     }
 
     private void ShowLoginStage()
@@ -249,6 +270,20 @@ public sealed partial class MainWindow : Window
             StateComboBox.Items.Add(state);
 
         StateComboBox.SelectedItem = StateOptions.FirstOrDefault(s => s.Code == "GA");
+        UpdateBarcodeFormatFromState();
+    }
+
+    private void UpdateBarcodeFormatFromState()
+    {
+        if (StateComboBox.SelectedItem is not StateOption state)
+        {
+            BarcodeFormatBox.Text = string.Empty;
+            return;
+        }
+
+        BarcodeFormatBox.Text = string.IsNullOrWhiteSpace(state.DefaultLayout)
+            ? "Unknown - scanner calibration required"
+            : state.DefaultLayout;
     }
 
     private void BuildImportBins()
@@ -263,6 +298,7 @@ public sealed partial class MainWindow : Window
         ClearImportFailure();
         ImportBinCountText.Text = $"{_configuredBinCount} bin{(_configuredBinCount == 1 ? string.Empty : "s")} ready";
         ImportPendingText.Text = "No pending scan.";
+        ImportScanStatusText.Text = "Scan BIN barcode and ticket barcode in either order.";
     }
 
     private void ProcessImportScanInput(string raw)
@@ -274,13 +310,24 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        raw = raw.Trim();
-        if (string.IsNullOrWhiteSpace(raw))
+        var segments = SplitImportScanInput(raw).ToArray();
+        if (segments.Length == 0)
         {
             UpdateImportStatusText("Scan a bin barcode or ticket barcode.");
+            ImportScanStatusText.Text = "No scan data received.";
             return;
         }
 
+        foreach (var segment in segments)
+        {
+            ProcessImportScanSegment(segment);
+            if (_hasImportFailure)
+                break;
+        }
+    }
+
+    private void ProcessImportScanSegment(string raw)
+    {
         if (TryParseBinNumber(raw, out var binNumber))
         {
             var bin = _importBins.FirstOrDefault(b => b.Number == binNumber);
@@ -291,7 +338,6 @@ public sealed partial class MainWindow : Window
             }
 
             AcceptImportBin(bin);
-            ImportScanBox.Text = string.Empty;
             return;
         }
 
@@ -303,7 +349,6 @@ public sealed partial class MainWindow : Window
         }
 
         AcceptImportTicket(ticket);
-        ImportScanBox.Text = string.Empty;
     }
 
     private void AcceptImportBin(ImportBin bin)
@@ -324,6 +369,7 @@ public sealed partial class MainWindow : Window
 
         UpdatePendingImportText();
         UpdateImportStatusText($"Bin {bin.Number} selected. Now scan ticket.");
+        ImportScanStatusText.Text = $"Bin {bin.Number} captured. Waiting for ticket.";
         _ = SpeakAsync($"Bin {bin.Number}. Now scan ticket.");
     }
 
@@ -345,6 +391,7 @@ public sealed partial class MainWindow : Window
 
         UpdatePendingImportText();
         UpdateImportStatusText($"Ticket scanned for game {ticket.GameId}, bundle {ticket.BundleId}. Now scan or select bin.");
+        ImportScanStatusText.Text = $"Ticket captured. Waiting for bin.";
         _ = SpeakAsync("Ticket scanned. Now scan bin.");
     }
 
@@ -359,6 +406,7 @@ public sealed partial class MainWindow : Window
         ClearImportFailure();
         UpdatePendingImportText();
         UpdateImportStatusText($"Success. Imported game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket} in bin {bin.Number}.");
+        ImportScanStatusText.Text = $"Imported bin {bin.Number}: game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}.";
         _ = SpeakAsync($"Success. Bin {bin.Number} imported.");
     }
 
@@ -369,6 +417,7 @@ public sealed partial class MainWindow : Window
         ImportFailureText.Text = message;
         ResolveImportFailureButton.Visibility = Visibility.Visible;
         StartupStatusText.Text = message;
+        ImportScanStatusText.Text = message;
         _ = SpeakAsync(spoken);
     }
 
@@ -400,6 +449,114 @@ public sealed partial class MainWindow : Window
             ImportInstructionText.Text = $"{_imports.Count} import{(_imports.Count == 1 ? string.Empty : "s")} recorded. Continue when all physical bins are imported.";
     }
 
+    private IEnumerable<string> SplitImportScanInput(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            yield break;
+
+        var pieces = raw.Split(
+            new[] { ' ', '\t', '\r', '\n' },
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (pieces.Length > 1)
+        {
+            foreach (var piece in pieces)
+            {
+                foreach (var nested in SplitImportScanInput(piece))
+                    yield return nested;
+            }
+
+            yield break;
+        }
+
+        var compact = CompactScanStream(raw);
+        if (compact.Length == 0)
+            yield break;
+
+        var segmented = SegmentCompactImportStream(compact);
+        if (segmented.Count == 0)
+        {
+            yield return raw.Trim();
+            yield break;
+        }
+
+        foreach (var segment in segmented)
+            yield return segment;
+    }
+
+    private IReadOnlyList<string> SegmentCompactImportStream(string stream)
+    {
+        var layouts = CandidateBarcodeLayouts().ToArray();
+        var memo = new Dictionary<int, List<string>?>();
+        var segments = SegmentCompactImportStreamFrom(stream, 0, layouts, memo);
+        return segments is null ? Array.Empty<string>() : segments;
+    }
+
+    private List<string>? SegmentCompactImportStreamFrom(
+        string stream,
+        int offset,
+        IReadOnlyList<BarcodeLayout> layouts,
+        Dictionary<int, List<string>?> memo)
+    {
+        if (offset == stream.Length)
+            return new List<string>();
+        if (memo.TryGetValue(offset, out var cached))
+            return cached;
+
+        foreach (var candidate in CandidateImportSegments(stream, offset, layouts))
+        {
+            var rest = SegmentCompactImportStreamFrom(
+                stream,
+                offset + candidate.Length,
+                layouts,
+                memo);
+            if (rest is null)
+                continue;
+
+            var result = new List<string>(rest.Count + 1) { candidate };
+            result.AddRange(rest);
+            memo[offset] = result;
+            return result;
+        }
+
+        memo[offset] = null;
+        return null;
+    }
+
+    private IEnumerable<string> CandidateImportSegments(
+        string stream,
+        int offset,
+        IReadOnlyList<BarcodeLayout> layouts)
+    {
+        const string binPrefix = "BIN-";
+        if (StartsWithAt(stream, offset, binPrefix))
+        {
+            var digitStart = offset + binPrefix.Length;
+            var maxDigits = Math.Min(4, stream.Length - digitStart);
+            for (var digits = maxDigits; digits >= 1; digits--)
+            {
+                if (AllDigits(stream, digitStart, digits))
+                    yield return stream.Substring(offset, binPrefix.Length + digits);
+            }
+        }
+
+        foreach (var layout in layouts)
+        {
+            foreach (var length in layout.CandidateLengths)
+            {
+                if (offset + length > stream.Length)
+                    continue;
+
+                var segment = stream.Substring(offset, length);
+                if (AllDigits(segment, 0, segment.Length) &&
+                    layout.TryParse(segment) is not null)
+                {
+                    yield return segment;
+                }
+            }
+        }
+    }
+
     private static bool TryParseBinNumber(string raw, out int binNumber)
     {
         binNumber = 0;
@@ -418,11 +575,7 @@ public sealed partial class MainWindow : Window
         if (digits.Length == 0)
             return null;
 
-        var layouts = string.IsNullOrWhiteSpace(_storeBarcodeLayout)
-            ? BarcodeLayouts
-            : BarcodeLayouts.Where(l => l.Name == _storeBarcodeLayout).ToArray();
-
-        foreach (var layout in layouts)
+        foreach (var layout in CandidateBarcodeLayouts())
         {
             var hit = layout.TryParse(digits);
             if (hit is null)
@@ -432,6 +585,82 @@ public sealed partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private IEnumerable<BarcodeLayout> CandidateBarcodeLayouts()
+    {
+        if (!string.IsNullOrWhiteSpace(_storeBarcodeLayout))
+        {
+            var selected = BarcodeLayouts.FirstOrDefault(l => l.Name == _storeBarcodeLayout);
+            if (selected is not null)
+            {
+                yield return selected;
+                yield break;
+            }
+        }
+
+        foreach (var layout in BarcodeLayouts)
+            yield return layout;
+    }
+
+    private static bool TryMapScanKey(VirtualKey key, out char c)
+    {
+        c = '\0';
+        if (key is >= VirtualKey.A and <= VirtualKey.Z)
+        {
+            c = (char)('A' + (int)key - (int)VirtualKey.A);
+            return true;
+        }
+
+        if (key is >= VirtualKey.Number0 and <= VirtualKey.Number9)
+        {
+            c = (char)('0' + (int)key - (int)VirtualKey.Number0);
+            return true;
+        }
+
+        if (key is >= VirtualKey.NumberPad0 and <= VirtualKey.NumberPad9)
+        {
+            c = (char)('0' + (int)key - (int)VirtualKey.NumberPad0);
+            return true;
+        }
+
+        if (key == VirtualKey.Subtract || (int)key == 189)
+        {
+            c = '-';
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string CompactScanStream(string raw)
+    {
+        Span<char> buffer = stackalloc char[raw.Length];
+        var count = 0;
+        foreach (var c in raw)
+        {
+            if (char.IsWhiteSpace(c))
+                continue;
+
+            buffer[count++] = char.ToUpperInvariant(c);
+        }
+
+        return new string(buffer[..count]);
+    }
+
+    private static bool StartsWithAt(string value, int offset, string prefix) =>
+        offset + prefix.Length <= value.Length &&
+        string.Compare(value, offset, prefix, 0, prefix.Length, StringComparison.OrdinalIgnoreCase) == 0;
+
+    private static bool AllDigits(string value, int offset, int length)
+    {
+        for (var i = offset; i < offset + length; i++)
+        {
+            if (value[i] is < '0' or > '9')
+                return false;
+        }
+
+        return true;
     }
 
     private async Task SpeakAsync(string text)
@@ -740,6 +969,15 @@ public sealed partial class MainWindow : Window
     {
         public int PackTicketLength => Game + Pack + Ticket;
         public int? FullBackLength => Validation.HasValue ? PackTicketLength + Validation : null;
+        public IEnumerable<int> CandidateLengths
+        {
+            get
+            {
+                if (FullBackLength.HasValue)
+                    yield return FullBackLength.Value;
+                yield return PackTicketLength;
+            }
+        }
 
         public (string Game, string Pack, string Ticket)? TryParse(string digits)
         {

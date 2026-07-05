@@ -340,6 +340,8 @@
 
         <Grid x:Name="StartupOverlay"
               Grid.RowSpan="3"
+              IsTabStop="True"
+              KeyDown="StartupOverlay_KeyDown"
               Background="{ThemeResource SlBackgroundBrush}">
             <Border Width="1060"
                     MaxHeight="720"
@@ -396,12 +398,28 @@
                                           Grid.Column="1"
                                           Header="Store state"
                                           HorizontalAlignment="Stretch"
-                                          PlaceholderText="Select state"/>
+                                          PlaceholderText="Select state"
+                                          SelectionChanged="StateComboBox_SelectionChanged"/>
                             </Grid>
 
-                            <TextBox x:Name="StoreAddressBox"
-                                     Header="Store address"
-                                     PlaceholderText="Street, city, ZIP"/>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="220"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="StoreStreetBox"
+                                         Header="Street"
+                                         PlaceholderText="Street address"/>
+                                <TextBox x:Name="StoreCityBox"
+                                         Grid.Column="1"
+                                         Header="City"
+                                         PlaceholderText="City"/>
+                            </Grid>
+
+                            <TextBox x:Name="BarcodeFormatBox"
+                                     Header="Barcode format"
+                                     IsReadOnly="True"
+                                     PlaceholderText="Selected from state"/>
 
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
@@ -444,6 +462,7 @@
                     <Grid x:Name="ImportPanel"
                           Grid.Row="1"
                           ColumnSpacing="18"
+                          IsTabStop="True"
                           Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -461,27 +480,31 @@
                                 <TextBlock Text="Initial Import"
                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                 <TextBlock x:Name="ImportInstructionText"
-                                           Text="Select a bin, scan a bin barcode, or scan a ticket. Once SimpleLotto has one bin and one ticket, the import is recorded."
+                                           Text="Select a bin or scan a bin barcode, then scan a ticket. Bin and ticket scans work in either order."
                                            Style="{StaticResource SlCaptionTextStyle}"
                                            TextWrapping="Wrap"/>
                             </StackPanel>
 
-                            <Grid Grid.Row="1"
-                                  ColumnSpacing="12">
+                            <Border Grid.Row="1"
+                                    Background="{ThemeResource SlSurfaceAltBrush}"
+                                    BorderBrush="{ThemeResource SlBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="12">
+                                <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBox x:Name="ImportScanBox"
-                                         Header="Scanner input"
-                                         PlaceholderText="Scan BIN-12 or a ticket barcode"
-                                         KeyDown="ImportScanBox_KeyDown"/>
-                                <Button Grid.Column="1"
-                                        Content="Process Scan"
-                                        MinWidth="120"
-                                        VerticalAlignment="Bottom"
-                                        Click="ProcessImportScanButton_Click"/>
-                            </Grid>
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Scanner ready"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBlock x:Name="ImportScanStatusText"
+                                                   Text="Scan BIN barcode and ticket barcode in either order."
+                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                   TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
 
                             <GridView x:Name="ImportBinsGridView"
                                       Grid.Row="2"
