@@ -72,7 +72,7 @@ public sealed partial class MainWindow : Window
         _rdisplay = rdisplay;
         InitializeComponent();
         Title = "SimpleLotto";
-        ResizeWindow(1240, 760);
+        ResizeWindow(1120, 720);
         PopulateStateComboBox();
         SalesListView.ItemsSource = _sales;
         ImportListView.ItemsSource = _imports;
@@ -139,6 +139,7 @@ public sealed partial class MainWindow : Window
         SmtpHostBox.Text = ReadSetting(state, "smtp_host");
         SmtpPortBox.Value = ReadIntSetting(state, "smtp_port", 587);
         SmtpUserBox.Text = ReadSetting(state, "smtp_user");
+        SmtpPasswordBox.Password = string.Empty;
         EmailToBox.Text = ReadSetting(state, "email_to");
 
         var selectedState = StateOptions.FirstOrDefault(s => s.Code == _storeState);
@@ -220,6 +221,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void SaveSecretSetting(string key, string value)
+    {
+        try
+        {
+            _store.SaveSetting(key, ProtectSecret(value));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save setting {key}: {ex.Message}";
+        }
+    }
+
     private static string ReadSetting(PersistedState state, string key) =>
         state.Settings.TryGetValue(key, out var value) ? value : string.Empty;
 
@@ -230,6 +243,19 @@ public sealed partial class MainWindow : Window
         int.TryParse(ReadSetting(state, key), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
             ? value
             : fallback;
+
+    private static string ProtectSecret(string plaintext)
+    {
+        if (string.IsNullOrEmpty(plaintext))
+            return plaintext;
+
+        var bytes = Encoding.UTF8.GetBytes(plaintext);
+        var protectedBytes = ProtectedData.Protect(
+            bytes,
+            optionalEntropy: null,
+            scope: DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(protectedBytes);
+    }
 
     private static string HashPassword(string password)
     {
@@ -1073,10 +1099,20 @@ public sealed partial class MainWindow : Window
 
     private void NavToggleButton_Click(object sender, RoutedEventArgs e)
     {
-        _isNavCollapsed = !_isNavCollapsed;
-        NavColumn.Width = new GridLength(_isNavCollapsed ? 64 : 220);
-        NavToggleButton.Content = _isNavCollapsed ? "->" : "<-";
+        SetNavCollapsed(!_isNavCollapsed);
+    }
 
+    private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width < 1080 && !_isNavCollapsed)
+            SetNavCollapsed(true);
+    }
+
+    private void SetNavCollapsed(bool collapsed)
+    {
+        _isNavCollapsed = collapsed;
+        NavColumn.Width = new GridLength(_isNavCollapsed ? 64 : 190);
+        NavToggleButton.Content = _isNavCollapsed ? "->" : "<-";
         var labelVisibility = _isNavCollapsed ? Visibility.Collapsed : Visibility.Visible;
         DashboardNavLabel.Visibility = labelVisibility;
         BinsNavLabel.Visibility = labelVisibility;
@@ -1269,17 +1305,27 @@ public sealed partial class MainWindow : Window
         var grouped = _imports
             .GroupBy(i => i.Bin)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        var salesByGame = _sales
+            .GroupBy(s => s.GameId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Sum(s => s.Quantity), StringComparer.OrdinalIgnoreCase);
+        var maxGameSales = salesByGame.Count == 0 ? 0 : salesByGame.Values.Max();
+        var highThreshold = maxGameSales == 0 ? int.MaxValue : Math.Max(1, (int)Math.Ceiling(maxGameSales * 0.66));
+        var mediumThreshold = maxGameSales == 0 ? int.MaxValue : Math.Max(1, (int)Math.Ceiling(maxGameSales * 0.33));
 
         for (var i = 1; i <= _configuredBinCount; i++)
         {
             var bin = i.ToString(CultureInfo.InvariantCulture);
             grouped.TryGetValue(bin, out var bundles);
             var current = bundles?.FirstOrDefault();
+            var gameSales = current is not null && salesByGame.TryGetValue(current.GameId, out var count)
+                ? count
+                : 0;
             _binCards.Add(BinCard.From(
                 i,
                 current,
                 bundles?.Count ?? 0,
-                current is null ? string.Empty : GameDisplayName(current.GameId)));
+                current is null ? string.Empty : GameDisplayName(current.GameId),
+                ActivityForGameSales(gameSales, mediumThreshold, highThreshold)));
         }
 
         var activeBins = _binCards.Count(b => b.BundleCount > 0);
@@ -1601,9 +1647,10 @@ public sealed partial class MainWindow : Window
         SaveSetting("smtp_port", CoerceInt(SmtpPortBox.Value, 587).ToString(CultureInfo.InvariantCulture));
         SaveSetting("smtp_user", SmtpUserBox.Text.Trim());
         if (!string.IsNullOrWhiteSpace(SmtpPasswordBox.Password))
-            SaveSetting("smtp_password", SmtpPasswordBox.Password);
+            SaveSecretSetting("smtp_password", SmtpPasswordBox.Password);
         SaveSetting("email_to", EmailToBox.Text.Trim());
-        EmailSettingsStatusText.Text = "Email settings saved.";
+        SmtpPasswordBox.Password = string.Empty;
+        EmailSettingsStatusText.Text = "Email settings saved. Application password is stored encrypted.";
     }
 
     private static string SanitizePathSegment(string value)
@@ -1648,13 +1695,30 @@ public sealed partial class MainWindow : Window
     private static SolidColorBrush ColorBrush(byte r, byte g, byte b) =>
         new(Color.FromArgb(255, r, g, b));
 
-    private static SolidColorBrush EmptyTileBrush => ColorBrush(34, 37, 43);
-    private static SolidColorBrush EmptyTileBorderBrush => ColorBrush(70, 76, 87);
-    private static SolidColorBrush BhagvaTileBrush => ColorBrush(255, 153, 51);
-    private static SolidColorBrush BhagvaStackedTileBrush => ColorBrush(124, 45, 18);
-    private static SolidColorBrush BhagvaBorderBrush => ColorBrush(255, 178, 92);
+    private static Brush ThemeBrush(string key, SolidColorBrush fallback) =>
+        Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush
+            ? brush
+            : fallback;
+
+    private static Brush EmptyTileBrush => ThemeBrush("SlBinEmptyBrush", ColorBrush(236, 236, 238));
+    private static Brush EmptyTileBorderBrush => ThemeBrush("SlBorderBrush", ColorBrush(190, 196, 205));
+    private static Brush LowTileBrush => ThemeBrush("SlBinLowBrush", ColorBrush(147, 197, 253));
+    private static Brush LowTileStackedBrush => ThemeBrush("SlBinLowStackedBrush", ColorBrush(96, 165, 250));
+    private static Brush MediumTileBrush => ThemeBrush("SlBinMediumBrush", ColorBrush(134, 239, 172));
+    private static Brush MediumTileStackedBrush => ThemeBrush("SlBinMediumStackedBrush", ColorBrush(74, 222, 128));
+    private static Brush HighTileBrush => ThemeBrush("SlBinHighBrush", ColorBrush(255, 153, 51));
+    private static Brush HighTileStackedBrush => ThemeBrush("SlBinHighStackedBrush", ColorBrush(251, 146, 60));
+    private static Brush BhagvaTileBrush => HighTileBrush;
+    private static Brush BhagvaBorderBrush => HighTileStackedBrush;
     private static SolidColorBrush DarkTileTextBrush => ColorBrush(21, 23, 26);
-    private static SolidColorBrush LightTileTextBrush => ColorBrush(255, 255, 255);
+    private static BinActivity ActivityForGameSales(int gameSales, int mediumThreshold, int highThreshold)
+    {
+        if (gameSales >= highThreshold)
+            return BinActivity.High;
+        if (gameSales >= mediumThreshold)
+            return BinActivity.Medium;
+        return BinActivity.Low;
+    }
 
     private string GameDisplayName(string gameId)
     {
@@ -1688,30 +1752,48 @@ public sealed partial class MainWindow : Window
     private sealed record BinCard(
         int Number,
         int BundleCount,
-        string GameName)
+        string GameName,
+        BinActivity Activity)
     {
         public string BinText => Number.ToString(CultureInfo.InvariantCulture);
         public string GameTextShort => BundleCount == 0 ? string.Empty : CompactGameName(GameName);
         public Visibility GameTextVisibility => BundleCount == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
-        public Brush BackgroundBrush => BundleCount switch
-        {
-            0 => EmptyTileBrush,
-            1 => BhagvaTileBrush,
-            _ => BhagvaStackedTileBrush
-        };
+        public Brush BackgroundBrush => BundleCount == 0
+            ? EmptyTileBrush
+            : Activity switch
+            {
+                BinActivity.High => BundleCount > 1 ? HighTileStackedBrush : HighTileBrush,
+                BinActivity.Medium => BundleCount > 1 ? MediumTileStackedBrush : MediumTileBrush,
+                _ => BundleCount > 1 ? LowTileStackedBrush : LowTileBrush
+            };
         public Brush BorderBrush => BundleCount == 0
             ? EmptyTileBorderBrush
-            : BhagvaBorderBrush;
-        public Brush ForegroundBrush => BundleCount == 1
-            ? DarkTileTextBrush
-            : LightTileTextBrush;
+            : Activity switch
+            {
+                BinActivity.High => HighTileStackedBrush,
+                BinActivity.Medium => MediumTileStackedBrush,
+                _ => LowTileStackedBrush
+            };
+        public Brush ForegroundBrush => DarkTileTextBrush;
 
-        public static BinCard From(int number, ImportLine? current, int bundleCount, string gameName) =>
+        public static BinCard From(
+            int number,
+            ImportLine? current,
+            int bundleCount,
+            string gameName,
+            BinActivity activity) =>
             current is null
-                ? new BinCard(number, 0, string.Empty)
-                : new BinCard(number, bundleCount, gameName);
+                ? new BinCard(number, 0, string.Empty, BinActivity.Low)
+                : new BinCard(number, bundleCount, gameName, activity);
+    }
+
+    private enum BinActivity
+    {
+        Low,
+        Medium,
+        High
     }
 
     private sealed record BundleDetailLine(
@@ -1764,16 +1846,18 @@ public sealed partial class MainWindow : Window
         bool Scanned,
         bool HasBundle)
     {
-        public string BinText => $"Bin {Number}";
+        public string BinText => Number.ToString(CultureInfo.InvariantCulture);
         public Brush BackgroundBrush => Scanned
-            ? BhagvaTileBrush
-            : EmptyTileBrush;
+            ? HighTileBrush
+            : HasBundle
+                ? LowTileBrush
+                : EmptyTileBrush;
         public Brush BorderBrush => Scanned
-            ? BhagvaBorderBrush
-            : EmptyTileBorderBrush;
-        public Brush ForegroundBrush => Scanned
-            ? DarkTileTextBrush
-            : LightTileTextBrush;
+            ? HighTileStackedBrush
+            : HasBundle
+                ? LowTileStackedBrush
+                : EmptyTileBorderBrush;
+        public Brush ForegroundBrush => DarkTileTextBrush;
 
         public static ClosingBinCard From(int number, ImportLine? current, bool scanned)
         {
@@ -1782,7 +1866,9 @@ public sealed partial class MainWindow : Window
                 : $"G{current.GameId} T{current.Ticket}";
             var status = scanned
                 ? "Scanned"
-                : "Unscanned";
+                : current is null
+                    ? "Empty"
+                    : "Need scan";
             return new ClosingBinCard(number, status, detail, scanned, current is not null);
         }
     }
@@ -1830,9 +1916,7 @@ public sealed partial class MainWindow : Window
         public Brush StatusBorderBrush => ImportedCount == 0
             ? EmptyTileBorderBrush
             : BhagvaBorderBrush;
-        public Brush StatusTextBrush => ImportedCount == 0
-            ? LightTileTextBrush
-            : DarkTileTextBrush;
+        public Brush StatusTextBrush => DarkTileTextBrush;
 
         public int ImportedCount
         {

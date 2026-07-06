@@ -23,6 +23,13 @@
                     <Color x:Key="SlDanger">#B42318</Color>
                     <Color x:Key="SlSuccess">#FF9933</Color>
                     <Color x:Key="SlWarning">#D97706</Color>
+                    <Color x:Key="SlBinEmpty">#ECECEE</Color>
+                    <Color x:Key="SlBinLow">#93C5FD</Color>
+                    <Color x:Key="SlBinLowStacked">#60A5FA</Color>
+                    <Color x:Key="SlBinMedium">#86EFAC</Color>
+                    <Color x:Key="SlBinMediumStacked">#4ADE80</Color>
+                    <Color x:Key="SlBinHigh">#FF9933</Color>
+                    <Color x:Key="SlBinHighStacked">#FB923C</Color>
 
                     <SolidColorBrush x:Key="SlBackgroundBrush" Color="{ThemeResource SlBackground}"/>
                     <SolidColorBrush x:Key="SlSurfaceBrush" Color="{ThemeResource SlSurface}"/>
@@ -35,6 +42,13 @@
                     <SolidColorBrush x:Key="SlDangerBrush" Color="{ThemeResource SlDanger}"/>
                     <SolidColorBrush x:Key="SlSuccessBrush" Color="{ThemeResource SlSuccess}"/>
                     <SolidColorBrush x:Key="SlWarningBrush" Color="{ThemeResource SlWarning}"/>
+                    <SolidColorBrush x:Key="SlBinEmptyBrush" Color="{ThemeResource SlBinEmpty}"/>
+                    <SolidColorBrush x:Key="SlBinLowBrush" Color="{ThemeResource SlBinLow}"/>
+                    <SolidColorBrush x:Key="SlBinLowStackedBrush" Color="{ThemeResource SlBinLowStacked}"/>
+                    <SolidColorBrush x:Key="SlBinMediumBrush" Color="{ThemeResource SlBinMedium}"/>
+                    <SolidColorBrush x:Key="SlBinMediumStackedBrush" Color="{ThemeResource SlBinMediumStacked}"/>
+                    <SolidColorBrush x:Key="SlBinHighBrush" Color="{ThemeResource SlBinHigh}"/>
+                    <SolidColorBrush x:Key="SlBinHighStackedBrush" Color="{ThemeResource SlBinHighStacked}"/>
                 </ResourceDictionary>
 
                 <ResourceDictionary x:Key="Light">
@@ -49,6 +63,13 @@
                     <Color x:Key="SlDanger">#B42318</Color>
                     <Color x:Key="SlSuccess">#FF9933</Color>
                     <Color x:Key="SlWarning">#B45309</Color>
+                    <Color x:Key="SlBinEmpty">#ECECEE</Color>
+                    <Color x:Key="SlBinLow">#93C5FD</Color>
+                    <Color x:Key="SlBinLowStacked">#60A5FA</Color>
+                    <Color x:Key="SlBinMedium">#86EFAC</Color>
+                    <Color x:Key="SlBinMediumStacked">#4ADE80</Color>
+                    <Color x:Key="SlBinHigh">#FF9933</Color>
+                    <Color x:Key="SlBinHighStacked">#FB923C</Color>
 
                     <SolidColorBrush x:Key="SlBackgroundBrush" Color="{ThemeResource SlBackground}"/>
                     <SolidColorBrush x:Key="SlSurfaceBrush" Color="{ThemeResource SlSurface}"/>
@@ -61,6 +82,13 @@
                     <SolidColorBrush x:Key="SlDangerBrush" Color="{ThemeResource SlDanger}"/>
                     <SolidColorBrush x:Key="SlSuccessBrush" Color="{ThemeResource SlSuccess}"/>
                     <SolidColorBrush x:Key="SlWarningBrush" Color="{ThemeResource SlWarning}"/>
+                    <SolidColorBrush x:Key="SlBinEmptyBrush" Color="{ThemeResource SlBinEmpty}"/>
+                    <SolidColorBrush x:Key="SlBinLowBrush" Color="{ThemeResource SlBinLow}"/>
+                    <SolidColorBrush x:Key="SlBinLowStackedBrush" Color="{ThemeResource SlBinLowStacked}"/>
+                    <SolidColorBrush x:Key="SlBinMediumBrush" Color="{ThemeResource SlBinMedium}"/>
+                    <SolidColorBrush x:Key="SlBinMediumStackedBrush" Color="{ThemeResource SlBinMediumStacked}"/>
+                    <SolidColorBrush x:Key="SlBinHighBrush" Color="{ThemeResource SlBinHigh}"/>
+                    <SolidColorBrush x:Key="SlBinHighStackedBrush" Color="{ThemeResource SlBinHighStacked}"/>
                 </ResourceDictionary>
 
                 <ResourceDictionary x:Key="HighContrast">
@@ -75,6 +103,13 @@
                     <SolidColorBrush x:Key="SlDangerBrush" Color="{ThemeResource SystemColorHotlightColor}"/>
                     <SolidColorBrush x:Key="SlSuccessBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
                     <SolidColorBrush x:Key="SlWarningBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="SlBinEmptyBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="SlBinLowBrush" Color="{ThemeResource SystemColorGrayTextColor}"/>
+                    <SolidColorBrush x:Key="SlBinLowStackedBrush" Color="{ThemeResource SystemColorGrayTextColor}"/>
+                    <SolidColorBrush x:Key="SlBinMediumBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="SlBinMediumStackedBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="SlBinHighBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="SlBinHighStackedBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

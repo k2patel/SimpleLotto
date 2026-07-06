@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Grid x:Name="RootGrid"
+          SizeChanged="RootGrid_SizeChanged"
           Background="{ThemeResource SlBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -16,7 +17,7 @@
                 Background="{ThemeResource SlSurfaceBrush}"
                 BorderBrush="{ThemeResource SlBorderBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="24,18">
+                Padding="16,14">
             <Grid ColumnSpacing="16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -52,7 +53,7 @@
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="NavColumn" Width="220"/>
+                    <ColumnDefinition x:Name="NavColumn" Width="190"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -121,12 +122,12 @@
 
             <Grid x:Name="DashboardContent"
                   Grid.Column="1"
-                  Padding="24"
-                  ColumnSpacing="20">
+                  Padding="16"
+                  ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="360"/>
+                    <ColumnDefinition Width="280"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="240"/>
                 </Grid.ColumnDefinitions>
 
                 <Border Grid.Column="0"
@@ -307,7 +308,7 @@
 
             <Grid x:Name="SectionContent"
                   Grid.Column="1"
-                  Padding="24"
+                  Padding="16"
                   Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <Grid>
@@ -321,9 +322,9 @@
                             <Grid ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="150"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Bins"
@@ -364,10 +365,10 @@
                             </Grid>
 
                             <Grid Grid.Row="1"
-                                  ColumnSpacing="18">
+                                  ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="340"/>
+                                    <ColumnDefinition Width="280"/>
                                 </Grid.ColumnDefinitions>
 
                                 <Border Style="{StaticResource SlPanelBorderStyle}">
@@ -381,14 +382,14 @@
                                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
                                         <StackPanel Grid.Row="1"
                                                     Orientation="Horizontal"
-                                                    Spacing="14">
+                                                    Spacing="12">
                                             <StackPanel Orientation="Horizontal"
                                                         Spacing="6">
                                                 <Border Width="14"
                                                         Height="14"
                                                         CornerRadius="3"
-                                                        Background="{ThemeResource SlSuccessBrush}"/>
-                                                <TextBlock Text="Active"
+                                                        Background="{ThemeResource SlBinLowBrush}"/>
+                                                <TextBlock Text="Low"
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal"
@@ -396,8 +397,26 @@
                                                 <Border Width="14"
                                                         Height="14"
                                                         CornerRadius="3"
-                                                        Background="{ThemeResource SlWarningBrush}"/>
-                                                <TextBlock Text="Multiple"
+                                                        Background="{ThemeResource SlBinMediumBrush}"/>
+                                                <TextBlock Text="Medium"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        Background="{ThemeResource SlBinHighBrush}"/>
+                                                <TextBlock Text="High"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        Background="{ThemeResource SlBinHighStackedBrush}"/>
+                                                <TextBlock Text="Multiple = darker shade"
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal"
@@ -407,8 +426,8 @@
                                                         CornerRadius="3"
                                                         BorderBrush="{ThemeResource SlBorderBrush}"
                                                         BorderThickness="1"
-                                                        Background="{ThemeResource SlSurfaceAltBrush}"/>
-                                                <TextBlock Text="No bundle"
+                                                        Background="{ThemeResource SlBinEmptyBrush}"/>
+                                                <TextBlock Text="Empty"
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                             </StackPanel>
                                         </StackPanel>
@@ -505,7 +524,7 @@
                             <Grid ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="180"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Inventory"
@@ -532,10 +551,10 @@
                                 <TabViewItem Header="Bundle records"
                                              IsClosable="False">
                                     <Grid Padding="0,16,0,0"
-                                          ColumnSpacing="18">
+                                          ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="340"/>
+                                            <ColumnDefinition Width="280"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
                                             <Grid RowSpacing="12">
@@ -614,10 +633,10 @@
                                 <TabViewItem Header="Games"
                                              IsClosable="False">
                                     <Grid Padding="0,16,0,0"
-                                          ColumnSpacing="18">
+                                          ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="340"/>
+                                            <ColumnDefinition Width="280"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
                                             <Grid RowSpacing="12">
@@ -738,9 +757,9 @@
                             <Grid ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="150"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Closing"
@@ -781,49 +800,95 @@
                             </Grid>
 
                             <Grid Grid.Row="1"
-                                  ColumnSpacing="18">
+                                  ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="340"/>
+                                    <ColumnDefinition Width="280"/>
                                 </Grid.ColumnDefinitions>
                                 <Border Style="{StaticResource SlPanelBorderStyle}">
                                     <Grid RowSpacing="12">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="*"/>
                                         </Grid.RowDefinitions>
                                         <TextBlock Text="Closing Bin Evidence"
                                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <StackPanel Grid.Row="1"
+                                                    Orientation="Horizontal"
+                                                    Spacing="12">
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        Background="{ThemeResource SlBinHighBrush}"/>
+                                                <TextBlock Text="Scanned"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        Background="{ThemeResource SlBinLowBrush}"/>
+                                                <TextBlock Text="Needs scan"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        BorderBrush="{ThemeResource SlBorderBrush}"
+                                                        BorderThickness="1"
+                                                        Background="{ThemeResource SlBinEmptyBrush}"/>
+                                                <TextBlock Text="Empty"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                        </StackPanel>
                                         <GridView x:Name="ClosingBinsGridView"
-                                                  Grid.Row="1"
+                                                  Grid.Row="2"
                                                   MinHeight="360"
                                                   SelectionMode="None">
+                                            <GridView.ItemContainerStyle>
+                                                <Style TargetType="GridViewItem">
+                                                    <Setter Property="MinWidth" Value="{StaticResource SlBinTileSize}"/>
+                                                    <Setter Property="MinHeight" Value="{StaticResource SlBinTileSize}"/>
+                                                    <Setter Property="Margin" Value="4"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                </Style>
+                                            </GridView.ItemContainerStyle>
                                             <GridView.ItemsPanel>
                                                 <ItemsPanelTemplate>
                                                     <ItemsWrapGrid Orientation="Horizontal"
-                                                                   MaximumRowsOrColumns="8"/>
+                                                                   MaximumRowsOrColumns="10"/>
                                                 </ItemsPanelTemplate>
                                             </GridView.ItemsPanel>
                                             <GridView.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Width="92"
-                                                            Height="70"
-                                                            Margin="4"
-                                                            Padding="8"
+                                                    <Border Width="{StaticResource SlBinTileSize}"
+                                                            Height="{StaticResource SlBinTileSize}"
+                                                            Padding="4,2"
                                                             CornerRadius="6"
                                                             BorderBrush="{Binding BorderBrush}"
-                                                            BorderThickness="2"
+                                                            BorderThickness="1"
                                                             Background="{Binding BackgroundBrush}">
-                                                        <StackPanel Spacing="2">
+                                                        <StackPanel Spacing="0"
+                                                                    VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding BinText}"
                                                                        Foreground="{Binding ForegroundBrush}"
-                                                                       FontWeight="SemiBold"/>
+                                                                       FontSize="14"
+                                                                       FontWeight="Bold"
+                                                                       HorizontalAlignment="Stretch"
+                                                                       TextAlignment="Center"/>
                                                             <TextBlock Text="{Binding Status}"
                                                                        Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="12"/>
-                                                            <TextBlock Text="{Binding Detail}"
-                                                                       Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="11"/>
+                                                                       FontSize="10"
+                                                                       HorizontalAlignment="Stretch"
+                                                                       TextAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       MaxLines="1"/>
                                                         </StackPanel>
                                                     </Border>
                                                 </DataTemplate>
@@ -863,8 +928,8 @@
                             </StackPanel>
 
                             <Grid Grid.Row="1"
-                                  ColumnSpacing="18"
-                                  RowSpacing="18">
+                                  ColumnSpacing="12"
+                                  RowSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="*"/>
@@ -994,7 +1059,8 @@
                                                      Header="SMTP user"/>
                                         </Grid>
                                         <PasswordBox x:Name="SmtpPasswordBox"
-                                                     Header="SMTP password"/>
+                                                     Header="Application password"
+                                                     PlaceholderText="Leave blank to keep saved password"/>
                                         <TextBox x:Name="EmailToBox"
                                                  Header="Closing email recipient"/>
                                         <Button Content="Save email settings"
@@ -1017,7 +1083,7 @@
                 Background="{ThemeResource SlSurfaceBrush}"
                 BorderBrush="{ThemeResource SlBorderBrush}"
                 BorderThickness="0,1,0,0"
-                Padding="24,10">
+                Padding="16,8">
             <TextBlock x:Name="StatusText"
                        Text="Ready"
                        Style="{StaticResource SlCaptionTextStyle}"/>
@@ -1027,9 +1093,10 @@
               Grid.RowSpan="3"
               IsTabStop="True"
               Background="{ThemeResource SlBackgroundBrush}">
-            <Border Width="1060"
+            <Border MaxWidth="960"
                     MaxHeight="720"
-                    Padding="28"
+                    Margin="16"
+                    Padding="20"
                     Style="{StaticResource SlPanelBorderStyle}"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center">
@@ -1073,7 +1140,7 @@
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="180"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="StoreNameBox"
                                          Header="Store name"
@@ -1089,7 +1156,7 @@
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="180"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="StoreStreetBox"
                                          Header="Street"
@@ -1107,7 +1174,7 @@
 
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="180"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <NumberBox x:Name="BinCountBox"
@@ -1145,12 +1212,12 @@
 
                     <Grid x:Name="ImportPanel"
                           Grid.Row="1"
-                          ColumnSpacing="18"
+                          ColumnSpacing="12"
                           IsTabStop="True"
                           Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="340"/>
+                            <ColumnDefinition Width="280"/>
                         </Grid.ColumnDefinitions>
 
                         <Grid RowSpacing="12">
@@ -1199,18 +1266,18 @@
                                 <GridView.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <ItemsWrapGrid Orientation="Horizontal"
-                                                       MaximumRowsOrColumns="8"/>
+                                                       MaximumRowsOrColumns="10"/>
                                     </ItemsPanelTemplate>
                                 </GridView.ItemsPanel>
                                 <GridView.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Width="70"
-                                                Height="54"
-                                                Margin="3"
-                                                Padding="6"
+                                        <Border Width="{StaticResource SlBinTileSize}"
+                                                Height="{StaticResource SlBinTileSize}"
+                                                Margin="2"
+                                                Padding="4,2"
                                                 CornerRadius="6"
                                                 BorderBrush="{Binding StatusBorderBrush}"
-                                                BorderThickness="2"
+                                                BorderThickness="1"
                                                 Background="{Binding StatusBackgroundBrush}">
                                             <StackPanel Spacing="1"
                                                         HorizontalAlignment="Center"
