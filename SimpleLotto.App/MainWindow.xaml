@@ -374,12 +374,46 @@
                                     <Grid RowSpacing="12">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="*"/>
                                         </Grid.RowDefinitions>
                                         <TextBlock Text="Working Bin Layout"
                                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <StackPanel Grid.Row="1"
+                                                    Orientation="Horizontal"
+                                                    Spacing="14">
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        Background="{ThemeResource SlSuccessBrush}"/>
+                                                <TextBlock Text="Active"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        Background="{ThemeResource SlWarningBrush}"/>
+                                                <TextBlock Text="Multiple"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Width="14"
+                                                        Height="14"
+                                                        CornerRadius="3"
+                                                        BorderBrush="{ThemeResource SlBorderBrush}"
+                                                        BorderThickness="1"
+                                                        Background="{ThemeResource SlSurfaceAltBrush}"/>
+                                                <TextBlock Text="No bundle"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                        </StackPanel>
                                         <GridView x:Name="BinsGridView"
-                                                  Grid.Row="1"
+                                                  Grid.Row="2"
                                                   MinHeight="360"
                                                   IsItemClickEnabled="True"
                                                   ItemClick="BinsGridView_ItemClick"
@@ -406,7 +440,8 @@
                                                             CornerRadius="6"
                                                             BorderBrush="{Binding BorderBrush}"
                                                             BorderThickness="1"
-                                                            Background="{Binding BackgroundBrush}">
+                                                            Background="{Binding BackgroundBrush}"
+                                                            Tapped="BinTile_Tapped">
                                                         <StackPanel Spacing="0"
                                                                     HorizontalAlignment="Stretch"
                                                                     VerticalAlignment="Center">
@@ -828,12 +863,17 @@
                             </StackPanel>
 
                             <Grid Grid.Row="1"
-                                  ColumnSpacing="18">
+                                  ColumnSpacing="18"
+                                  RowSpacing="18">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
                                 <Border Style="{StaticResource SlPanelBorderStyle}">
                                     <StackPanel Spacing="10">
                                         <TextBlock Text="Store"
@@ -897,6 +937,73 @@
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
                                         <TextBlock Text="Images are fetched cache-first during inventory receiving and bundle activation."
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="Database"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBlock x:Name="SettingsDatabasePathText"
+                                                   Text="SQLite database path not loaded."
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
+                                        <TextBlock Text="Database remains under LocalAppData so installer upgrades do not remove store data."
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="1"
+                                        Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="Backup"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBox x:Name="BackupFolderBox"
+                                                 Header="Backup folder"
+                                                 PlaceholderText="USB drive or synced folder path"/>
+                                        <Button Content="Backup now"
+                                                HorizontalAlignment="Stretch"
+                                                Click="BackupNowButton_Click"/>
+                                        <TextBlock x:Name="BackupStatusText"
+                                                   Text="No backup has run."
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="1"
+                                        Grid.Column="2"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="10">
+                                        <TextBlock Text="Email"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <TextBox x:Name="SmtpHostBox"
+                                                 Header="SMTP host"/>
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="120"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <NumberBox x:Name="SmtpPortBox"
+                                                       Header="Port"
+                                                       Value="587"
+                                                       Minimum="1"
+                                                       Maximum="65535"
+                                                       SpinButtonPlacementMode="Compact"/>
+                                            <TextBox x:Name="SmtpUserBox"
+                                                     Grid.Column="1"
+                                                     Header="SMTP user"/>
+                                        </Grid>
+                                        <PasswordBox x:Name="SmtpPasswordBox"
+                                                     Header="SMTP password"/>
+                                        <TextBox x:Name="EmailToBox"
+                                                 Header="Closing email recipient"/>
+                                        <Button Content="Save email settings"
+                                                HorizontalAlignment="Stretch"
+                                                Click="SaveEmailSettingsButton_Click"/>
+                                        <TextBlock x:Name="EmailSettingsStatusText"
+                                                   Text="Email settings not saved."
+                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                   TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
                             </Grid>

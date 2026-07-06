@@ -3,8 +3,11 @@ using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.UI;
@@ -30,6 +33,7 @@ namespace SimpleLotto.App;
 public sealed partial class MainWindow : Window
 {
     private readonly RdisplayService _rdisplay;
+    private readonly LocalStore _store = new();
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
     private readonly ObservableCollection<ImportBin> _importBins = new();
@@ -41,21 +45,24 @@ public sealed partial class MainWindow : Window
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private bool _isNavCollapsed;
     private StartupStage _startupStage = StartupStage.Setup;
-    private string _managerPassword = string.Empty;
     private string _clerkName = string.Empty;
-    private string _clerkPassword = string.Empty;
+    private string _managerPasswordHash = string.Empty;
+    private string _clerkPasswordHash = string.Empty;
     private string _storeState = string.Empty;
     private string? _storeBarcodeLayout;
     private string _storeName = string.Empty;
     private string _storeStreet = string.Empty;
     private string _storeCity = string.Empty;
     private int _configuredBinCount = 90;
+    private bool _setupComplete;
+    private bool _initialImportComplete;
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
     private bool _hasImportFailure;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
     private string _dashboardPendingBin = string.Empty;
+    private ImportTicket? _dashboardPendingTicket;
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -79,7 +86,183 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler(OnGlobalKeyDown),
             handledEventsToo: true);
+        LoadApplicationState();
         RefreshTotals();
+    }
+
+    private void LoadApplicationState()
+    {
+        PersistedState state;
+        try
+        {
+            state = _store.Load();
+        }
+        catch (Exception ex)
+        {
+            ShowSetupStage();
+            StartupStatusText.Text = $"SQLite database could not be opened: {ex.Message}";
+            return;
+        }
+
+        if (!ReadBoolSetting(state, "setup_complete") ||
+            string.IsNullOrWhiteSpace(ReadSetting(state, "manager_password_hash")))
+        {
+            ShowSetupStage();
+            return;
+        }
+
+        ApplyApplicationState(state);
+    }
+
+    private void ApplyApplicationState(PersistedState state)
+    {
+        _setupComplete = ReadBoolSetting(state, "setup_complete");
+        _initialImportComplete = ReadBoolSetting(state, "initial_import_complete");
+        _storeState = ReadSetting(state, "store_state");
+        _storeBarcodeLayout = ReadSetting(state, "store_barcode_layout");
+        _storeName = ReadSetting(state, "store_name");
+        _storeStreet = ReadSetting(state, "store_street");
+        _storeCity = ReadSetting(state, "store_city");
+        _configuredBinCount = Math.Clamp(ReadIntSetting(state, "configured_bin_count", 90), 1, 500);
+        _managerPasswordHash = ReadSetting(state, "manager_password_hash");
+        _clerkName = ReadSetting(state, "clerk_name");
+        _clerkPasswordHash = ReadSetting(state, "clerk_password_hash");
+
+        StoreNameBox.Text = _storeName;
+        StoreStreetBox.Text = _storeStreet;
+        StoreCityBox.Text = _storeCity;
+        BinCountBox.Value = _configuredBinCount;
+        ManagerPasswordBox.Password = string.Empty;
+        ClerkNameBox.Text = _clerkName;
+        ClerkPasswordBox.Password = string.Empty;
+        BackupFolderBox.Text = ReadSetting(state, "backup_folder_path");
+        SmtpHostBox.Text = ReadSetting(state, "smtp_host");
+        SmtpPortBox.Value = ReadIntSetting(state, "smtp_port", 587);
+        SmtpUserBox.Text = ReadSetting(state, "smtp_user");
+        EmailToBox.Text = ReadSetting(state, "email_to");
+
+        var selectedState = StateOptions.FirstOrDefault(s => s.Code == _storeState);
+        if (selectedState is not null)
+            StateComboBox.SelectedItem = selectedState;
+        else
+            UpdateBarcodeFormatFromState();
+
+        _imports.Clear();
+        foreach (var line in state.Imports)
+            _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin));
+
+        _sales.Clear();
+        foreach (var line in state.Sales)
+        {
+            _sales.Add(new SaleLine(
+                line.SoldAtUtc.ToLocalTime(),
+                line.GameId,
+                line.Bin,
+                line.Ticket,
+                line.Quantity,
+                line.AmountCents / 100m));
+        }
+
+        _manualGameCatalog.Clear();
+        foreach (var game in state.ManualGames)
+        {
+            if (string.IsNullOrWhiteSpace(game.GameId))
+                continue;
+
+            _manualGameCatalog.Add(new GameCatalogRecord(
+                game.GameId,
+                string.IsNullOrWhiteSpace(game.Name) ? $"Game {game.GameId}" : game.Name,
+                string.IsNullOrWhiteSpace(game.Source) ? "Manual" : game.Source,
+                string.IsNullOrWhiteSpace(game.ImageUri) ? "ms-appx:///Assets/SimpleLottoLogo64.png" : game.ImageUri,
+                string.IsNullOrWhiteSpace(game.ImageStatus) ? "Image not cached" : game.ImageStatus));
+        }
+
+        BuildImportBins(clearImports: false);
+
+        if (_initialImportComplete)
+            ShowLoginStage();
+        else
+            ShowImportStage();
+    }
+
+    private void SaveSetupState()
+    {
+        try
+        {
+            _store.SaveSetup(new StoreSetup(
+                _setupComplete,
+                _initialImportComplete,
+                _storeState,
+                _storeBarcodeLayout ?? string.Empty,
+                _storeName,
+                _storeStreet,
+                _storeCity,
+                _configuredBinCount,
+                _managerPasswordHash,
+                _clerkName,
+                _clerkPasswordHash));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save SQLite setup: {ex.Message}";
+        }
+    }
+
+    private void SaveSetting(string key, string value)
+    {
+        try
+        {
+            _store.SaveSetting(key, value);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save setting {key}: {ex.Message}";
+        }
+    }
+
+    private static string ReadSetting(PersistedState state, string key) =>
+        state.Settings.TryGetValue(key, out var value) ? value : string.Empty;
+
+    private static bool ReadBoolSetting(PersistedState state, string key) =>
+        ReadSetting(state, key) == "1";
+
+    private static int ReadIntSetting(PersistedState state, string key, int fallback) =>
+        int.TryParse(ReadSetting(state, key), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
+
+    private static string HashPassword(string password)
+    {
+        var salt = RandomNumberGenerator.GetBytes(16);
+        var hash = SHA256.HashData(Combine(salt, Encoding.UTF8.GetBytes(password)));
+        return $"{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
+    }
+
+    private static bool VerifyPassword(string password, string storedHash)
+    {
+        var parts = storedHash.Split(':', 2);
+        if (parts.Length != 2)
+            return false;
+
+        try
+        {
+            var salt = Convert.FromBase64String(parts[0]);
+            var expected = Convert.FromBase64String(parts[1]);
+            var actual = SHA256.HashData(Combine(salt, Encoding.UTF8.GetBytes(password)));
+            return CryptographicOperations.FixedTimeEquals(actual, expected);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static byte[] Combine(byte[] left, byte[] right)
+    {
+        var output = new byte[left.Length + right.Length];
+        Buffer.BlockCopy(left, 0, output, 0, left.Length);
+        Buffer.BlockCopy(right, 0, output, left.Length, right.Length);
+        return output;
     }
 
     private void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
@@ -207,10 +390,15 @@ public sealed partial class MainWindow : Window
         _storeStreet = storeStreet;
         _storeCity = storeCity;
         _configuredBinCount = Math.Min(500, binCount);
-        _managerPassword = ManagerPasswordBox.Password;
+        _managerPasswordHash = HashPassword(ManagerPasswordBox.Password);
         _clerkName = ClerkNameBox.Text.Trim();
-        _clerkPassword = ClerkPasswordBox.Password;
+        _clerkPasswordHash = string.IsNullOrWhiteSpace(ClerkPasswordBox.Password)
+            ? string.Empty
+            : HashPassword(ClerkPasswordBox.Password);
+        _setupComplete = true;
+        _initialImportComplete = false;
         BuildImportBins();
+        SaveSetupState();
         ShowImportStage();
     }
 
@@ -223,9 +411,8 @@ public sealed partial class MainWindow : Window
         }
 
         var user = userItem.Content?.ToString() ?? string.Empty;
-        var expectedPassword = user == "Manager" ? _managerPassword : _clerkPassword;
-        if (string.IsNullOrWhiteSpace(expectedPassword) ||
-            LoginPasswordBox.Password != expectedPassword)
+        var expectedHash = user == "Manager" ? _managerPasswordHash : _clerkPasswordHash;
+        if (!VerifyPassword(LoginPasswordBox.Password, expectedHash))
         {
             StartupStatusText.Text = "Password does not match the selected user.";
             return;
@@ -277,7 +464,7 @@ public sealed partial class MainWindow : Window
         LoginUserComboBox.Items.Clear();
         LoginUserComboBox.Items.Add(new ComboBoxItem { Content = "Manager" });
         if (!string.IsNullOrWhiteSpace(_clerkName) &&
-            !string.IsNullOrWhiteSpace(_clerkPassword))
+            !string.IsNullOrWhiteSpace(_clerkPasswordHash))
         {
             LoginUserComboBox.Items.Add(new ComboBoxItem { Content = _clerkName });
         }
@@ -302,6 +489,8 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        _initialImportComplete = true;
+        SaveSetupState();
         ShowLoginStage();
     }
 
@@ -328,13 +517,17 @@ public sealed partial class MainWindow : Window
             : state.DefaultLayout;
     }
 
-    private void BuildImportBins()
+    private void BuildImportBins(bool clearImports = true)
     {
         _importBins.Clear();
         for (var i = 1; i <= _configuredBinCount; i++)
             _importBins.Add(new ImportBin(i));
 
-        _imports.Clear();
+        if (clearImports)
+            _imports.Clear();
+        else
+            RestoreImportBinCounts();
+
         _pendingImportBin = null;
         _pendingImportTicket = null;
         ClearImportFailure();
@@ -342,6 +535,15 @@ public sealed partial class MainWindow : Window
         ImportPendingText.Text = "No pending scan.";
         ImportScanStatusText.Text = "Scan BIN barcode and ticket barcode in either order.";
         RefreshOperationalPages();
+    }
+
+    private void RestoreImportBinCounts()
+    {
+        foreach (var bin in _importBins)
+        {
+            bin.ImportedCount = _imports.Count(line =>
+                string.Equals(line.Bin, bin.Number.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     private void ProcessImportScanInput(string raw)
@@ -411,7 +613,22 @@ public sealed partial class MainWindow : Window
     {
         if (TryParseBinNumber(raw, out var binNumber))
         {
+            if (!IsConfiguredBin(binNumber))
+            {
+                DashboardScannerStatusText.Text = $"Wrong bin {binNumber}. Scan a valid bin.";
+                DashboardLastScanText.Text = $"Last scan failed: BIN-{binNumber}";
+                StatusText.Text = $"Wrong bin {binNumber}.";
+                _ = SpeakAsync("Wrong bin.");
+                return;
+            }
+
             _dashboardPendingBin = binNumber.ToString(CultureInfo.InvariantCulture);
+            if (_dashboardPendingTicket is not null)
+            {
+                PlaceDashboardBundle(_dashboardPendingBin, _dashboardPendingTicket);
+                return;
+            }
+
             DashboardScannerStatusText.Text = $"Bin {_dashboardPendingBin} captured. Scan ticket.";
             DashboardLastScanText.Text = $"Last scan: BIN-{_dashboardPendingBin}";
             StatusText.Text = $"Bin {_dashboardPendingBin} selected for scanner workflow.";
@@ -427,24 +644,76 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var bin = string.IsNullOrWhiteSpace(_dashboardPendingBin)
-            ? "Scanner"
-            : _dashboardPendingBin;
+        if (!string.IsNullOrWhiteSpace(_dashboardPendingBin))
+        {
+            PlaceDashboardBundle(_dashboardPendingBin, ticket);
+            return;
+        }
+
+        var activeBundle = FindActiveBundle(ticket);
+        if (activeBundle is null)
+        {
+            _dashboardPendingTicket = ticket;
+            DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} is not placed. Scan bin.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | waiting for bin";
+            StatusText.Text = "Bundle is not placed. Scan a bin to activate it.";
+            _ = SpeakAsync("Scan bin.");
+            return;
+        }
+
         var line = new SaleLine(
             DateTime.Now,
             ticket.GameId,
-            bin,
+            activeBundle.Bin,
             ticket.Ticket,
             1,
             0);
 
         _sales.Insert(0, line);
+        SaveSaleLine(line);
         SalesListView.SelectedItem = line;
         DashboardScannerStatusText.Text = $"Ticket captured for game {ticket.GameId}.";
-        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
+        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {activeBundle.Bin}";
         StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, ticket {ticket.Ticket}.";
-        _dashboardPendingBin = string.Empty;
         RefreshTotals();
+    }
+
+    private void PlaceDashboardBundle(string bin, ImportTicket ticket)
+    {
+        if (!int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
+            !IsConfiguredBin(binNumber))
+        {
+            DashboardScannerStatusText.Text = $"Wrong bin {bin}. Scan a valid bin.";
+            DashboardLastScanText.Text = $"Last scan failed: BIN-{bin}";
+            StatusText.Text = $"Wrong bin {bin}.";
+            _dashboardPendingBin = string.Empty;
+            _dashboardPendingTicket = null;
+            _ = SpeakAsync("Wrong bin.");
+            return;
+        }
+
+        var activeBundle = FindActiveBundle(ticket);
+        if (activeBundle is not null)
+        {
+            DashboardScannerStatusText.Text = $"Bundle already active in bin {activeBundle.Bin}.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | active in bin {activeBundle.Bin}";
+            StatusText.Text = $"Bundle active in bin {activeBundle.Bin}; move it manually.";
+            _dashboardPendingBin = string.Empty;
+            _dashboardPendingTicket = null;
+            _ = SpeakAsync($"Bundle active in bin {activeBundle.Bin}, move it manually.");
+            return;
+        }
+
+        var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin);
+        _imports.Insert(0, line);
+        SaveImportLine(line);
+        DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
+        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
+        StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}.";
+        _dashboardPendingBin = string.Empty;
+        _dashboardPendingTicket = null;
+        _ = SpeakAsync($"Bundle activated in bin {bin}.");
+        RefreshOperationalPages();
     }
 
     private void AcceptImportBin(ImportBin bin)
@@ -495,6 +764,7 @@ public sealed partial class MainWindow : Window
     {
         var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin.Number.ToString(CultureInfo.InvariantCulture));
         _imports.Insert(0, line);
+        SaveImportLine(line);
         bin.ImportedCount++;
 
         _pendingImportBin = null;
@@ -665,6 +935,9 @@ public sealed partial class MainWindow : Window
         return digits.Length is > 0 and <= 4 &&
                int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out binNumber);
     }
+
+    private bool IsConfiguredBin(int binNumber) =>
+        binNumber >= 1 && binNumber <= _configuredBinCount;
 
     private ImportTicket? TryParseImportTicket(string raw)
     {
@@ -855,6 +1128,7 @@ public sealed partial class MainWindow : Window
         }
 
         _sales.Remove(sale);
+        DeleteSaleLine(sale);
         StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
         RefreshTotals();
     }
@@ -882,9 +1156,84 @@ public sealed partial class MainWindow : Window
             return;
 
         _sales.Clear();
+        ClearStoredSales();
         StatusText.Text = "Shift closed.";
         RefreshTotals();
     }
+
+    private void SaveImportLine(ImportLine line)
+    {
+        try
+        {
+            _store.InsertImport(new StoredImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save placement to SQLite: {ex.Message}";
+        }
+    }
+
+    private void SaveSaleLine(SaleLine line)
+    {
+        try
+        {
+            _store.InsertSale(ToStoredSaleLine(line));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save sale to SQLite: {ex.Message}";
+        }
+    }
+
+    private void DeleteSaleLine(SaleLine line)
+    {
+        try
+        {
+            _store.DeleteSale(ToStoredSaleLine(line));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to delete sale from SQLite: {ex.Message}";
+        }
+    }
+
+    private void ClearStoredSales()
+    {
+        try
+        {
+            _store.ClearSales();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to clear SQLite sales: {ex.Message}";
+        }
+    }
+
+    private void SaveManualGame(GameCatalogRecord game)
+    {
+        try
+        {
+            _store.UpsertManualGame(new StoredGameRecord(
+                game.GameId,
+                game.Name,
+                game.Source,
+                game.ImageUri,
+                game.ImageStatus));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save game to SQLite: {ex.Message}";
+        }
+    }
+
+    private static StoredSaleLine ToStoredSaleLine(SaleLine line) =>
+        new(
+            line.SoldAt.ToUniversalTime(),
+            line.GameId,
+            line.Bin,
+            line.Ticket,
+            line.Quantity,
+            (long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero));
 
     private void RefreshTotals()
     {
@@ -1029,6 +1378,7 @@ public sealed partial class MainWindow : Window
             ? "Barcode format: not selected"
             : $"Barcode format: {_storeBarcodeLayout}";
         SettingsScannerText.Text = "Scanner: focused capture only";
+        SettingsDatabasePathText.Text = LocalStore.DbPath;
         var registered = _rdisplay.Displays.Count(d => d.IsRegistered);
         DisplayStatusText.Text = registered == 0
             ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
@@ -1040,6 +1390,21 @@ public sealed partial class MainWindow : Window
         if (e.ClickedItem is not BinCard card)
             return;
 
+        ShowBinDetail(card);
+    }
+
+    private void BinTile_Tapped(object sender, TappedRoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not BinCard card)
+            return;
+
+        e.Handled = true;
+        BinsGridView.SelectedItem = null;
+        ShowBinDetail(card);
+    }
+
+    private void ShowBinDetail(BinCard card)
+    {
         _selectedBinBundles.Clear();
         var lines = _imports
             .Where(i => string.Equals(i.Bin, card.Number.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
@@ -1047,7 +1412,7 @@ public sealed partial class MainWindow : Window
 
         if (lines.Count == 0)
         {
-            BinDetailText.Text = $"Bin {card.Number} is empty.";
+            BinDetailText.Text = $"Bin {card.Number} selected.";
             return;
         }
 
@@ -1058,6 +1423,11 @@ public sealed partial class MainWindow : Window
         for (var i = 0; i < lines.Count; i++)
             _selectedBinBundles.Add(BundleDetailLine.From(lines[i], i == 0));
     }
+
+    private ImportLine? FindActiveBundle(ImportTicket ticket) =>
+        _imports.FirstOrDefault(i =>
+            string.Equals(i.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(i.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
 
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1135,6 +1505,7 @@ public sealed partial class MainWindow : Window
 
         RefreshGameCatalog();
         SyncRdisplayTiles();
+        SaveManualGame(record);
         GameCatalogStatusText.Text = $"Game {gameId} added.";
     }
 
@@ -1169,6 +1540,79 @@ public sealed partial class MainWindow : Window
 
         DisplayStatusText.Text = $"Registered {result.Display.Name} at {result.Display.BaseUrl}.";
         SyncRdisplayTiles();
+    }
+
+    private void BackupNowButton_Click(object sender, RoutedEventArgs e)
+    {
+        var folder = BackupFolderBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            BackupStatusText.Text = "Enter a backup folder path.";
+            return;
+        }
+
+        if (!Directory.Exists(folder))
+        {
+            BackupStatusText.Text = $"Folder does not exist: {folder}";
+            return;
+        }
+
+        try
+        {
+            SaveSetting("backup_folder_path", folder);
+            using (var conn = _store.Open())
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA wal_checkpoint(PASSIVE)";
+                cmd.ExecuteNonQuery();
+            }
+
+            var storeName = SanitizePathSegment(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName);
+            var stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
+            var destDir = Path.Combine(folder, storeName, "backup", stamp);
+            Directory.CreateDirectory(destDir);
+            var zipPath = Path.Combine(destDir, "backup.zip");
+
+            using (var fs = File.Create(zipPath))
+            using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+            {
+                if (File.Exists(LocalStore.DbPath))
+                    zip.CreateEntryFromFile(LocalStore.DbPath, "simplelotto.db", CompressionLevel.Optimal);
+
+                var entry = zip.CreateEntry("backup-meta.txt", CompressionLevel.Optimal);
+                using var writer = new StreamWriter(entry.Open());
+                writer.Write($"created_at_utc={DateTime.UtcNow:O}{Environment.NewLine}");
+                writer.Write($"store_name={_storeName}{Environment.NewLine}");
+                writer.Write($"database={LocalStore.DbPath}{Environment.NewLine}");
+            }
+
+            var size = new FileInfo(zipPath).Length;
+            BackupStatusText.Text = $"Backup complete: {zipPath} ({size / 1024:N0} KB)";
+        }
+        catch (Exception ex)
+        {
+            BackupStatusText.Text = $"Backup failed: {ex.Message}";
+        }
+    }
+
+    private void SaveEmailSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        SaveSetting("smtp_host", SmtpHostBox.Text.Trim());
+        SaveSetting("smtp_port", CoerceInt(SmtpPortBox.Value, 587).ToString(CultureInfo.InvariantCulture));
+        SaveSetting("smtp_user", SmtpUserBox.Text.Trim());
+        if (!string.IsNullOrWhiteSpace(SmtpPasswordBox.Password))
+            SaveSetting("smtp_password", SmtpPasswordBox.Password);
+        SaveSetting("email_to", EmailToBox.Text.Trim());
+        EmailSettingsStatusText.Text = "Email settings saved.";
+    }
+
+    private static string SanitizePathSegment(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var builder = new StringBuilder(value.Length);
+        foreach (var c in value)
+            builder.Append(invalid.Contains(c) ? '_' : c);
+        return builder.ToString().Trim();
     }
 
     private string BuildGameMixText()
