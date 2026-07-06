@@ -365,10 +365,11 @@
                             </Grid>
 
                             <Grid Grid.Row="1"
-                                  ColumnSpacing="12">
+                                  ColumnSpacing="0">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="280"/>
+                                    <ColumnDefinition x:Name="BinLayoutColumn" Width="*"/>
+                                    <ColumnDefinition Width="8"/>
+                                    <ColumnDefinition x:Name="BinDetailColumn" Width="320"/>
                                 </Grid.ColumnDefinitions>
 
                                 <Border Style="{StaticResource SlPanelBorderStyle}">
@@ -486,30 +487,83 @@
                                     </Grid>
                                 </Border>
 
-                                <Border Grid.Column="1"
+                                <Thumb Grid.Column="1"
+                                       Width="8"
+                                       DragDelta="BinDetailSplitter_DragDelta">
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Grid Background="Transparent">
+                                                <Border Width="2"
+                                                        HorizontalAlignment="Center"
+                                                        Background="{ThemeResource SlBorderBrush}"/>
+                                            </Grid>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+
+                                <Border Grid.Column="2"
                                         Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="12">
-                                        <TextBlock Text="Bin Detail"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <Grid RowSpacing="10">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
                                         <TextBlock x:Name="BinDetailText"
-                                                   Text="Select a bin to view current and dormant bundle records."
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                   Text="Bin Details (0 bundles)"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
                                         <ListView x:Name="BinBundlesListView"
+                                                  Grid.Row="1"
                                                   MaxHeight="340"
                                                   SelectionMode="None">
+                                            <ListView.ItemContainerStyle>
+                                                <Style TargetType="ListViewItem">
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Margin" Value="0,0,0,8"/>
+                                                </Style>
+                                            </ListView.ItemContainerStyle>
                                             <ListView.ItemTemplate>
                                                 <DataTemplate>
-                                                    <StackPanel Padding="0,8"
-                                                                Spacing="2">
-                                                        <TextBlock Text="{Binding SummaryText}"
-                                                                   Foreground="{ThemeResource SlTextBrush}"/>
-                                                        <TextBlock Text="{Binding DetailText}"
-                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    </StackPanel>
+                                                    <Border Padding="10,8"
+                                                            CornerRadius="6"
+                                                            BorderThickness="1"
+                                                            BorderBrush="{Binding CardBorderBrush}"
+                                                            Background="{Binding CardBackgroundBrush}">
+                                                        <Grid RowSpacing="4"
+                                                              ColumnSpacing="8">
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="Auto"/>
+                                                            </Grid.RowDefinitions>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+
+                                                            <TextBlock Text="{Binding StatusText}"
+                                                                       Foreground="{Binding CardForegroundBrush}"
+                                                                       FontWeight="SemiBold"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Grid.Column="1"
+                                                                       Text="{Binding TicketText}"
+                                                                       Foreground="{Binding CardForegroundBrush}"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Grid.Row="1"
+                                                                       Text="{Binding GameBundleText}"
+                                                                       Foreground="{Binding CardForegroundBrush}"
+                                                                       TextWrapping="WrapWholeWords"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       MaxLines="2"/>
+                                                            <TextBlock Grid.Row="1"
+                                                                       Grid.Column="1"
+                                                                       Text="{Binding BinText}"
+                                                                       Foreground="{Binding CardForegroundBrush}"
+                                                                       FontSize="12"/>
+                                                        </Grid>
+                                                    </Border>
                                                 </DataTemplate>
                                             </ListView.ItemTemplate>
                                         </ListView>
-                                    </StackPanel>
+                                    </Grid>
                                 </Border>
                             </Grid>
                         </Grid>

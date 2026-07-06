@@ -1334,9 +1334,7 @@ public sealed partial class MainWindow : Window
         BinsBundleText.Text = _imports.Count.ToString(CultureInfo.CurrentCulture);
 
         if (_selectedBinBundles.Count == 0)
-            BinDetailText.Text = activeBins == 0
-                ? "No bundles imported yet."
-                : "Select a bin to view current and dormant bundle records.";
+            BinDetailText.Text = "Bin Details (0 bundles)";
     }
 
     private void RefreshInventoryRecords()
@@ -1456,18 +1454,22 @@ public sealed partial class MainWindow : Window
             .Where(i => string.Equals(i.Bin, card.Number.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (lines.Count == 0)
-        {
-            BinDetailText.Text = $"Bin {card.Number} selected.";
-            return;
-        }
-
-        BinDetailText.Text = lines.Count == 1
-            ? $"Bin {card.Number} has one bundle."
-            : $"Bin {card.Number} has {lines.Count} bundles. The latest scan is current; older bundles are dormant.";
+        var bundleLabel = lines.Count == 1 ? "bundle" : "bundles";
+        BinDetailText.Text = $"Bin {card.Number} Details ({lines.Count.ToString(CultureInfo.CurrentCulture)} {bundleLabel})";
 
         for (var i = 0; i < lines.Count; i++)
             _selectedBinBundles.Add(BundleDetailLine.From(lines[i], i == 0));
+    }
+
+    private void BinDetailSplitter_DragDelta(object sender, DragDeltaEventArgs e)
+    {
+        const double minWidth = 240;
+        const double maxWidth = 520;
+        var currentWidth = BinDetailColumn.ActualWidth > 0
+            ? BinDetailColumn.ActualWidth
+            : BinDetailColumn.Width.Value;
+        var nextWidth = Math.Clamp(currentWidth - e.HorizontalChange, minWidth, maxWidth);
+        BinDetailColumn.Width = new GridLength(nextWidth);
     }
 
     private ImportLine? FindActiveBundle(ImportTicket ticket) =>
@@ -1805,6 +1807,19 @@ public sealed partial class MainWindow : Window
     {
         public string SummaryText => $"{(IsCurrent ? "Current" : "Dormant")} | Game {GameId} | Bundle {BundleId}";
         public string DetailText => $"Bin {Bin} | Current ticket {Ticket}";
+        public string StatusText => IsCurrent ? "Current" : "Dormant";
+        public string GameBundleText => $"Game {GameId} | Bundle {BundleId}";
+        public string TicketText => $"Ticket {Ticket}";
+        public string BinText => $"Bin {Bin}";
+        public Brush CardBackgroundBrush => IsCurrent
+            ? MediumTileBrush
+            : ThemeBrush("SlSurfaceAltBrush", ColorBrush(247, 248, 250));
+        public Brush CardBorderBrush => IsCurrent
+            ? MediumTileStackedBrush
+            : ThemeBrush("SlBorderBrush", ColorBrush(198, 204, 214));
+        public Brush CardForegroundBrush => IsCurrent
+            ? DarkTileTextBrush
+            : ThemeBrush("SlTextBrush", ColorBrush(21, 23, 26));
 
         public static BundleDetailLine From(ImportLine line, bool isCurrent) =>
             new(line.GameId, line.BundleId, line.Ticket, line.Bin, isCurrent);
