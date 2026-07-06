@@ -90,13 +90,14 @@ public sealed class LocalStore
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO imports (game_id, bundle_id, ticket, bin, created_at_utc)
-            VALUES ($game_id, $bundle_id, $ticket, $bin, $created_at_utc)
+            INSERT INTO imports (game_id, bundle_id, ticket, bin, source, created_at_utc)
+            VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $created_at_utc)
             """;
         cmd.Parameters.AddWithValue("$game_id", line.GameId);
         cmd.Parameters.AddWithValue("$bundle_id", line.BundleId);
         cmd.Parameters.AddWithValue("$ticket", line.Ticket);
         cmd.Parameters.AddWithValue("$bin", line.Bin);
+        cmd.Parameters.AddWithValue("$source", line.Source);
         cmd.Parameters.AddWithValue("$created_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         cmd.ExecuteNonQuery();
     }
@@ -194,9 +195,11 @@ public sealed class LocalStore
                     bundle_id TEXT NOT NULL,
                     ticket TEXT NOT NULL,
                     bin TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'initial_import',
                     created_at_utc TEXT NOT NULL
                 )
                 """);
+            EnsureColumn(conn, "imports", "source", "TEXT NOT NULL DEFAULT 'initial_import'");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bundle ON imports(game_id, bundle_id)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bin ON imports(bin)");
             Exec(conn, """
@@ -233,10 +236,10 @@ public sealed class LocalStore
     {
         var rows = new List<StoredImportLine>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT game_id, bundle_id, ticket, bin FROM imports ORDER BY id DESC";
+        cmd.CommandText = "SELECT game_id, bundle_id, ticket, bin, source FROM imports ORDER BY id DESC";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            rows.Add(new StoredImportLine(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+            rows.Add(new StoredImportLine(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
         return rows;
     }
 
@@ -336,7 +339,7 @@ public sealed record StoreSetup(
     string ClerkName,
     string ClerkPasswordHash);
 
-public sealed record StoredImportLine(string GameId, string BundleId, string Ticket, string Bin);
+public sealed record StoredImportLine(string GameId, string BundleId, string Ticket, string Bin, string Source);
 
 public sealed record StoredSaleLine(
     DateTime SoldAtUtc,

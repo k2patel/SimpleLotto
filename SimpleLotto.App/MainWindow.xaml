@@ -147,7 +147,7 @@
                             Padding="12">
                         <StackPanel Spacing="8">
                             <TextBlock x:Name="DashboardScannerModeText"
-                                       Text="Focused capture"
+                                       Text="Global scanner"
                                        Style="{StaticResource SlSectionTitleTextStyle}"/>
                             <TextBlock x:Name="DashboardScannerStatusText"
                                        Text="Ready for scanner input."
@@ -595,7 +595,7 @@
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Inventory"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                    <TextBlock Text="Receiving is separate from sale tracking. Open bundles must be placed into a bin or ignored."
+                                    <TextBlock Text="Receiving is unopened stock intake. Initial import and activation are active bin placement records."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
                                 <Border Grid.Column="1"
@@ -604,7 +604,7 @@
                                         <TextBlock x:Name="InventoryBundleCountText"
                                                    Text="0"
                                                    Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Tracked bundles"
+                                        <TextBlock Text="Active bin bundles"
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
                                     </StackPanel>
                                 </Border>
@@ -614,7 +614,8 @@
                                      Grid.Row="1"
                                      IsAddTabButtonVisible="False"
                                      CanDragTabs="False">
-                                <TabViewItem Header="Bundle records"
+                                <TabViewItem x:Name="ReceivingTab"
+                                             Header="Receiving"
                                              IsClosable="False">
                                     <Grid Padding="0,16,0,0"
                                           ColumnSpacing="12">
@@ -629,7 +630,78 @@
                                                     <RowDefinition Height="Auto"/>
                                                     <RowDefinition Height="*"/>
                                                 </Grid.RowDefinitions>
-                                                <TextBlock Text="Bundle Records"
+                                                <StackPanel Spacing="2">
+                                                    <TextBlock Text="Inventory Receiving"
+                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                    <TextBlock Text="Scan unopened new bundles here before they are assigned to bins."
+                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                </StackPanel>
+                                                <Grid Grid.Row="1"
+                                                      Padding="12,8"
+                                                      Background="{ThemeResource SlSurfaceAltBrush}"
+                                                      ColumnSpacing="12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="130"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="Received" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="1" Text="Game / Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Status" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                </Grid>
+                                                <Grid Grid.Row="2"
+                                                      MinHeight="340">
+                                                    <StackPanel Spacing="8"
+                                                                VerticalAlignment="Center"
+                                                                HorizontalAlignment="Center"
+                                                                MaxWidth="420">
+                                                        <TextBlock Text="No received bundles in the current prototype."
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextAlignment="Center"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Text="This tab is reserved for unopened stock intake. It will not assign bins or create active placements."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextAlignment="Center"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Grid>
+                                        </Border>
+                                        <Border Grid.Column="1"
+                                                Style="{StaticResource SlPanelBorderStyle}">
+                                            <StackPanel Spacing="12">
+                                                <TextBlock Text="Receiving Rules"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock Text="Unopened receiving expects ticket 000."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock Text="A non-000 scan is an open bundle and must be placed into a bin or ignored."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock Text="Receiving stays separate from active bins, initial import, and sales."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+                                </TabViewItem>
+
+                                <TabViewItem x:Name="BundleRecordsTab"
+                                             Header="Open / Active"
+                                             IsClosable="False">
+                                    <Grid Padding="0,16,0,0"
+                                          ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="280"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Style="{StaticResource SlPanelBorderStyle}">
+                                            <Grid RowSpacing="12">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <TextBlock Text="Open / Active Bundles"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                                 <Grid Grid.Row="1"
                                                       Padding="12,8"
@@ -641,7 +713,7 @@
                                                         <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="130"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <TextBlock Text="Source" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Text="Placement" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game / Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="3" Text="Status" Style="{StaticResource SlCaptionTextStyle}"/>
@@ -685,9 +757,11 @@
                                         <Border Grid.Column="1"
                                                 Style="{StaticResource SlPanelBorderStyle}">
                                             <StackPanel Spacing="12">
-                                                <TextBlock Text="Receiving Rules"
+                                                <TextBlock Text="Open Bundle Rules"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <TextBlock Text="Unopened receiving expects ticket 000. A non-000 scan is an open bundle and must be placed into a bin or ignored."
+                                                <TextBlock Text="This tab shows bundles already open, active in bins, dormant, or placed through initial import and activation."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock Text="Unopened receiving lives in the first tab and does not assign bins."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                 <TextBlock Text="Game images are cache-first: check local image cache before fetching, and allow manual replacement from the Games tab."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
@@ -696,7 +770,8 @@
                                     </Grid>
                                 </TabViewItem>
 
-                                <TabViewItem Header="Games"
+                                <TabViewItem x:Name="GameSettingsTab"
+                                             Header="Game Prices"
                                              IsClosable="False">
                                     <Grid Padding="0,16,0,0"
                                           ColumnSpacing="12">
@@ -711,11 +786,16 @@
                                                     <RowDefinition Height="Auto"/>
                                                     <RowDefinition Height="*"/>
                                                 </Grid.RowDefinitions>
-                                                <Grid ColumnSpacing="12">
+                                                <Grid ColumnSpacing="12"
+                                                      RowSpacing="8">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                    </Grid.RowDefinitions>
                                                     <StackPanel Spacing="2">
                                                         <TextBlock Text="Game Catalog"
                                                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
@@ -727,6 +807,42 @@
                                                             Content="Add Game"
                                                             MinWidth="104"
                                                             Click="AddGameButton_Click"/>
+                                                    <Grid Grid.Row="1"
+                                                          Grid.ColumnSpan="2"
+                                                          ColumnSpacing="8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="220"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="GameSearchBox"
+                                                                 Header="Search Game ID"
+                                                                 PlaceholderText="Enter game ID"
+                                                                 TextChanged="GameSearchBox_TextChanged"/>
+                                                        <TextBlock x:Name="GamePageStatusText"
+                                                                   Grid.Column="1"
+                                                                   Text="Page 1 of 1"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   VerticalAlignment="Bottom"/>
+                                                        <Button x:Name="GamePreviousPageButton"
+                                                                Grid.Column="2"
+                                                                Content="Previous"
+                                                                MinWidth="88"
+                                                                VerticalAlignment="Bottom"
+                                                                Click="GamePreviousPageButton_Click"/>
+                                                        <Button x:Name="GameNextPageButton"
+                                                                Grid.Column="3"
+                                                                Content="Next"
+                                                                MinWidth="72"
+                                                                VerticalAlignment="Bottom"
+                                                                Click="GameNextPageButton_Click"/>
+                                                        <TextBlock Grid.Column="4"
+                                                                   Text="20 per page"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   VerticalAlignment="Bottom"/>
+                                                    </Grid>
                                                 </Grid>
                                                 <Grid Grid.Row="1"
                                                       Padding="12,8"
@@ -810,7 +926,7 @@
                                                          PlaceholderText="Display name"/>
                                                 <NumberBox x:Name="GamePriceEditBox"
                                                            Header="Game price ($)"
-                                                           Minimum="0"
+                                                           Minimum="1"
                                                            SmallChange="1"
                                                            LargeChange="5"
                                                            SpinButtonPlacementMode="Compact"/>
@@ -820,6 +936,9 @@
                                                 <Button Content="Upload Image"
                                                         HorizontalAlignment="Stretch"
                                                         Click="UploadGameImageButton_Click"/>
+                                                <Button Content="View Cached Image"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="ViewCachedGameImageButton_Click"/>
                                                 <Button Content="Fetch Official Image"
                                                         HorizontalAlignment="Stretch"
                                                         Click="FetchSelectedGameImageButton_Click"/>
@@ -1013,156 +1132,147 @@
                             <StackPanel Spacing="2">
                                 <TextBlock Text="Settings"
                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                <TextBlock Text="Store, scanner, display, and game setup controls for the current installation."
+                                <TextBlock x:Name="SettingsSubtitleText"
+                                           Text="Store, scanner, display, and game setup controls for the current installation."
                                            Style="{StaticResource SlCaptionTextStyle}"/>
                             </StackPanel>
 
-                            <Grid Grid.Row="1"
-                                  ColumnSpacing="12"
-                                  RowSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Border Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="10">
-                                        <TextBlock Text="Store"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <TextBlock x:Name="SettingsStoreText"
-                                                   Text="Store setup not completed."
-                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                   TextWrapping="Wrap"/>
-                                        <TextBlock x:Name="SettingsStateText"
-                                                   Text="State: not selected"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                        <TextBlock x:Name="SettingsBarcodeText"
-                                                   Text="Barcode format: not selected"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="10">
-                                        <TextBlock Text="Scanner and Display"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <TextBlock x:Name="SettingsScannerText"
-                                                   Text="Scanner: focused capture only"
-                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                   TextWrapping="Wrap"/>
-                                        <TextBlock Text="Pairing and RawInput background capture will use the WindowsPOS scanner model."
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                        <TextBlock Text="Rdisplay API runs on port 5000 and uses the existing WindowsPOS wire contract."
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                        <Grid ColumnSpacing="8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="92"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox x:Name="DisplayHostBox"
-                                                     Header="Display host"
-                                                     PlaceholderText="Pi IP or hostname"/>
-                                            <NumberBox x:Name="DisplayPortBox"
-                                                       Grid.Column="1"
-                                                       Header="Port"
-                                                       Value="5001"
-                                                       Minimum="1"
-                                                       Maximum="65535"
-                                                       SpinButtonPlacementMode="Compact"/>
-                                        </Grid>
-                                        <Button Content="Register Rdisplay"
-                                                HorizontalAlignment="Stretch"
-                                                Click="RegisterDisplayButton_Click"/>
-                                        <TextBlock x:Name="DisplayStatusText"
-                                                   Text="No display registered."
-                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                   TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="10">
-                                        <TextBlock Text="Game Setup"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <TextBlock Text="Game Prices, Bundle Prices, Ticket Numbering, and image upload will be managed here."
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                        <TextBlock Text="Images are fetched cache-first during inventory receiving and bundle activation."
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Row="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="10">
-                                        <TextBlock Text="Database"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <TextBlock x:Name="SettingsDatabasePathText"
-                                                   Text="SQLite database path not loaded."
-                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                   TextWrapping="Wrap"/>
-                                        <TextBlock Text="Database remains under LocalAppData so installer upgrades do not remove store data."
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Row="1"
-                                        Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="10">
-                                        <TextBlock Text="Backup"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <TextBox x:Name="BackupFolderBox"
-                                                 Header="Backup folder"
-                                                 PlaceholderText="USB drive or synced folder path"/>
-                                        <Button Content="Backup now"
-                                                HorizontalAlignment="Stretch"
-                                                Click="BackupNowButton_Click"/>
-                                        <TextBlock x:Name="BackupStatusText"
-                                                   Text="No backup has run."
-                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                   TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Row="1"
-                                        Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="10">
-                                        <TextBlock Text="Email"
-                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <TextBox x:Name="SmtpHostBox"
-                                                 Header="SMTP host"/>
-                                        <Grid ColumnSpacing="8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="120"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <NumberBox x:Name="SmtpPortBox"
-                                                       Header="Port"
-                                                       Value="587"
-                                                       Minimum="1"
-                                                       Maximum="65535"
-                                                       SpinButtonPlacementMode="Compact"/>
-                                            <TextBox x:Name="SmtpUserBox"
-                                                     Grid.Column="1"
-                                                     Header="SMTP user"/>
-                                        </Grid>
-                                        <PasswordBox x:Name="SmtpPasswordBox"
-                                                     Header="Application password"
-                                                     PlaceholderText="Leave blank to keep saved password"/>
-                                        <TextBox x:Name="EmailToBox"
-                                                 Header="Closing email recipient"/>
-                                        <Button Content="Save email settings"
-                                                HorizontalAlignment="Stretch"
-                                                Click="SaveEmailSettingsButton_Click"/>
-                                        <TextBlock x:Name="EmailSettingsStatusText"
-                                                   Text="Email settings not saved."
-                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                   TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </Border>
-                            </Grid>
+                            <TabView x:Name="SettingsTabs"
+                                     Grid.Row="1"
+                                     IsAddTabButtonVisible="False"
+                                     CanDragTabs="False">
+                                <TabViewItem x:Name="StoreSettingsTab"
+                                             Header="Store"
+                                             IsClosable="False">
+                                    <Border Style="{StaticResource SlPanelBorderStyle}">
+                                        <StackPanel Spacing="10"
+                                                    MaxWidth="560"
+                                                    HorizontalAlignment="Left">
+                                            <TextBlock Text="Store"
+                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                            <TextBlock x:Name="SettingsStoreText"
+                                                       Text="Store setup not completed."
+                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="SettingsStateText"
+                                                       Text="State: not selected"
+                                                       Style="{StaticResource SlCaptionTextStyle}"/>
+                                            <TextBlock x:Name="SettingsBarcodeText"
+                                                       Text="Barcode format: not selected"
+                                                       Style="{StaticResource SlCaptionTextStyle}"/>
+                                        </StackPanel>
+                                    </Border>
+                                </TabViewItem>
+
+                                <TabViewItem x:Name="ScannerDisplaySettingsTab"
+                                             Header="Scanner and Display"
+                                             IsClosable="False">
+                                    <Border Style="{StaticResource SlPanelBorderStyle}">
+                                        <StackPanel Spacing="10"
+                                                    MaxWidth="620"
+                                                    HorizontalAlignment="Left">
+                                            <TextBlock Text="Scanner and Display"
+                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                            <TextBlock x:Name="SettingsScannerText"
+                                                       Text="Scanner: WindowsPOS global capture model"
+                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock Text="Pairing and RawInput background capture will use the WindowsPOS scanner model."
+                                                       Style="{StaticResource SlCaptionTextStyle}"/>
+                                            <TextBlock Text="Rdisplay API runs on port 5000 and uses the existing WindowsPOS wire contract."
+                                                       Style="{StaticResource SlCaptionTextStyle}"/>
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="92"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox x:Name="DisplayHostBox"
+                                                         Header="Display host"
+                                                         PlaceholderText="Pi IP or hostname"/>
+                                                <NumberBox x:Name="DisplayPortBox"
+                                                           Grid.Column="1"
+                                                           Header="Port"
+                                                           Value="5001"
+                                                           Minimum="1"
+                                                           Maximum="65535"
+                                                           SpinButtonPlacementMode="Compact"/>
+                                            </Grid>
+                                            <Button Content="Register Rdisplay"
+                                                    HorizontalAlignment="Stretch"
+                                                    Click="RegisterDisplayButton_Click"/>
+                                            <TextBlock x:Name="DisplayStatusText"
+                                                       Text="No display registered."
+                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </TabViewItem>
+
+                                <TabViewItem x:Name="BackupSettingsTab"
+                                             Header="Backup"
+                                             IsClosable="False">
+                                    <Border Style="{StaticResource SlPanelBorderStyle}">
+                                        <StackPanel Spacing="10"
+                                                    MaxWidth="620"
+                                                    HorizontalAlignment="Left">
+                                            <TextBlock Text="Backup"
+                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                            <TextBox x:Name="BackupFolderBox"
+                                                     Header="Backup folder"
+                                                     PlaceholderText="USB drive or synced folder path"/>
+                                            <Button Content="Backup now"
+                                                    HorizontalAlignment="Stretch"
+                                                    Click="BackupNowButton_Click"/>
+                                            <TextBlock x:Name="BackupStatusText"
+                                                       Text="No backup has run."
+                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </TabViewItem>
+
+                                <TabViewItem x:Name="EmailSettingsTab"
+                                             Header="Email"
+                                             IsClosable="False">
+                                    <Border Style="{StaticResource SlPanelBorderStyle}">
+                                        <StackPanel Spacing="10"
+                                                    MaxWidth="620"
+                                                    HorizontalAlignment="Left">
+                                            <TextBlock Text="Email"
+                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                            <TextBox x:Name="SmtpHostBox"
+                                                     Header="SMTP host"/>
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="120"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <NumberBox x:Name="SmtpPortBox"
+                                                           Header="Port"
+                                                           Value="587"
+                                                           Minimum="1"
+                                                           Maximum="65535"
+                                                           SpinButtonPlacementMode="Compact"/>
+                                                <TextBox x:Name="SmtpUserBox"
+                                                         Grid.Column="1"
+                                                         Header="SMTP user"/>
+                                            </Grid>
+                                            <PasswordBox x:Name="SmtpPasswordBox"
+                                                         Header="Application password"
+                                                         PlaceholderText="Leave blank to keep saved password"/>
+                                            <TextBox x:Name="EmailToBox"
+                                                     Header="Closing email recipient"/>
+                                            <Button Content="Save email settings"
+                                                    HorizontalAlignment="Stretch"
+                                                    Click="SaveEmailSettingsButton_Click"/>
+                                            <TextBlock x:Name="EmailSettingsStatusText"
+                                                       Text="Email settings not saved."
+                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </TabViewItem>
+                            </TabView>
                         </Grid>
                     </Grid>
                 </ScrollViewer>

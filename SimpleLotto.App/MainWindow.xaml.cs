@@ -44,6 +44,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<BundleDetailLine> _selectedBinBundles = new();
     private readonly ObservableCollection<InventoryRecord> _inventoryRecords = new();
     private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
+    private readonly ObservableCollection<GameCatalogRecord> _pagedGameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private readonly SpeechSynthesizer _speechSynthesizer = new();
@@ -54,11 +55,20 @@ public sealed partial class MainWindow : Window
     };
     private readonly SemaphoreSlim _speechGate = new(1, 1);
     private static readonly HttpClient ImageHttpClient = CreateImageHttpClient();
+    private const string DefaultGameImageUri = "ms-appx:///Assets/SimpleLottoLogo64.png";
+    private readonly IntPtr _hwnd;
+    private readonly SubclassProc _subclassProc;
+    private IntPtr _trayIconHandle;
+    private bool _trayIconLoadedFromFile;
+    private bool _trayIconVisible;
+    private bool _allowExit;
     private bool _isNavCollapsed;
     private StartupStage _startupStage = StartupStage.Setup;
     private string _clerkName = string.Empty;
     private string _managerPasswordHash = string.Empty;
     private string _clerkPasswordHash = string.Empty;
+    private UserRole _activeUserRole = UserRole.None;
+    private string _activeUserName = string.Empty;
     private string _storeState = string.Empty;
     private string? _storeBarcodeLayout;
     private string _storeName = string.Empty;
@@ -68,21 +78,89 @@ public sealed partial class MainWindow : Window
     private DateTime _lastCloseUtc = DateTime.MinValue;
     private bool _setupComplete;
     private bool _initialImportComplete;
+    private bool _isScannerPaired;
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
     private bool _hasImportFailure;
+    private const int GameCatalogPageSize = 20;
+    private int _gameCatalogPage = 1;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
     private string _dashboardPendingBin = string.Empty;
     private ImportTicket? _dashboardPendingTicket;
+    private bool _isWorkflowDialogOpen;
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool Shell_NotifyIcon(uint dwMessage, ref NotifyIconData lpData);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadImage(
+        IntPtr hInst,
+        string lpszName,
+        uint uType,
+        int cxDesired,
+        int cyDesired,
+        uint fuLoad);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, UIntPtr uIDNewItem, string lpNewItem);
+
+    [DllImport("user32.dll")]
+    private static extern uint TrackPopupMenu(
+        IntPtr hMenu,
+        uint uFlags,
+        int x,
+        int y,
+        int nReserved,
+        IntPtr hWnd,
+        IntPtr prcRect);
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyMenu(IntPtr hMenu);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool SetWindowSubclass(
+        IntPtr hWnd,
+        SubclassProc pfnSubclass,
+        UIntPtr uIdSubclass,
+        UIntPtr dwRefData);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool RemoveWindowSubclass(
+        IntPtr hWnd,
+        SubclassProc pfnSubclass,
+        UIntPtr uIdSubclass);
+
+    [DllImport("comctl32.dll")]
+    private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, UIntPtr wParam, IntPtr lParam);
+
     public MainWindow(RdisplayService rdisplay)
     {
         _rdisplay = rdisplay;
+        _subclassProc = TraySubclassProc;
         InitializeComponent();
+        _hwnd = WindowNative.GetWindowHandle(this);
         Title = "SimpleLotto";
         ResizeWindow(1120, 720);
         PopulateStateComboBox();
@@ -92,12 +170,14 @@ public sealed partial class MainWindow : Window
         BinsGridView.ItemsSource = _binCards;
         BinBundlesListView.ItemsSource = _selectedBinBundles;
         InventoryListView.ItemsSource = _inventoryRecords;
-        GameCatalogListView.ItemsSource = _gameCatalog;
+        GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
+        OrderInventoryTabs();
         RootGrid.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler(OnGlobalKeyDown),
             handledEventsToo: true);
+        AppWindow.Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
         _ = WarmAudioEngineAsync();
         LoadApplicationState();
@@ -165,7 +245,7 @@ public sealed partial class MainWindow : Window
 
         _imports.Clear();
         foreach (var line in state.Imports)
-            _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin));
+            _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
 
         _sales.Clear();
         foreach (var line in state.Sales.Where(s => s.SoldAtUtc > _lastCloseUtc))
@@ -353,6 +433,9 @@ public sealed partial class MainWindow : Window
 
     private void OnGlobalKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (_isWorkflowDialogOpen)
+            return;
+
         if (StartupOverlay.Visibility == Visibility.Visible)
         {
             if (_startupStage == StartupStage.Import)
@@ -464,18 +547,22 @@ public sealed partial class MainWindow : Window
         }
 
         var user = userItem.Content?.ToString() ?? string.Empty;
-        var expectedHash = user == "Manager" ? _managerPasswordHash : _clerkPasswordHash;
+        var isManager = string.Equals(user, "Manager", StringComparison.Ordinal);
+        var expectedHash = isManager ? _managerPasswordHash : _clerkPasswordHash;
         if (!VerifyPassword(LoginPasswordBox.Password, expectedHash))
         {
             StartupStatusText.Text = "Password does not match the selected user.";
             return;
         }
 
+        _activeUserRole = isManager ? UserRole.Manager : UserRole.Clerk;
+        _activeUserName = user;
         StartupOverlay.Visibility = Visibility.Collapsed;
-        StatusText.Text = $"{user} logged in for {_storeState}.";
-        DashboardScannerModeText.Text = "Focused capture";
+        StatusText.Text = $"{user} logged in as {_activeUserRole} for {_storeState}.";
+        DashboardScannerModeText.Text = "Global scanner";
         DashboardScannerStatusText.Text = "Ready for scanner input.";
         DashboardPairingStatusText.Text = "Background capture: not paired";
+        ApplyRoleAccess();
         RefreshOperationalPages();
     }
 
@@ -731,7 +818,7 @@ public sealed partial class MainWindow : Window
         RefreshTotals();
     }
 
-    private void PlaceDashboardBundle(string bin, ImportTicket ticket)
+    private async void PlaceDashboardBundle(string bin, ImportTicket ticket)
     {
         if (!int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
             !IsConfiguredBin(binNumber))
@@ -757,7 +844,22 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin);
+        if (GamePriceCents(ticket.GameId) <= 0)
+        {
+            var priceSaved = await ShowActivationPriceDialogAsync(bin, ticket);
+            if (!priceSaved)
+            {
+                DashboardScannerStatusText.Text = $"Price required for game {ticket.GameId}. Bundle not activated.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
+                StatusText.Text = $"Enter a price before activating game {ticket.GameId}.";
+                _dashboardPendingBin = string.Empty;
+                _dashboardPendingTicket = null;
+                _ = SpeakAsync("Price required.");
+                return;
+            }
+        }
+
+        var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin, "activation");
         _imports.Insert(0, line);
         SaveImportLine(line);
         DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
@@ -767,6 +869,124 @@ public sealed partial class MainWindow : Window
         _dashboardPendingTicket = null;
         _ = SpeakAsync($"Bundle activated in bin {bin}.");
         RefreshOperationalPages();
+    }
+
+    private async Task<bool> ShowActivationPriceDialogAsync(string bin, ImportTicket ticket)
+    {
+        var existingGame = _gameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase));
+        var nameBox = new TextBox
+        {
+            Header = "Game name",
+            Text = existingGame?.Name is { Length: > 0 } name ? name : $"Game {ticket.GameId}",
+            PlaceholderText = "Display name"
+        };
+        var barcodeBox = new TextBox
+        {
+            Header = "Scan price barcode",
+            PlaceholderText = "Scan price or enter dollars"
+        };
+        var priceBox = new NumberBox
+        {
+            Header = "Game price ($)",
+            Minimum = 1,
+            SmallChange = 1,
+            LargeChange = 5,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
+        var statusText = new TextBlock
+        {
+            Text = "Enter the ticket price before activation can continue.",
+            TextWrapping = TextWrapping.Wrap
+        };
+        var imageUri = existingGame?.ImageUri ?? string.Empty;
+        var image = string.IsNullOrWhiteSpace(imageUri)
+            ? null
+            : new Image
+            {
+                Source = new BitmapImage(new Uri(imageUri)),
+                Width = 96,
+                Height = 64,
+                Stretch = Stretch.UniformToFill
+            };
+
+        barcodeBox.TextChanged += (_, _) =>
+        {
+            var priceCents = PriceCentsFromPriceScan(barcodeBox.Text);
+            if (priceCents <= 0)
+                return;
+
+            priceBox.Value = priceCents / 100d;
+            statusText.Text = $"Price scan resolved to {(priceCents / 100m).ToString("C", CultureInfo.CurrentCulture)}.";
+        };
+
+        var content = new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Bin {bin}",
+                    TextWrapping = TextWrapping.Wrap
+                }
+            }
+        };
+        if (image is not null)
+            content.Children.Add(image);
+        content.Children.Add(nameBox);
+        content.Children.Add(barcodeBox);
+        content.Children.Add(priceBox);
+        content.Children.Add(statusText);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Price required",
+            Content = content,
+            PrimaryButtonText = "Save and Activate",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (PriceCentsFromNumberBox(priceBox) > 0)
+                return;
+
+            args.Cancel = true;
+            statusText.Text = "Enter or scan a positive ticket price before continuing.";
+        };
+
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            _ = barcodeBox.Focus(FocusState.Programmatic);
+            var result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary)
+                return false;
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
+
+        var priceCents = PriceCentsFromNumberBox(priceBox);
+        if (priceCents <= 0)
+            return false;
+
+        var name = string.IsNullOrWhiteSpace(nameBox.Text)
+            ? $"Game {ticket.GameId}"
+            : nameBox.Text.Trim();
+        var record = new GameCatalogRecord(
+            ticket.GameId,
+            name,
+            priceCents,
+            "Activation",
+            existingGame?.ImageUri ?? "ms-appx:///Assets/SimpleLottoLogo64.png",
+            existingGame?.ImageStatus ?? "Image not uploaded");
+
+        UpsertManualGameRecord(record);
+        return true;
     }
 
     private void AcceptImportBin(ImportBin bin)
@@ -815,7 +1035,12 @@ public sealed partial class MainWindow : Window
 
     private void CompleteImportPair(ImportBin bin, ImportTicket ticket)
     {
-        var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin.Number.ToString(CultureInfo.InvariantCulture));
+        var line = new ImportLine(
+            ticket.GameId,
+            ticket.BundleId,
+            ticket.Ticket,
+            bin.Number.ToString(CultureInfo.InvariantCulture),
+            "initial_import");
         _imports.Insert(0, line);
         SaveImportLine(line);
         bin.ImportedCount++;
@@ -1148,11 +1373,211 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void MainWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_allowExit)
+            return;
+
+        if (!IsScannerPaired)
+        {
+            _allowExit = true;
+            return;
+        }
+
+        args.Cancel = true;
+        if (!EnsureTrayIcon())
+        {
+            StatusText.Text = "Tray icon could not be created. SimpleLotto remains open.";
+            return;
+        }
+
+        HideToTray();
+    }
+
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
+        DisposeLifetimeResources();
+    }
+
+    private bool IsScannerPaired => _isScannerPaired;
+
+    private bool EnsureTrayIcon()
+    {
+        if (_trayIconVisible)
+            return true;
+
+        SetWindowSubclass(_hwnd, _subclassProc, TraySubclassId, UIntPtr.Zero);
+        _trayIconHandle = LoadTrayIcon();
+        var data = CreateTrayData(TrayFlags.Message | TrayFlags.Icon | TrayFlags.Tip);
+        _trayIconVisible = Shell_NotifyIcon(TrayMessages.Add, ref data);
+        return _trayIconVisible;
+    }
+
+    private IntPtr LoadTrayIcon()
+    {
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "SimpleLotto.ico");
+        if (File.Exists(iconPath))
+        {
+            var icon = LoadImage(IntPtr.Zero, iconPath, ImageIcon, 16, 16, LoadFromFile);
+            if (icon != IntPtr.Zero)
+            {
+                _trayIconLoadedFromFile = true;
+                return icon;
+            }
+        }
+
+        return LoadIcon(IntPtr.Zero, new IntPtr(32512));
+    }
+
+    private void HideToTray()
+    {
+        ShowWindow(_hwnd, 0);
+        StatusText.Text = "SimpleLotto is running in the tray.";
+        ShowTrayBalloon("SimpleLotto", "Scanner, display, and speech services are still running.");
+    }
+
+    private void RestoreFromTray()
+    {
+        ShowWindow(_hwnd, 5);
+        SetForegroundWindow(_hwnd);
+        StatusText.Text = "SimpleLotto restored.";
+    }
+
+    private async void RequestExitFromTray()
+    {
+        if (_sales.Count > 0)
+        {
+            RestoreFromTray();
+            var dialog = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Exit SimpleLotto?",
+                Content = "There is activity in the current open close interval. Exit only if scanner and display service downtime is intended.",
+                PrimaryButtonText = "Exit",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close
+            };
+
+            var result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary)
+                return;
+        }
+
+        _allowExit = true;
+        RemoveTrayIcon();
+        Close();
+    }
+
+    private void DisposeLifetimeResources()
+    {
+        RemoveTrayIcon();
         _speechPlayer.Dispose();
         _speechSynthesizer.Dispose();
         _speechGate.Dispose();
+    }
+
+    private void RemoveTrayIcon()
+    {
+        if (_trayIconVisible)
+        {
+            var data = CreateTrayData(0);
+            Shell_NotifyIcon(TrayMessages.Delete, ref data);
+            _trayIconVisible = false;
+        }
+
+        RemoveWindowSubclass(_hwnd, _subclassProc, TraySubclassId);
+        if (_trayIconLoadedFromFile && _trayIconHandle != IntPtr.Zero)
+            DestroyIcon(_trayIconHandle);
+        _trayIconHandle = IntPtr.Zero;
+        _trayIconLoadedFromFile = false;
+    }
+
+    private void ShowTrayBalloon(string title, string message)
+    {
+        if (!_trayIconVisible)
+            return;
+
+        var data = CreateTrayData(TrayFlags.Info);
+        data.InfoTitle = title;
+        data.Info = message;
+        data.InfoFlags = 1;
+        Shell_NotifyIcon(TrayMessages.Modify, ref data);
+    }
+
+    private NotifyIconData CreateTrayData(uint flags)
+    {
+        return new NotifyIconData
+        {
+            Size = (uint)Marshal.SizeOf<NotifyIconData>(),
+            WindowHandle = _hwnd,
+            Id = TrayIconId,
+            Flags = flags,
+            CallbackMessage = TrayCallbackMessage,
+            IconHandle = _trayIconHandle,
+            Tip = "SimpleLotto",
+            TimeoutOrVersion = 0
+        };
+    }
+
+    private IntPtr TraySubclassProc(
+        IntPtr hWnd,
+        uint message,
+        UIntPtr wParam,
+        IntPtr lParam,
+        UIntPtr subclassId,
+        UIntPtr refData)
+    {
+        if (message == TrayCallbackMessage)
+        {
+            var trayMessage = unchecked((uint)lParam.ToInt64());
+            if (trayMessage == WindowMessages.LeftButtonDoubleClick)
+            {
+                RestoreFromTray();
+                return IntPtr.Zero;
+            }
+
+            if (trayMessage == WindowMessages.RightButtonUp)
+            {
+                ShowTrayMenu();
+                return IntPtr.Zero;
+            }
+        }
+
+        return DefSubclassProc(hWnd, message, wParam, lParam);
+    }
+
+    private void ShowTrayMenu()
+    {
+        if (!GetCursorPos(out var point))
+            return;
+
+        var menu = CreatePopupMenu();
+        if (menu == IntPtr.Zero)
+            return;
+
+        try
+        {
+            AppendMenu(menu, MenuFlags.String, RestoreCommandId, "Restore");
+            AppendMenu(menu, MenuFlags.String, ExitCommandId, "Exit");
+            SetForegroundWindow(_hwnd);
+            var command = TrackPopupMenu(
+                menu,
+                MenuFlags.ReturnCommand | MenuFlags.RightButton,
+                point.X,
+                point.Y,
+                0,
+                _hwnd,
+                IntPtr.Zero);
+
+            if (command == RestoreCommandId.ToUInt32())
+                RestoreFromTray();
+            else if (command == ExitCommandId.ToUInt32())
+                RequestExitFromTray();
+        }
+        finally
+        {
+            DestroyMenu(menu);
+        }
     }
 
     private void NavToggleButton_Click(object sender, RoutedEventArgs e)
@@ -1270,7 +1695,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            _store.InsertImport(new StoredImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin));
+            _store.InsertImport(new StoredImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
         }
         catch (Exception ex)
         {
@@ -1349,7 +1774,23 @@ public sealed partial class MainWindow : Window
 
     private void SelectGame(string gameId)
     {
-        var match = _gameCatalog.FirstOrDefault(g =>
+        var filtered = FilteredGameCatalog();
+        var index = filtered.FindIndex(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            GameSearchBox.Text = gameId;
+            filtered = FilteredGameCatalog();
+            index = filtered.FindIndex(g =>
+                string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (index < 0)
+            return;
+
+        _gameCatalogPage = (index / GameCatalogPageSize) + 1;
+        ApplyGameCatalogPage();
+        var match = _pagedGameCatalog.FirstOrDefault(g =>
             string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
         if (match is not null)
             GameCatalogListView.SelectedItem = match;
@@ -1434,7 +1875,12 @@ public sealed partial class MainWindow : Window
     {
         _inventoryRecords.Clear();
         foreach (var line in _imports)
-            _inventoryRecords.Add(new InventoryRecord("Initial", line.GameId, line.BundleId, line.Ticket, $"Placed in bin {line.Bin}"));
+            _inventoryRecords.Add(new InventoryRecord(
+                PlacementSourceLabel(line.Source),
+                line.GameId,
+                line.BundleId,
+                line.Ticket,
+                $"Active in bin {line.Bin}"));
 
         InventoryBundleCountText.Text = _inventoryRecords.Count.ToString(CultureInfo.CurrentCulture);
     }
@@ -1458,7 +1904,60 @@ public sealed partial class MainWindow : Window
         foreach (var game in byGame.Values.OrderBy(g => g.GameId, StringComparer.OrdinalIgnoreCase))
             _gameCatalog.Add(game);
 
-        InventoryGameCountText.Text = $"{_gameCatalog.Count.ToString(CultureInfo.CurrentCulture)} game{(_gameCatalog.Count == 1 ? string.Empty : "s")} defined";
+        ApplyGameCatalogPage();
+    }
+
+    private void ApplyGameCatalogPage(bool resetPage = false)
+    {
+        if (resetPage)
+            _gameCatalogPage = 1;
+
+        var filtered = FilteredGameCatalog();
+        var totalPages = Math.Max(1, (int)Math.Ceiling(filtered.Count / (double)GameCatalogPageSize));
+        _gameCatalogPage = Math.Clamp(_gameCatalogPage, 1, totalPages);
+
+        _pagedGameCatalog.Clear();
+        foreach (var game in filtered
+                     .Skip((_gameCatalogPage - 1) * GameCatalogPageSize)
+                     .Take(GameCatalogPageSize))
+        {
+            _pagedGameCatalog.Add(game);
+        }
+
+        InventoryGameCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} of {_gameCatalog.Count.ToString(CultureInfo.CurrentCulture)} game{(_gameCatalog.Count == 1 ? string.Empty : "s")} defined";
+        GamePageStatusText.Text = $"Page {_gameCatalogPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
+        GamePreviousPageButton.IsEnabled = _gameCatalogPage > 1;
+        GameNextPageButton.IsEnabled = _gameCatalogPage < totalPages;
+    }
+
+    private List<GameCatalogRecord> FilteredGameCatalog()
+    {
+        var search = GameSearchBox.Text.Trim();
+        return _gameCatalog
+            .Where(g => string.IsNullOrWhiteSpace(search) ||
+                        g.GameId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(g => g.GameId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void GameSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyGameCatalogPage(resetPage: true);
+    }
+
+    private void GamePreviousPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_gameCatalogPage <= 1)
+            return;
+
+        _gameCatalogPage--;
+        ApplyGameCatalogPage();
+    }
+
+    private void GameNextPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        _gameCatalogPage++;
+        ApplyGameCatalogPage();
     }
 
     private void SyncRdisplayTiles()
@@ -1511,6 +2010,7 @@ public sealed partial class MainWindow : Window
 
     private void RefreshSettingsSummary()
     {
+        ApplyRoleAccess();
         SettingsStoreText.Text = string.IsNullOrWhiteSpace(_storeName)
             ? "Store setup not completed."
             : $"{_storeName}{Environment.NewLine}{_storeStreet}, {_storeCity}";
@@ -1520,12 +2020,55 @@ public sealed partial class MainWindow : Window
         SettingsBarcodeText.Text = string.IsNullOrWhiteSpace(_storeBarcodeLayout)
             ? "Barcode format: not selected"
             : $"Barcode format: {_storeBarcodeLayout}";
-        SettingsScannerText.Text = "Scanner: focused capture only";
-        SettingsDatabasePathText.Text = LocalStore.DbPath;
+        SettingsScannerText.Text = "Scanner: WindowsPOS global capture model";
         var registered = _rdisplay.Displays.Count(d => d.IsRegistered);
         DisplayStatusText.Text = registered == 0
             ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
             : $"Rdisplay API listening on port {RdisplayService.ApiPort}. {registered} display{(registered == 1 ? string.Empty : "s")} registered.";
+    }
+
+    private bool IsManager => _activeUserRole == UserRole.Manager;
+
+    private void OrderInventoryTabs()
+    {
+        InventoryTabs.TabItems.Remove(BundleRecordsTab);
+        InventoryTabs.TabItems.Add(BundleRecordsTab);
+        InventoryTabs.SelectedItem = ReceivingTab;
+    }
+
+    private void ApplyRoleAccess()
+    {
+        var managerVisibility = IsManager ? Visibility.Visible : Visibility.Collapsed;
+        StoreSettingsTab.Visibility = managerVisibility;
+        BackupSettingsTab.Visibility = managerVisibility;
+        EmailSettingsTab.Visibility = managerVisibility;
+        GameSettingsTab.Visibility = managerVisibility;
+
+        SettingsSubtitleText.Text = IsManager
+            ? "Store, scanner, display, and game setup controls for the current installation."
+            : "Scanner and display settings available for Clerk access.";
+
+        if (!IsManager && SettingsTabs.SelectedItem != ScannerDisplaySettingsTab)
+            SettingsTabs.SelectedItem = ScannerDisplaySettingsTab;
+
+        if (!IsManager && InventoryTabs.SelectedItem == GameSettingsTab)
+            InventoryTabs.SelectedItem = ReceivingTab;
+    }
+
+    private bool RequireManagerAccess(string area)
+    {
+        if (IsManager)
+            return true;
+
+        var userText = string.IsNullOrWhiteSpace(_activeUserName)
+            ? "current user"
+            : _activeUserName;
+        var message = $"Manager access is required for {area}. {userText} is logged in as {_activeUserRole}.";
+        StatusText.Text = message;
+        GameCatalogStatusText.Text = message;
+        BackupStatusText.Text = message;
+        EmailSettingsStatusText.Text = message;
+        return false;
     }
 
     private void BinsGridView_ItemClick(object sender, ItemClickEventArgs e)
@@ -1593,6 +2136,9 @@ public sealed partial class MainWindow : Window
 
     private async void AddGameButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("game setup"))
+            return;
+
         var gameIdBox = new TextBox
         {
             Header = "Game ID",
@@ -1606,7 +2152,7 @@ public sealed partial class MainWindow : Window
         var priceBox = new NumberBox
         {
             Header = "Game price ($)",
-            Minimum = 0,
+            Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
@@ -1647,6 +2193,12 @@ public sealed partial class MainWindow : Window
             ? $"Game {gameId}"
             : nameBox.Text.Trim();
         var priceCents = PriceCentsFromNumberBox(priceBox);
+        if (priceCents <= 0)
+        {
+            GameCatalogStatusText.Text = $"Enter a positive price before adding game {gameId}.";
+            return;
+        }
+
         var record = new GameCatalogRecord(
             gameId,
             name,
@@ -1677,6 +2229,9 @@ public sealed partial class MainWindow : Window
 
     private void SaveGameDetailsButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("game setup"))
+            return;
+
         if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
         {
             GameCatalogStatusText.Text = "Select a game before saving.";
@@ -1690,10 +2245,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var priceCents = PriceCentsFromNumberBox(GamePriceEditBox);
+        if (priceCents <= 0)
+        {
+            GameCatalogStatusText.Text = $"Enter a positive price before saving game {game.GameId}.";
+            return;
+        }
+
         var updated = game with
         {
             Name = name,
-            PriceCents = PriceCentsFromNumberBox(GamePriceEditBox),
+            PriceCents = priceCents,
             Source = "Manual"
         };
         UpsertManualGameRecord(updated);
@@ -1702,6 +2264,9 @@ public sealed partial class MainWindow : Window
 
     private async void UploadGameImageButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("game image setup"))
+            return;
+
         if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
         {
             GameCatalogStatusText.Text = "Select a game before uploading an image.";
@@ -1742,6 +2307,9 @@ public sealed partial class MainWindow : Window
 
     private async void FetchSelectedGameImageButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("game image setup"))
+            return;
+
         if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
         {
             GameCatalogStatusText.Text = "Select a game before fetching an image.";
@@ -1751,8 +2319,111 @@ public sealed partial class MainWindow : Window
         await FetchAndApplyGameImageAsync(game);
     }
 
+    private async void ViewCachedGameImageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireManagerAccess("game image setup"))
+            return;
+
+        if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
+        {
+            GameCatalogStatusText.Text = "Select a game before viewing its cached image.";
+            return;
+        }
+
+        var cachedPath = CachedGameImagePath(game.GameId) ?? CachedFileImagePath(game.ImageUri);
+        var hasCachedImage = cachedPath is not null;
+        var content = new StackPanel
+        {
+            Spacing = 12,
+            MinWidth = 420,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"Game {game.GameId} | {game.Name}",
+                    Foreground = ThemeBrush("SlTextBrush", ColorBrush(21, 23, 26)),
+                    TextWrapping = TextWrapping.Wrap
+                }
+            }
+        };
+
+        if (hasCachedImage)
+        {
+            content.Children.Add(new Border
+            {
+                Background = ThemeBrush("SlSurfaceAltBrush", ColorBrush(246, 248, 251)),
+                BorderBrush = ThemeBrush("SlBorderBrush", ColorBrush(198, 204, 214)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8),
+                Child = new Image
+                {
+                    Source = new BitmapImage(new Uri(LocalFileUri(cachedPath!))),
+                    MaxHeight = 360,
+                    Stretch = Stretch.Uniform
+                }
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = cachedPath!,
+                Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+        else
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "No cached image exists for this game.",
+                Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Cached Image",
+            Content = content,
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close
+        };
+
+        if (hasCachedImage)
+            dialog.SecondaryButtonText = "Remove Image";
+
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Secondary || !hasCachedImage)
+            return;
+
+        try
+        {
+            DeleteCachedGameImages(game.GameId);
+            if (Uri.TryCreate(game.ImageUri, UriKind.Absolute, out var imageUri) &&
+                imageUri.IsFile &&
+                File.Exists(imageUri.LocalPath))
+            {
+                File.Delete(imageUri.LocalPath);
+            }
+
+            UpsertManualGameRecord(game with
+            {
+                ImageUri = DefaultGameImageUri,
+                ImageStatus = "Image not cached"
+            });
+            GameCatalogStatusText.Text = $"Cached image removed for game {game.GameId}.";
+        }
+        catch (Exception ex)
+        {
+            GameCatalogStatusText.Text = $"Unable to remove cached image: {ex.Message}";
+        }
+    }
+
     private async void FetchMissingImagesButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("game image setup"))
+            return;
+
         var missing = _gameCatalog
             .Where(g => !IsCachedGameImage(g))
             .ToList();
@@ -1888,6 +2559,18 @@ public sealed partial class MainWindow : Window
         return File.Exists(png) ? png : null;
     }
 
+    private static string? CachedFileImagePath(string imageUri)
+    {
+        if (!Uri.TryCreate(imageUri, UriKind.Absolute, out var uri) ||
+            !uri.IsFile ||
+            !File.Exists(uri.LocalPath))
+        {
+            return null;
+        }
+
+        return uri.LocalPath;
+    }
+
     private static string GameImageCachePath(string gameId, string extension)
     {
         var safe = SafeGameImageKey(gameId);
@@ -1949,6 +2632,9 @@ public sealed partial class MainWindow : Window
 
     private void BackupNowButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("backup settings"))
+            return;
+
         var folder = BackupFolderBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(folder))
         {
@@ -2002,6 +2688,9 @@ public sealed partial class MainWindow : Window
 
     private void SaveEmailSettingsButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireManagerAccess("email settings"))
+            return;
+
         SaveSetting("smtp_host", SmtpHostBox.Text.Trim());
         SaveSetting("smtp_port", CoerceInt(SmtpPortBox.Value, 587).ToString(CultureInfo.InvariantCulture));
         SaveSetting("smtp_user", SmtpUserBox.Text.Trim());
@@ -2050,6 +2739,37 @@ public sealed partial class MainWindow : Window
 
         var dollars = Math.Max(0, (int)Math.Round(box.Value, MidpointRounding.AwayFromZero));
         return dollars * 100L;
+    }
+
+    private static long PriceCentsFromPriceScan(string raw)
+    {
+        var text = raw.Trim();
+        if (text.Length == 0)
+            return 0;
+
+        var hasExplicitMoneyMarker = text.Contains('.', StringComparison.Ordinal) ||
+                                     text.Contains('$', StringComparison.Ordinal);
+        if (hasExplicitMoneyMarker &&
+            (decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowCurrencySymbol, CultureInfo.CurrentCulture, out var explicitDollars) ||
+             decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowCurrencySymbol, CultureInfo.InvariantCulture, out explicitDollars)))
+        {
+            return explicitDollars <= 0
+                ? 0
+                : (long)Math.Round(explicitDollars * 100m, MidpointRounding.AwayFromZero);
+        }
+
+        var digits = DigitsOnly(text);
+        if (digits.Length == 0 ||
+            !long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ||
+            parsed <= 0)
+        {
+            return 0;
+        }
+
+        if (digits.Length is 3 or 4 && parsed % 100 == 0)
+            return parsed;
+
+        return parsed * 100L;
     }
 
     private static decimal CoerceMoney(double value)
@@ -2111,6 +2831,14 @@ public sealed partial class MainWindow : Window
             : priceCents > int.MaxValue
                 ? int.MaxValue
                 : (int)priceCents;
+
+    private static string PlacementSourceLabel(string source) =>
+        source switch
+        {
+            "activation" => "Activation",
+            "initial_import" => "Opening import",
+            _ => "Placement"
+        };
 
     private string GameNameForDetail(string gameId)
     {
@@ -2304,7 +3032,8 @@ public sealed partial class MainWindow : Window
         string GameId,
         string BundleId,
         string Ticket,
-        string Bin)
+        string Bin,
+        string Source)
     {
         public string SummaryText => $"Game {GameId} | Bundle {BundleId} | Ticket {Ticket} | Bin {Bin}";
     }
@@ -2477,10 +3206,98 @@ public sealed partial class MainWindow : Window
         return new string(buffer[..count]);
     }
 
+    private const uint ImageIcon = 1;
+    private const uint LoadFromFile = 0x00000010;
+    private const uint TrayIconId = 1;
+    private const uint TrayCallbackMessage = 0x8001;
+    private static readonly UIntPtr TraySubclassId = new(1);
+    private static readonly UIntPtr RestoreCommandId = new(1001);
+    private static readonly UIntPtr ExitCommandId = new(1002);
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate IntPtr SubclassProc(
+        IntPtr hWnd,
+        uint message,
+        UIntPtr wParam,
+        IntPtr lParam,
+        UIntPtr subclassId,
+        UIntPtr refData);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct NotifyIconData
+    {
+        public uint Size;
+        public IntPtr WindowHandle;
+        public uint Id;
+        public uint Flags;
+        public uint CallbackMessage;
+        public IntPtr IconHandle;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Tip;
+
+        public uint State;
+        public uint StateMask;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string Info;
+
+        public uint TimeoutOrVersion;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string InfoTitle;
+
+        public uint InfoFlags;
+        public Guid GuidItem;
+        public IntPtr BalloonIconHandle;
+    }
+
+    private static class TrayMessages
+    {
+        public const uint Add = 0;
+        public const uint Modify = 1;
+        public const uint Delete = 2;
+    }
+
+    private static class TrayFlags
+    {
+        public const uint Message = 0x00000001;
+        public const uint Icon = 0x00000002;
+        public const uint Tip = 0x00000004;
+        public const uint Info = 0x00000010;
+    }
+
+    private static class WindowMessages
+    {
+        public const uint LeftButtonDoubleClick = 0x0203;
+        public const uint RightButtonUp = 0x0205;
+    }
+
+    private static class MenuFlags
+    {
+        public const uint String = 0x00000000;
+        public const uint RightButton = 0x00000002;
+        public const uint ReturnCommand = 0x00000100;
+    }
+
     private enum StartupStage
     {
         Setup,
         Import,
         Login
+    }
+
+    private enum UserRole
+    {
+        None,
+        Clerk,
+        Manager
     }
 }
