@@ -31,6 +31,8 @@
         <Setter Property="TextWrapping" Value="NoWrap"/>
     </Style>
 
+    <x:Double x:Key="SlBinTileSize">52</x:Double>
+
     <Style x:Key="SlPanelBorderStyle" TargetType="Border">
         <Setter Property="Background" Value="{ThemeResource SlSurfaceBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource SlBorderBrush}"/>

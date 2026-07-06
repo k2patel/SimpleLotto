@@ -384,35 +384,46 @@
                                                   IsItemClickEnabled="True"
                                                   ItemClick="BinsGridView_ItemClick"
                                                   SelectionMode="None">
+                                            <GridView.ItemContainerStyle>
+                                                <Style TargetType="GridViewItem">
+                                                    <Setter Property="MinWidth" Value="{StaticResource SlBinTileSize}"/>
+                                                    <Setter Property="MinHeight" Value="{StaticResource SlBinTileSize}"/>
+                                                    <Setter Property="Margin" Value="4"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                </Style>
+                                            </GridView.ItemContainerStyle>
                                             <GridView.ItemsPanel>
                                                 <ItemsPanelTemplate>
                                                     <ItemsWrapGrid Orientation="Horizontal"
-                                                                   MaximumRowsOrColumns="8"/>
+                                                                   MaximumRowsOrColumns="10"/>
                                                 </ItemsPanelTemplate>
                                             </GridView.ItemsPanel>
                                             <GridView.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Width="92"
-                                                            Height="78"
-                                                            Margin="4"
-                                                            Padding="8"
+                                                    <Border Width="{StaticResource SlBinTileSize}"
+                                                            Height="{StaticResource SlBinTileSize}"
+                                                            Padding="4,2"
                                                             CornerRadius="6"
                                                             BorderBrush="{Binding BorderBrush}"
-                                                            BorderThickness="2"
+                                                            BorderThickness="1"
                                                             Background="{Binding BackgroundBrush}">
-                                                        <StackPanel Spacing="2">
+                                                        <StackPanel Spacing="0"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding BinText}"
                                                                        Foreground="{Binding ForegroundBrush}"
-                                                                       FontWeight="SemiBold"/>
-                                                            <TextBlock Text="{Binding GameText}"
+                                                                       FontSize="16"
+                                                                       FontWeight="Bold"
+                                                                       HorizontalAlignment="Stretch"
+                                                                       TextAlignment="Center"/>
+                                                            <TextBlock Text="{Binding GameTextShort}"
                                                                        Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="12"/>
-                                                            <TextBlock Text="{Binding TicketText}"
-                                                                       Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="12"/>
-                                                            <TextBlock Text="{Binding StackText}"
-                                                                       Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="11"/>
+                                                                       FontSize="12"
+                                                                       HorizontalAlignment="Stretch"
+                                                                       TextAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       MaxLines="1"
+                                                                       Visibility="{Binding GameTextVisibility}"/>
                                                         </StackPanel>
                                                     </Border>
                                                 </DataTemplate>

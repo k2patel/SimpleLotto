@@ -926,7 +926,11 @@ public sealed partial class MainWindow : Window
             var bin = i.ToString(CultureInfo.InvariantCulture);
             grouped.TryGetValue(bin, out var bundles);
             var current = bundles?.FirstOrDefault();
-            _binCards.Add(BinCard.From(i, current, bundles?.Count ?? 0));
+            _binCards.Add(BinCard.From(
+                i,
+                current,
+                bundles?.Count ?? 0,
+                current is null ? string.Empty : GameDisplayName(current.GameId)));
         }
 
         var activeBins = _binCards.Count(b => b.BundleCount > 0);
@@ -1208,6 +1212,26 @@ public sealed partial class MainWindow : Window
     private static SolidColorBrush DarkTileTextBrush => ColorBrush(21, 23, 26);
     private static SolidColorBrush LightTileTextBrush => ColorBrush(255, 255, 255);
 
+    private string GameDisplayName(string gameId)
+    {
+        var manual = _manualGameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+
+        return manual is null || string.IsNullOrWhiteSpace(manual.Name)
+            ? $"Game {gameId}"
+            : manual.Name.Trim();
+    }
+
+    private static string CompactGameName(string gameName)
+    {
+        var text = string.IsNullOrWhiteSpace(gameName)
+            ? string.Empty
+            : gameName.Trim();
+
+        const int maxLength = 8;
+        return text.Length <= maxLength ? text : text[..maxLength];
+    }
+
     private void ResizeWindow(int widthDip, int heightDip)
     {
         var hwnd = WindowNative.GetWindowHandle(this);
@@ -1220,19 +1244,13 @@ public sealed partial class MainWindow : Window
     private sealed record BinCard(
         int Number,
         int BundleCount,
-        string GameId,
-        string BundleId,
-        string Ticket)
+        string GameName)
     {
-        public string BinText => $"Bin {Number}";
-        public string GameText => string.IsNullOrWhiteSpace(GameId) ? "Empty" : $"Game {GameId}";
-        public string TicketText => string.IsNullOrWhiteSpace(Ticket) ? "No ticket" : $"Ticket {Ticket}";
-        public string StackText => BundleCount switch
-        {
-            0 => "Open",
-            1 => "Current",
-            _ => $"{BundleCount} bundles"
-        };
+        public string BinText => Number.ToString(CultureInfo.InvariantCulture);
+        public string GameTextShort => BundleCount == 0 ? string.Empty : CompactGameName(GameName);
+        public Visibility GameTextVisibility => BundleCount == 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         public Brush BackgroundBrush => BundleCount switch
         {
             0 => EmptyTileBrush,
@@ -1246,10 +1264,10 @@ public sealed partial class MainWindow : Window
             ? DarkTileTextBrush
             : LightTileTextBrush;
 
-        public static BinCard From(int number, ImportLine? current, int bundleCount) =>
+        public static BinCard From(int number, ImportLine? current, int bundleCount, string gameName) =>
             current is null
-                ? new BinCard(number, 0, string.Empty, string.Empty, string.Empty)
-                : new BinCard(number, bundleCount, current.GameId, current.BundleId, current.Ticket);
+                ? new BinCard(number, 0, string.Empty)
+                : new BinCard(number, bundleCount, gameName);
     }
 
     private sealed record BundleDetailLine(
