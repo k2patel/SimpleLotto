@@ -1422,7 +1422,7 @@ public sealed partial class MainWindow : Window
                 x.Current.GameId,
                 x.Game?.Name ?? $"Game {x.Current.GameId}",
                 x.Current.Ticket,
-                x.Game?.PriceCents ?? 0));
+                PriceCentsForDisplay(x.Game?.PriceCents ?? 0)));
 
         _rdisplay.UpdateTiles(tiles);
     }
@@ -2039,6 +2039,13 @@ public sealed partial class MainWindow : Window
             string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
         return game?.PriceCents ?? 0;
     }
+
+    private static int PriceCentsForDisplay(long priceCents) =>
+        priceCents <= 0
+            ? 0
+            : priceCents > int.MaxValue
+                ? int.MaxValue
+                : (int)priceCents;
 
     private string GameNameForDetail(string gameId)
     {
