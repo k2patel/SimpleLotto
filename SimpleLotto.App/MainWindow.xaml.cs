@@ -163,6 +163,7 @@ public sealed partial class MainWindow : Window
         _hwnd = WindowNative.GetWindowHandle(this);
         Title = "SimpleLotto";
         ResizeWindow(1120, 720);
+        SetScannerPaired(false);
         PopulateStateComboBox();
         SalesListView.ItemsSource = _sales;
         ImportListView.ItemsSource = _imports;
@@ -878,7 +879,7 @@ public sealed partial class MainWindow : Window
         var nameBox = new TextBox
         {
             Header = "Game name",
-            Text = existingGame?.Name is { Length: > 0 } name ? name : $"Game {ticket.GameId}",
+            Text = existingGame?.Name is { Length: > 0 } existingName ? existingName : $"Game {ticket.GameId}",
             PlaceholderText = "Display name"
         };
         var barcodeBox = new TextBox
@@ -1400,6 +1401,11 @@ public sealed partial class MainWindow : Window
     }
 
     private bool IsScannerPaired => _isScannerPaired;
+
+    private void SetScannerPaired(bool isPaired)
+    {
+        _isScannerPaired = isPaired;
+    }
 
     private bool EnsureTrayIcon()
     {
@@ -2048,11 +2054,20 @@ public sealed partial class MainWindow : Window
             ? "Store, scanner, display, and game setup controls for the current installation."
             : "Scanner and display settings available for Clerk access.";
 
-        if (!IsManager && SettingsTabs.SelectedItem != ScannerDisplaySettingsTab)
-            SettingsTabs.SelectedItem = ScannerDisplaySettingsTab;
+        if (!IsManager)
+        {
+            if (SettingsTabs.SelectedItem is not TabViewItem selectedSettingsTab ||
+                selectedSettingsTab != ScannerDisplaySettingsTab)
+            {
+                SettingsTabs.SelectedItem = ScannerDisplaySettingsTab;
+            }
 
-        if (!IsManager && InventoryTabs.SelectedItem == GameSettingsTab)
-            InventoryTabs.SelectedItem = ReceivingTab;
+            if (InventoryTabs.SelectedItem is TabViewItem selectedInventoryTab &&
+                selectedInventoryTab == GameSettingsTab)
+            {
+                InventoryTabs.SelectedItem = ReceivingTab;
+            }
+        }
     }
 
     private bool RequireManagerAccess(string area)
