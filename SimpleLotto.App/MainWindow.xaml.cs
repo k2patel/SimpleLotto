@@ -57,6 +57,7 @@ public sealed partial class MainWindow : Window
     private string _storeStreet = string.Empty;
     private string _storeCity = string.Empty;
     private int _configuredBinCount = 90;
+    private DateTime _lastCloseUtc = DateTime.MinValue;
     private bool _setupComplete;
     private bool _initialImportComplete;
     private ImportBin? _pendingImportBin;
@@ -130,6 +131,7 @@ public sealed partial class MainWindow : Window
         _managerPasswordHash = ReadSetting(state, "manager_password_hash");
         _clerkName = ReadSetting(state, "clerk_name");
         _clerkPasswordHash = ReadSetting(state, "clerk_password_hash");
+        _lastCloseUtc = ReadDateTimeSetting(state, "last_close_utc");
 
         StoreNameBox.Text = _storeName;
         StoreStreetBox.Text = _storeStreet;
@@ -156,7 +158,7 @@ public sealed partial class MainWindow : Window
             _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin));
 
         _sales.Clear();
-        foreach (var line in state.Sales)
+        foreach (var line in state.Sales.Where(s => s.SoldAtUtc > _lastCloseUtc))
         {
             _sales.Add(new SaleLine(
                 line.SoldAtUtc.ToLocalTime(),
@@ -213,15 +215,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void SaveSetting(string key, string value)
+    private bool SaveSetting(string key, string value)
     {
         try
         {
             _store.SaveSetting(key, value);
+            return true;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save setting {key}: {ex.Message}";
+            return false;
         }
     }
 
@@ -247,6 +251,15 @@ public sealed partial class MainWindow : Window
         int.TryParse(ReadSetting(state, key), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
             ? value
             : fallback;
+
+    private static DateTime ReadDateTimeSetting(PersistedState state, string key) =>
+        DateTime.TryParse(
+            ReadSetting(state, key),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var value)
+            ? value.ToUniversalTime()
+            : DateTime.MinValue;
 
     private static string ProtectSecret(string plaintext)
     {
@@ -449,7 +462,7 @@ public sealed partial class MainWindow : Window
         }
 
         StartupOverlay.Visibility = Visibility.Collapsed;
-        StatusText.Text = $"{user} logged in. Shift started for {_storeState}.";
+        StatusText.Text = $"{user} logged in for {_storeState}.";
         DashboardScannerModeText.Text = "Focused capture";
         DashboardScannerStatusText.Text = "Ready for scanner input.";
         DashboardPairingStatusText.Text = "Background capture: not paired";
@@ -482,15 +495,15 @@ public sealed partial class MainWindow : Window
         ImportPanel.Focus(FocusState.Programmatic);
     }
 
-    private void ShowLoginStage()
+    private void ShowLoginStage(bool allowBack = false)
     {
         _startupStage = StartupStage.Login;
         StartupSubtitleText.Text = "Login";
         SetupPanel.Visibility = Visibility.Collapsed;
         ImportPanel.Visibility = Visibility.Collapsed;
         LoginPanel.Visibility = Visibility.Visible;
-        StartupBackButton.Visibility = Visibility.Visible;
-        StartupPrimaryButton.Content = "Start Shift";
+        StartupBackButton.Visibility = allowBack ? Visibility.Visible : Visibility.Collapsed;
+        StartupPrimaryButton.Content = "Login";
         LoginUserComboBox.Items.Clear();
         LoginUserComboBox.Items.Add(new ComboBoxItem { Content = "Manager" });
         if (!string.IsNullOrWhiteSpace(_clerkName) &&
@@ -500,7 +513,7 @@ public sealed partial class MainWindow : Window
         }
         LoginUserComboBox.SelectedIndex = 0;
         LoginPasswordBox.Password = string.Empty;
-        StartupStatusText.Text = "Login starts the first active shift.";
+        StartupStatusText.Text = "Enter the password for the selected user.";
     }
 
     private void CompleteImportStage()
@@ -521,7 +534,7 @@ public sealed partial class MainWindow : Window
 
         _initialImportComplete = true;
         SaveSetupState();
-        ShowLoginStage();
+        ShowLoginStage(allowBack: true);
     }
 
     private void PopulateStateComboBox()
@@ -1130,6 +1143,11 @@ public sealed partial class MainWindow : Window
         if (sender is not Button { Tag: string section })
             return;
 
+        ShowSection(section);
+    }
+
+    private void ShowSection(string section)
+    {
         if (section == "Dashboard")
         {
             DashboardContent.Visibility = Visibility.Visible;
@@ -1175,17 +1193,19 @@ public sealed partial class MainWindow : Window
 
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_sales.Count == 0)
-        {
-            StatusText.Text = "Nothing to reset.";
-            return;
-        }
+        ShowSection("Closing");
+
+        var saleCount = _sales.Count;
+        var ticketCount = _sales.Sum(s => s.Quantity);
+        var revenue = _sales.Sum(s => s.Amount);
 
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
             Title = "Close the current shift?",
-            Content = $"This will clear {_sales.Count} local prototype sale entry(s).",
+            Content = saleCount == 0
+                ? "No sales are recorded since the previous close. Close anyway?"
+                : $"Close {saleCount.ToString(CultureInfo.CurrentCulture)} sale entr{(saleCount == 1 ? "y" : "ies")} for {ticketCount.ToString(CultureInfo.CurrentCulture)} ticket{(ticketCount == 1 ? string.Empty : "s")} totaling {revenue.ToString("C", CultureInfo.CurrentCulture)}?",
             PrimaryButtonText = "Close Shift",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -1195,9 +1215,13 @@ public sealed partial class MainWindow : Window
         if (result != ContentDialogResult.Primary)
             return;
 
+        _lastCloseUtc = DateTime.UtcNow;
+        if (!SaveSetting("last_close_utc", _lastCloseUtc.ToString("O", CultureInfo.InvariantCulture)))
+            return;
+
         _sales.Clear();
-        ClearStoredSales();
         StatusText.Text = "Shift closed.";
+        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. New sales count toward the next close.";
         RefreshTotals();
     }
 
@@ -1516,7 +1540,7 @@ public sealed partial class MainWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Shift Closing Scan",
+            Title = "Closing Scan",
             Content = "Closing scan collection is the next workflow wiring step. This page now shows all bins so scan evidence can mark bins green and leave missed bins gray.",
             PrimaryButtonText = "OK",
             DefaultButton = ContentDialogButton.Primary

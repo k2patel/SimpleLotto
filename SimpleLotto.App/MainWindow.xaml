@@ -989,7 +989,7 @@
                                 <Border Grid.Column="1"
                                         Style="{StaticResource SlPanelBorderStyle}">
                                     <StackPanel Spacing="12">
-                                        <Button Content="Start Shift Closing Scan"
+                                        <Button Content="Start Closing Scan"
                                                 HorizontalAlignment="Stretch"
                                                 Click="StartClosingScanButton_Click"/>
                                         <TextBlock Text="Scan dialog collects ticket evidence only. Bin scans are ignored during closing collection."
@@ -1425,7 +1425,7 @@
                                 Visibility="Collapsed">
                         <TextBlock Text="Login"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="Login starts the active shift for the selected user."
+                        <TextBlock Text="Enter the password for the selected user."
                                    Style="{StaticResource SlCaptionTextStyle}"/>
 
                         <ComboBox x:Name="LoginUserComboBox"

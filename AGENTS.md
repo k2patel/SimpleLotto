@@ -42,4 +42,6 @@ The current history only contains `first commit`, so no detailed convention is e
 
 ## Agent-Specific Instructions
 
+At the start of every session, read `docs/product-instructions.md` before planning or editing. Treat it as the current product source of truth, especially for login, shift closing, inventory, bundle activation, and Rdisplay behavior.
+
 Do not overwrite user work. Check for existing guidance files before adding new ones, keep generated documentation concise, and avoid unrelated refactors. In this phase, do not treat prototype code as final architecture without checking the product instructions.
