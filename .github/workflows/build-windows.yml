@@ -306,7 +306,15 @@ jobs:
           }
 
           if ($curlExitCode -ne 0 -or -not $statusParsed -or $statusCode -lt 200 -or $statusCode -ge 300) {
-            throw "Zipline upload failed with exit code $curlExitCode HTTP $httpStatus body: $response"
+            Write-Warning "Zipline upload failed with exit code $curlExitCode HTTP $httpStatus body: $response"
+            "### SimpleLotto installer" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "- File: ${{ steps.checksum.outputs.installer_file }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "- SHA256: ${{ steps.checksum.outputs.installer_sha256 }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "- GitHub artifact: uploaded by this workflow run" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "- Zipline upload: failed with HTTP $httpStatus" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "- Zipline response: $response" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            return
           }
           if ([string]::IsNullOrWhiteSpace($response)) { throw "Zipline upload returned an empty response" }
 
