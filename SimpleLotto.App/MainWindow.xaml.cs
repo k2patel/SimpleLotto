@@ -10,6 +10,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Text;
@@ -45,6 +46,13 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
+    private readonly SpeechSynthesizer _speechSynthesizer = new();
+    private readonly MediaPlayer _speechPlayer = new()
+    {
+        AutoPlay = false,
+        Volume = 1.0
+    };
+    private readonly SemaphoreSlim _speechGate = new(1, 1);
     private static readonly HttpClient ImageHttpClient = CreateImageHttpClient();
     private bool _isNavCollapsed;
     private StartupStage _startupStage = StartupStage.Setup;
@@ -90,6 +98,8 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler(OnGlobalKeyDown),
             handledEventsToo: true);
+        Closed += MainWindow_Closed;
+        _ = WarmAudioEngineAsync();
         LoadApplicationState();
         RefreshTotals();
     }
@@ -1078,40 +1088,71 @@ public sealed partial class MainWindow : Window
 
     private async Task SpeakAsync(string text)
     {
+        if (!await _speechGate.WaitAsync(0))
+            return;
+
         try
         {
-            using var synth = new SpeechSynthesizer();
-            var stream = await synth.SynthesizeTextToStreamAsync(text);
-            var player = new MediaPlayer
-            {
-                Source = MediaSource.CreateFromStream(stream, stream.ContentType),
-                AutoPlay = false,
-                Volume = 1.0
-            };
-
-            var done = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            void Ended(MediaPlayer sender, object args) => done.TrySetResult(null);
-            void Failed(MediaPlayer sender, MediaPlayerFailedEventArgs args) => done.TrySetResult(null);
-
-            player.MediaEnded += Ended;
-            player.MediaFailed += Failed;
-            try
-            {
-                player.Play();
-                await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(4)));
-            }
-            finally
-            {
-                player.MediaEnded -= Ended;
-                player.MediaFailed -= Failed;
-                player.Dispose();
-                stream.Dispose();
-            }
+            await PlaySpeechAsync(text, volume: 1.0, timeout: TimeSpan.FromSeconds(4));
         }
         catch
         {
             StatusText.Text = text;
         }
+        finally
+        {
+            _speechGate.Release();
+        }
+    }
+
+    private async Task WarmAudioEngineAsync()
+    {
+        await _speechGate.WaitAsync();
+        try
+        {
+            await PlaySpeechAsync("Ready", volume: 0.0, timeout: TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Audio prompts are optional; scanner status text remains authoritative.
+        }
+        finally
+        {
+            _speechGate.Release();
+        }
+    }
+
+    private async Task PlaySpeechAsync(string text, double volume, TimeSpan timeout)
+    {
+        var stream = await _speechSynthesizer.SynthesizeTextToStreamAsync(text);
+        var done = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Ended(MediaPlayer sender, object args) => done.TrySetResult(null);
+        void Failed(MediaPlayer sender, MediaPlayerFailedEventArgs args) => done.TrySetResult(null);
+
+        _speechPlayer.MediaEnded += Ended;
+        _speechPlayer.MediaFailed += Failed;
+        try
+        {
+            _speechPlayer.Volume = volume;
+            _speechPlayer.Source = MediaSource.CreateFromStream(stream, stream.ContentType);
+            _speechPlayer.Play();
+            await Task.WhenAny(done.Task, Task.Delay(timeout));
+        }
+        finally
+        {
+            _speechPlayer.MediaEnded -= Ended;
+            _speechPlayer.MediaFailed -= Failed;
+            _speechPlayer.Source = null;
+            _speechPlayer.Volume = 1.0;
+            stream.Dispose();
+        }
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        _speechPlayer.Dispose();
+        _speechSynthesizer.Dispose();
+        _speechGate.Dispose();
     }
 
     private void NavToggleButton_Click(object sender, RoutedEventArgs e)
