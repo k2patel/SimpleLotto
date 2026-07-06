@@ -533,6 +533,7 @@
                                                             <Grid.RowDefinitions>
                                                                 <RowDefinition Height="Auto"/>
                                                                 <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="Auto"/>
                                                             </Grid.RowDefinitions>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="*"/>
@@ -548,12 +549,23 @@
                                                                        Foreground="{Binding CardForegroundBrush}"
                                                                        FontSize="12"/>
                                                             <TextBlock Grid.Row="1"
-                                                                       Text="{Binding GameBundleText}"
+                                                                       Text="{Binding GameIdText}"
+                                                                       Foreground="{Binding CardForegroundBrush}"
+                                                                       TextWrapping="WrapWholeWords"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       MaxLines="1"/>
+                                                            <TextBlock Grid.Row="1"
+                                                                       Grid.Column="1"
+                                                                       Text="{Binding BundleText}"
+                                                                       Foreground="{Binding CardForegroundBrush}"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Grid.Row="2"
+                                                                       Text="{Binding GameNameText}"
                                                                        Foreground="{Binding CardForegroundBrush}"
                                                                        TextWrapping="WrapWholeWords"
                                                                        TextTrimming="CharacterEllipsis"
                                                                        MaxLines="2"/>
-                                                            <TextBlock Grid.Row="1"
+                                                            <TextBlock Grid.Row="2"
                                                                        Grid.Column="1"
                                                                        Text="{Binding BinText}"
                                                                        Foreground="{Binding CardForegroundBrush}"
@@ -724,17 +736,20 @@
                                                         <ColumnDefinition Width="72"/>
                                                         <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="150"/>
+                                                        <ColumnDefinition Width="80"/>
+                                                        <ColumnDefinition Width="140"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Image" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game ID" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Name" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="3" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Price" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="4" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <ListView x:Name="GameCatalogListView"
                                                           Grid.Row="2"
                                                           MinHeight="340"
-                                                          SelectionMode="Single">
+                                                          SelectionMode="Single"
+                                                          SelectionChanged="GameCatalogListView_SelectionChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
                                                             <Grid MinHeight="58"
@@ -744,7 +759,8 @@
                                                                     <ColumnDefinition Width="72"/>
                                                                     <ColumnDefinition Width="110"/>
                                                                     <ColumnDefinition Width="*"/>
-                                                                    <ColumnDefinition Width="150"/>
+                                                                    <ColumnDefinition Width="80"/>
+                                                                    <ColumnDefinition Width="140"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <Border Width="44"
                                                                         Height="44"
@@ -768,6 +784,10 @@
                                                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 </StackPanel>
                                                                 <TextBlock Grid.Column="3"
+                                                                           Text="{Binding PriceText}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           VerticalAlignment="Center"/>
+                                                                <TextBlock Grid.Column="4"
                                                                            Text="{Binding ImageStatus}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                                            VerticalAlignment="Center"/>
@@ -782,16 +802,32 @@
                                             <StackPanel Spacing="12">
                                                 <TextBlock Text="Game Management"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <TextBlock Text="Each game must have a game ID, display name, price setup, and cache-first image lookup before it is used on displays."
-                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBox x:Name="GameIdEditBox"
+                                                         Header="Game ID"
+                                                         IsReadOnly="True"/>
+                                                <TextBox x:Name="GameNameEditBox"
+                                                         Header="Game name"
+                                                         PlaceholderText="Display name"/>
+                                                <NumberBox x:Name="GamePriceEditBox"
+                                                           Header="Game price ($)"
+                                                           Minimum="0"
+                                                           SmallChange="1"
+                                                           LargeChange="5"
+                                                           SpinButtonPlacementMode="Compact"/>
+                                                <Button Content="Save Game Details"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="SaveGameDetailsButton_Click"/>
                                                 <Button Content="Upload Image"
                                                         HorizontalAlignment="Stretch"
                                                         Click="UploadGameImageButton_Click"/>
-                                                <Button Content="Fetch Missing Images"
+                                                <Button Content="Fetch Official Image"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="FetchSelectedGameImageButton_Click"/>
+                                                <Button Content="Fetch All Missing Images"
                                                         HorizontalAlignment="Stretch"
                                                         Click="FetchMissingImagesButton_Click"/>
                                                 <TextBlock x:Name="GameCatalogStatusText"
-                                                           Text="Select or add a game to manage its image and name."
+                                                           Text="Select or add a game."
                                                            Foreground="{ThemeResource SlTextBrush}"
                                                            TextWrapping="Wrap"/>
                                             </StackPanel>

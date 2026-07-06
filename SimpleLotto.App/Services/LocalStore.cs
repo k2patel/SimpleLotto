@@ -154,16 +154,18 @@ public sealed class LocalStore
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO manual_games (game_id, name, source, image_uri, image_status)
-            VALUES ($game_id, $name, $source, $image_uri, $image_status)
+            INSERT INTO manual_games (game_id, name, price_cents, source, image_uri, image_status)
+            VALUES ($game_id, $name, $price_cents, $source, $image_uri, $image_status)
             ON CONFLICT(game_id) DO UPDATE SET
                 name = excluded.name,
+                price_cents = excluded.price_cents,
                 source = excluded.source,
                 image_uri = excluded.image_uri,
                 image_status = excluded.image_status
             """;
         cmd.Parameters.AddWithValue("$game_id", game.GameId);
         cmd.Parameters.AddWithValue("$name", game.Name);
+        cmd.Parameters.AddWithValue("$price_cents", game.PriceCents);
         cmd.Parameters.AddWithValue("$source", game.Source);
         cmd.Parameters.AddWithValue("$image_uri", game.ImageUri);
         cmd.Parameters.AddWithValue("$image_status", game.ImageStatus);
@@ -216,10 +218,12 @@ public sealed class LocalStore
                     game_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     source TEXT NOT NULL,
+                    price_cents INTEGER NOT NULL DEFAULT 0,
                     image_uri TEXT NOT NULL,
                     image_status TEXT NOT NULL
                 )
                 """);
+            EnsureColumn(conn, "manual_games", "price_cents", "INTEGER NOT NULL DEFAULT 0");
             Exec(conn, "INSERT OR IGNORE INTO settings (key, value) VALUES ('schema_version', '1')");
             _schemaReady = true;
         }
@@ -266,11 +270,27 @@ public sealed class LocalStore
     {
         var rows = new List<StoredGameRecord>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT game_id, name, source, image_uri, image_status FROM manual_games ORDER BY game_id";
+        cmd.CommandText = "SELECT game_id, name, source, image_uri, image_status, price_cents FROM manual_games ORDER BY game_id";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            rows.Add(new StoredGameRecord(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+            rows.Add(new StoredGameRecord(reader.GetString(0), reader.GetString(1), reader.GetInt64(5), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
         return rows;
+    }
+
+    private static void EnsureColumn(SqliteConnection conn, string table, string column, string definition)
+    {
+        using (var check = conn.CreateCommand())
+        {
+            check.CommandText = $"PRAGMA table_info({table})";
+            using var reader = check.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        Exec(conn, $"ALTER TABLE {table} ADD COLUMN {column} {definition}");
     }
 
     private static void UpsertSetting(SqliteConnection conn, SqliteTransaction tx, string key, string value)
@@ -329,6 +349,7 @@ public sealed record StoredSaleLine(
 public sealed record StoredGameRecord(
     string GameId,
     string Name,
+    long PriceCents,
     string Source,
     string ImageUri,
     string ImageStatus);

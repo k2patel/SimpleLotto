@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -25,6 +26,7 @@ using Windows.Graphics;
 using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.Media.SpeechSynthesis;
+using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI;
 
@@ -43,6 +45,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
+    private static readonly HttpClient ImageHttpClient = CreateImageHttpClient();
     private bool _isNavCollapsed;
     private StartupStage _startupStage = StartupStage.Setup;
     private string _clerkName = string.Empty;
@@ -173,6 +176,7 @@ public sealed partial class MainWindow : Window
             _manualGameCatalog.Add(new GameCatalogRecord(
                 game.GameId,
                 string.IsNullOrWhiteSpace(game.Name) ? $"Game {game.GameId}" : game.Name,
+                game.PriceCents,
                 string.IsNullOrWhiteSpace(game.Source) ? "Manual" : game.Source,
                 string.IsNullOrWhiteSpace(game.ImageUri) ? "ms-appx:///Assets/SimpleLottoLogo64.png" : game.ImageUri,
                 string.IsNullOrWhiteSpace(game.ImageStatus) ? "Image not cached" : game.ImageStatus));
@@ -693,7 +697,7 @@ public sealed partial class MainWindow : Window
             activeBundle.Bin,
             ticket.Ticket,
             1,
-            0);
+            GamePriceCents(ticket.GameId) / 100m);
 
         _sales.Insert(0, line);
         SaveSaleLine(line);
@@ -1252,6 +1256,7 @@ public sealed partial class MainWindow : Window
             _store.UpsertManualGame(new StoredGameRecord(
                 game.GameId,
                 game.Name,
+                game.PriceCents,
                 game.Source,
                 game.ImageUri,
                 game.ImageStatus));
@@ -1260,6 +1265,29 @@ public sealed partial class MainWindow : Window
         {
             StatusText.Text = $"Unable to save game to SQLite: {ex.Message}";
         }
+    }
+
+    private void UpsertManualGameRecord(GameCatalogRecord game)
+    {
+        var existing = _manualGameCatalog.FindIndex(g =>
+            string.Equals(g.GameId, game.GameId, StringComparison.OrdinalIgnoreCase));
+        if (existing >= 0)
+            _manualGameCatalog[existing] = game;
+        else
+            _manualGameCatalog.Add(game);
+
+        SaveManualGame(game);
+        RefreshGameCatalog();
+        SelectGame(game.GameId);
+        SyncRdisplayTiles();
+    }
+
+    private void SelectGame(string gameId)
+    {
+        var match = _gameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+            GameCatalogListView.SelectedItem = match;
     }
 
     private static StoredSaleLine ToStoredSaleLine(SaleLine line) =>
@@ -1370,9 +1398,9 @@ public sealed partial class MainWindow : Window
 
     private void SyncRdisplayTiles()
     {
-        var gameNames = _gameCatalog.ToDictionary(
+        var gamesById = _gameCatalog.ToDictionary(
             g => g.GameId,
-            g => g.Name,
+            g => g,
             StringComparer.OrdinalIgnoreCase);
 
         var tiles = _imports
@@ -1383,12 +1411,18 @@ public sealed partial class MainWindow : Window
                 Current = g.First()
             })
             .Where(x => x.Bin > 0)
+            .Select(x => new
+            {
+                x.Bin,
+                x.Current,
+                Game = gamesById.TryGetValue(x.Current.GameId, out var game) ? game : null
+            })
             .Select(x => new RdisplayTileState(
                 x.Bin,
                 x.Current.GameId,
-                gameNames.TryGetValue(x.Current.GameId, out var name) ? name : $"Game {x.Current.GameId}",
+                x.Game?.Name ?? $"Game {x.Current.GameId}",
                 x.Current.Ticket,
-                PriceCents: 0));
+                x.Game?.PriceCents ?? 0));
 
         _rdisplay.UpdateTiles(tiles);
     }
@@ -1458,7 +1492,7 @@ public sealed partial class MainWindow : Window
         BinDetailText.Text = $"Bin {card.Number} Details ({lines.Count.ToString(CultureInfo.CurrentCulture)} {bundleLabel})";
 
         for (var i = 0; i < lines.Count; i++)
-            _selectedBinBundles.Add(BundleDetailLine.From(lines[i], i == 0));
+            _selectedBinBundles.Add(BundleDetailLine.From(lines[i], GameNameForDetail(lines[i].GameId), i == 0));
     }
 
     private void BinDetailSplitter_DragDelta(object sender, DragDeltaEventArgs e)
@@ -1504,13 +1538,22 @@ public sealed partial class MainWindow : Window
             Header = "Game name",
             PlaceholderText = "Display name"
         };
+        var priceBox = new NumberBox
+        {
+            Header = "Game price ($)",
+            Minimum = 0,
+            SmallChange = 1,
+            LargeChange = 5,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
         var content = new StackPanel
         {
             Spacing = 12,
             Children =
             {
                 gameIdBox,
-                nameBox
+                nameBox,
+                priceBox
             }
         };
 
@@ -1538,26 +1581,61 @@ public sealed partial class MainWindow : Window
         var name = string.IsNullOrWhiteSpace(nameBox.Text)
             ? $"Game {gameId}"
             : nameBox.Text.Trim();
-        var existing = _manualGameCatalog.FindIndex(g => string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        var priceCents = PriceCentsFromNumberBox(priceBox);
         var record = new GameCatalogRecord(
             gameId,
             name,
+            priceCents,
             "Manual",
             "ms-appx:///Assets/SimpleLottoLogo64.png",
             "Image not uploaded");
 
-        if (existing >= 0)
-            _manualGameCatalog[existing] = record;
-        else
-            _manualGameCatalog.Add(record);
-
-        RefreshGameCatalog();
-        SyncRdisplayTiles();
-        SaveManualGame(record);
+        UpsertManualGameRecord(record);
         GameCatalogStatusText.Text = $"Game {gameId} added.";
     }
 
-    private void UploadGameImageButton_Click(object sender, RoutedEventArgs e)
+    private void GameCatalogListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
+        {
+            GameIdEditBox.Text = string.Empty;
+            GameNameEditBox.Text = string.Empty;
+            GamePriceEditBox.Value = 0;
+            return;
+        }
+
+        GameIdEditBox.Text = game.GameId;
+        GameNameEditBox.Text = game.Name;
+        GamePriceEditBox.Value = game.PriceCents / 100d;
+        GameCatalogStatusText.Text = $"Selected game {game.GameId}.";
+    }
+
+    private void SaveGameDetailsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
+        {
+            GameCatalogStatusText.Text = "Select a game before saving.";
+            return;
+        }
+
+        var name = GameNameEditBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            GameCatalogStatusText.Text = "Game name is required.";
+            return;
+        }
+
+        var updated = game with
+        {
+            Name = name,
+            PriceCents = PriceCentsFromNumberBox(GamePriceEditBox),
+            Source = "Manual"
+        };
+        UpsertManualGameRecord(updated);
+        GameCatalogStatusText.Text = $"Game {updated.GameId} details saved.";
+    }
+
+    private async void UploadGameImageButton_Click(object sender, RoutedEventArgs e)
     {
         if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
         {
@@ -1565,12 +1643,226 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        GameCatalogStatusText.Text = $"Image upload for game {game.GameId} will use the WindowsPOS crop/upload flow.";
+        var picker = new FileOpenPicker
+        {
+            SuggestedStartLocation = PickerLocationId.PicturesLibrary,
+            FileTypeFilter = { ".jpg", ".jpeg", ".png", ".webp" }
+        };
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+
+        var file = await picker.PickSingleFileAsync();
+        if (file is null)
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(GameImageCacheDir);
+            var dest = GameImageCachePath(game.GameId, Path.GetExtension(file.Path));
+            DeleteCachedGameImages(game.GameId);
+            File.Copy(file.Path, dest, overwrite: true);
+            var updated = game with
+            {
+                Source = "Manual",
+                ImageUri = LocalFileUri(dest),
+                ImageStatus = "Image uploaded"
+            };
+            UpsertManualGameRecord(updated);
+            GameCatalogStatusText.Text = $"Image uploaded for game {game.GameId}.";
+        }
+        catch (Exception ex)
+        {
+            GameCatalogStatusText.Text = $"Image upload failed: {ex.Message}";
+        }
     }
 
-    private void FetchMissingImagesButton_Click(object sender, RoutedEventArgs e)
+    private async void FetchSelectedGameImageButton_Click(object sender, RoutedEventArgs e)
     {
-        GameCatalogStatusText.Text = "Missing image fetch will run cache-first during receiving and activation.";
+        if (GameCatalogListView.SelectedItem is not GameCatalogRecord game)
+        {
+            GameCatalogStatusText.Text = "Select a game before fetching an image.";
+            return;
+        }
+
+        await FetchAndApplyGameImageAsync(game);
+    }
+
+    private async void FetchMissingImagesButton_Click(object sender, RoutedEventArgs e)
+    {
+        var missing = _gameCatalog
+            .Where(g => !IsCachedGameImage(g))
+            .ToList();
+
+        if (missing.Count == 0)
+        {
+            GameCatalogStatusText.Text = "No missing images to fetch.";
+            return;
+        }
+
+        var fetched = 0;
+        foreach (var game in missing)
+        {
+            var result = await FetchAndApplyGameImageAsync(game, quiet: true);
+            if (result)
+                fetched++;
+        }
+
+        GameCatalogStatusText.Text = $"Fetched {fetched.ToString(CultureInfo.CurrentCulture)} of {missing.Count.ToString(CultureInfo.CurrentCulture)} missing images.";
+    }
+
+    private async Task<bool> FetchAndApplyGameImageAsync(GameCatalogRecord game, bool quiet = false)
+    {
+        Directory.CreateDirectory(GameImageCacheDir);
+
+        var cached = CachedGameImagePath(game.GameId);
+        if (cached is not null)
+        {
+            UpsertManualGameRecord(game with
+            {
+                ImageUri = LocalFileUri(cached),
+                ImageStatus = "Image cached"
+            });
+            if (!quiet)
+                GameCatalogStatusText.Text = $"Image already cached for game {game.GameId}.";
+            return true;
+        }
+
+        var urls = OfficialImageUrls(game.GameId, _storeState).ToList();
+        if (urls.Count == 0)
+        {
+            if (!quiet)
+                GameCatalogStatusText.Text = $"No official image source configured for state {_storeState}.";
+            return false;
+        }
+
+        foreach (var url in urls)
+        {
+            try
+            {
+                using var response = await ImageHttpClient.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+                if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var bytes = await response.Content.ReadAsByteArrayAsync();
+                if (bytes.Length < 1024)
+                    continue;
+
+                var extension = contentType.Contains("png", StringComparison.OrdinalIgnoreCase) ? ".png" : ".jpg";
+                var path = GameImageCachePath(game.GameId, extension);
+                DeleteCachedGameImages(game.GameId);
+                await File.WriteAllBytesAsync(path, bytes);
+
+                UpsertManualGameRecord(game with
+                {
+                    Source = "Official",
+                    ImageUri = LocalFileUri(path),
+                    ImageStatus = "Image fetched"
+                });
+                if (!quiet)
+                    GameCatalogStatusText.Text = $"Image fetched for game {game.GameId}.";
+                return true;
+            }
+            catch
+            {
+                // Try the next official candidate; final status is set below.
+            }
+        }
+
+        if (!quiet)
+            GameCatalogStatusText.Text = $"Official image was not found for game {game.GameId}.";
+        return false;
+    }
+
+    private static bool IsCachedGameImage(GameCatalogRecord game)
+    {
+        if (CachedGameImagePath(game.GameId) is not null)
+            return true;
+
+        if (!Uri.TryCreate(game.ImageUri, UriKind.Absolute, out var uri) || !uri.IsFile)
+            return false;
+
+        return File.Exists(uri.LocalPath);
+    }
+
+    private static IEnumerable<string> OfficialImageUrls(string gameId, string state)
+    {
+        var digits = DigitsOnly(gameId);
+        if (string.IsNullOrWhiteSpace(digits))
+            yield break;
+
+        var stateCode = state.Trim().ToUpperInvariant();
+        var game3 = digits.Length >= 3 ? digits[..3] : digits;
+        var game4 = digits.Length >= 4 ? digits[..4] : digits;
+
+        if (stateCode == "GA")
+            yield return $"https://www.galottery.com/content/dam/portal/images/scratchers-games/{game4}/thumb-lg.png";
+        if (stateCode == "NJ")
+            yield return $"https://www.njlottery.com/content/dam/portal/images/instant-games/{game3}.png";
+        if (stateCode == "SC")
+            yield return $"https://www.sceducationlottery.com/images/games/instantgames/{game3}.jpg";
+        if (stateCode == "PA")
+            yield return $"https://www.palottery.state.pa.us/Games/Scratch-Offs/~/media/Images/Scratch-Offs/{game3}.png";
+    }
+
+    private static string GameImageCacheDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SimpleLotto",
+        "game-images");
+
+    private static string? CachedGameImagePath(string gameId)
+    {
+        var safe = SafeGameImageKey(gameId);
+        var jpg = Path.Combine(GameImageCacheDir, $"{safe}.jpg");
+        if (File.Exists(jpg))
+            return jpg;
+
+        var png = Path.Combine(GameImageCacheDir, $"{safe}.png");
+        return File.Exists(png) ? png : null;
+    }
+
+    private static string GameImageCachePath(string gameId, string extension)
+    {
+        var safe = SafeGameImageKey(gameId);
+        var ext = string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase)
+            ? ".png"
+            : ".jpg";
+        return Path.Combine(GameImageCacheDir, $"{safe}{ext}");
+    }
+
+    private static void DeleteCachedGameImages(string gameId)
+    {
+        var safe = SafeGameImageKey(gameId);
+        foreach (var extension in new[] { ".jpg", ".png" })
+        {
+            var path = Path.Combine(GameImageCacheDir, $"{safe}{extension}");
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    private static string SafeGameImageKey(string gameId)
+    {
+        var chars = gameId
+            .Where(c => char.IsLetterOrDigit(c) || c == '-' || c == '_')
+            .ToArray();
+        return chars.Length == 0 ? "unknown" : new string(chars);
+    }
+
+    private static string LocalFileUri(string path) =>
+        new Uri(path).AbsoluteUri;
+
+    private static HttpClient CreateImageHttpClient()
+    {
+        var client = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SimpleLotto/0.0.1");
+        return client;
     }
 
     private async void RegisterDisplayButton_Click(object sender, RoutedEventArgs e)
@@ -1686,6 +1978,15 @@ public sealed partial class MainWindow : Window
         return Math.Max(1, (int)Math.Round(value, MidpointRounding.AwayFromZero));
     }
 
+    private static long PriceCentsFromNumberBox(NumberBox box)
+    {
+        if (double.IsNaN(box.Value) || double.IsInfinity(box.Value))
+            return 0;
+
+        var dollars = Math.Max(0, (int)Math.Round(box.Value, MidpointRounding.AwayFromZero));
+        return dollars * 100L;
+    }
+
     private static decimal CoerceMoney(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value))
@@ -1729,6 +2030,23 @@ public sealed partial class MainWindow : Window
 
         return manual is null || string.IsNullOrWhiteSpace(manual.Name)
             ? $"Game {gameId}"
+            : manual.Name.Trim();
+    }
+
+    private long GamePriceCents(string gameId)
+    {
+        var game = _gameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        return game?.PriceCents ?? 0;
+    }
+
+    private string GameNameForDetail(string gameId)
+    {
+        var manual = _manualGameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+
+        return manual is null || string.IsNullOrWhiteSpace(manual.Name)
+            ? "Name not set"
             : manual.Name.Trim();
     }
 
@@ -1800,6 +2118,7 @@ public sealed partial class MainWindow : Window
 
     private sealed record BundleDetailLine(
         string GameId,
+        string GameName,
         string BundleId,
         string Ticket,
         string Bin,
@@ -1808,8 +2127,10 @@ public sealed partial class MainWindow : Window
         public string SummaryText => $"{(IsCurrent ? "Current" : "Dormant")} | Game {GameId} | Bundle {BundleId}";
         public string DetailText => $"Bin {Bin} | Current ticket {Ticket}";
         public string StatusText => IsCurrent ? "Current" : "Dormant";
-        public string GameBundleText => $"Game {GameId} | Bundle {BundleId}";
-        public string TicketText => $"Ticket {Ticket}";
+        public string GameIdText => $"Game ID {GameId}";
+        public string GameNameText => $"Game Name {GameName}";
+        public string BundleText => $"Bundle ID {BundleId}";
+        public string TicketText => $"Ticket Number {Ticket}";
         public string BinText => $"Bin {Bin}";
         public Brush CardBackgroundBrush => IsCurrent
             ? MediumTileBrush
@@ -1821,8 +2142,8 @@ public sealed partial class MainWindow : Window
             ? DarkTileTextBrush
             : ThemeBrush("SlTextBrush", ColorBrush(21, 23, 26));
 
-        public static BundleDetailLine From(ImportLine line, bool isCurrent) =>
-            new(line.GameId, line.BundleId, line.Ticket, line.Bin, isCurrent);
+        public static BundleDetailLine From(ImportLine line, string gameName, bool isCurrent) =>
+            new(line.GameId, gameName, line.BundleId, line.Ticket, line.Bin, isCurrent);
     }
 
     private sealed record InventoryRecord(
@@ -1839,16 +2160,21 @@ public sealed partial class MainWindow : Window
     private sealed record GameCatalogRecord(
         string GameId,
         string Name,
+        long PriceCents,
         string Source,
         string ImageUri,
         string ImageStatus)
     {
         public BitmapImage ImageSource => new(new Uri(ImageUri));
+        public string PriceText => PriceCents <= 0
+            ? "Not set"
+            : (PriceCents / 100m).ToString("C0", CultureInfo.CurrentCulture);
 
         public static GameCatalogRecord FromImport(string gameId) =>
             new(
                 gameId,
-                $"Game {gameId}",
+                "Name not set",
+                0,
                 "Initial import",
                 "ms-appx:///Assets/SimpleLottoLogo64.png",
                 "Image not cached");
