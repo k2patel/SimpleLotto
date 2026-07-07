@@ -104,11 +104,14 @@ public sealed partial class MainWindow : Window
     private ImportTicket? _dashboardPendingTicket;
     private DateTime? _dashboardPendingBinAtUtc;
     private DateTime? _dashboardPendingTicketAtUtc;
+    private int? _selectedBinNumber;
     private bool _isWorkflowDialogOpen;
     private const string ScannerVidSettingKey = "barcode_scanner_vid";
     private const string ScannerPidSettingKey = "barcode_scanner_pid";
     private const string ScannerSerialSettingKey = "barcode_scanner_serial";
     private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
+    private const string LicenseStatusSettingKey = "license_status";
+    private const string LicenseLastCheckUtcSettingKey = "license_last_check_utc";
     private const string EmailSendClosingSettingKey = "email_send_closing";
     private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
     private const string EmailIncludeInventorySettingKey = "email_include_inventory";
@@ -374,40 +377,19 @@ public sealed partial class MainWindow : Window
 
     private void ApplyClosingEmailSettings(PersistedState state)
     {
-        SetEmailCheckBoxPair(ClosingEmailSendCheckBox, SettingsEmailSendCheckBox, ReadBoolSetting(state, EmailSendClosingSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailShiftSummaryCheckBox, SettingsEmailShiftSummaryCheckBox, ReadBoolSetting(state, EmailIncludeShiftSummarySettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailInventoryCheckBox, SettingsEmailInventoryCheckBox, ReadBoolSetting(state, EmailIncludeInventorySettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailSalesDetailCheckBox, SettingsEmailSalesDetailCheckBox, ReadBoolSetting(state, EmailIncludeSalesDetailSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailCorrectionsCheckBox, SettingsEmailCorrectionsCheckBox, ReadBoolSetting(state, EmailIncludeCorrectionsSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailAnomaliesCheckBox, SettingsEmailAnomaliesCheckBox, ReadBoolSetting(state, EmailIncludeAnomaliesSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailPlacementEventsCheckBox, SettingsEmailPlacementEventsCheckBox, ReadBoolSetting(state, EmailIncludePlacementEventsSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailBinAssignmentsCheckBox, SettingsEmailBinAssignmentsCheckBox, ReadBoolSetting(state, EmailIncludeBinAssignmentsSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailInitializationCheckBox, SettingsEmailInitializationCheckBox, ReadBoolSetting(state, EmailIncludeInitializationSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailAuditCheckBox, SettingsEmailAuditCheckBox, ReadBoolSetting(state, EmailIncludeClosingAuditSettingKey, true));
-        SetEmailCheckBoxPair(ClosingEmailPdfCheckBox, SettingsEmailPdfCheckBox, ReadBoolSetting(state, EmailIncludePdfSettingKey, true));
-        UpdateClosingEmailSummary();
+        SettingsEmailSendCheckBox.IsChecked = ReadBoolSetting(state, EmailSendClosingSettingKey, true);
+        SettingsEmailShiftSummaryCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeShiftSummarySettingKey, true);
+        SettingsEmailInventoryCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeInventorySettingKey, true);
+        SettingsEmailSalesDetailCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeSalesDetailSettingKey, true);
+        SettingsEmailCorrectionsCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeCorrectionsSettingKey, true);
+        SettingsEmailAnomaliesCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeAnomaliesSettingKey, true);
+        SettingsEmailPlacementEventsCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludePlacementEventsSettingKey, true);
+        SettingsEmailBinAssignmentsCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeBinAssignmentsSettingKey, true);
+        SettingsEmailInitializationCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeInitializationSettingKey, true);
+        SettingsEmailAuditCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeClosingAuditSettingKey, true);
+        SettingsEmailPdfCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludePdfSettingKey, true);
         UpdateSettingsEmailSummary();
     }
-
-    private static void SetEmailCheckBoxPair(CheckBox closingCheckBox, CheckBox settingsCheckBox, bool value)
-    {
-        closingCheckBox.IsChecked = value;
-        settingsCheckBox.IsChecked = value;
-    }
-
-    private bool SaveClosingEmailSettingsFromClosing() =>
-        SaveClosingEmailSettings(
-            ClosingEmailSendCheckBox,
-            ClosingEmailShiftSummaryCheckBox,
-            ClosingEmailInventoryCheckBox,
-            ClosingEmailSalesDetailCheckBox,
-            ClosingEmailCorrectionsCheckBox,
-            ClosingEmailAnomaliesCheckBox,
-            ClosingEmailPlacementEventsCheckBox,
-            ClosingEmailBinAssignmentsCheckBox,
-            ClosingEmailInitializationCheckBox,
-            ClosingEmailAuditCheckBox,
-            ClosingEmailPdfCheckBox);
 
     private bool SaveClosingEmailSettingsFromSettings() =>
         SaveClosingEmailSettings(
@@ -452,50 +434,8 @@ public sealed partial class MainWindow : Window
 
     private static string BoolSetting(bool value) => value ? "1" : "0";
 
-    private void CopyClosingEmailOptionsToSettings()
-    {
-        SettingsEmailSendCheckBox.IsChecked = ClosingEmailSendCheckBox.IsChecked;
-        SettingsEmailShiftSummaryCheckBox.IsChecked = ClosingEmailShiftSummaryCheckBox.IsChecked;
-        SettingsEmailInventoryCheckBox.IsChecked = ClosingEmailInventoryCheckBox.IsChecked;
-        SettingsEmailSalesDetailCheckBox.IsChecked = ClosingEmailSalesDetailCheckBox.IsChecked;
-        SettingsEmailCorrectionsCheckBox.IsChecked = ClosingEmailCorrectionsCheckBox.IsChecked;
-        SettingsEmailAnomaliesCheckBox.IsChecked = ClosingEmailAnomaliesCheckBox.IsChecked;
-        SettingsEmailPlacementEventsCheckBox.IsChecked = ClosingEmailPlacementEventsCheckBox.IsChecked;
-        SettingsEmailBinAssignmentsCheckBox.IsChecked = ClosingEmailBinAssignmentsCheckBox.IsChecked;
-        SettingsEmailInitializationCheckBox.IsChecked = ClosingEmailInitializationCheckBox.IsChecked;
-        SettingsEmailAuditCheckBox.IsChecked = ClosingEmailAuditCheckBox.IsChecked;
-        SettingsEmailPdfCheckBox.IsChecked = ClosingEmailPdfCheckBox.IsChecked;
-        UpdateSettingsEmailSummary();
-    }
-
-    private void CopySettingsEmailOptionsToClosing()
-    {
-        ClosingEmailSendCheckBox.IsChecked = SettingsEmailSendCheckBox.IsChecked;
-        ClosingEmailShiftSummaryCheckBox.IsChecked = SettingsEmailShiftSummaryCheckBox.IsChecked;
-        ClosingEmailInventoryCheckBox.IsChecked = SettingsEmailInventoryCheckBox.IsChecked;
-        ClosingEmailSalesDetailCheckBox.IsChecked = SettingsEmailSalesDetailCheckBox.IsChecked;
-        ClosingEmailCorrectionsCheckBox.IsChecked = SettingsEmailCorrectionsCheckBox.IsChecked;
-        ClosingEmailAnomaliesCheckBox.IsChecked = SettingsEmailAnomaliesCheckBox.IsChecked;
-        ClosingEmailPlacementEventsCheckBox.IsChecked = SettingsEmailPlacementEventsCheckBox.IsChecked;
-        ClosingEmailBinAssignmentsCheckBox.IsChecked = SettingsEmailBinAssignmentsCheckBox.IsChecked;
-        ClosingEmailInitializationCheckBox.IsChecked = SettingsEmailInitializationCheckBox.IsChecked;
-        ClosingEmailAuditCheckBox.IsChecked = SettingsEmailAuditCheckBox.IsChecked;
-        ClosingEmailPdfCheckBox.IsChecked = SettingsEmailPdfCheckBox.IsChecked;
-        UpdateClosingEmailSummary();
-    }
-
-    private void ClosingEmailOptionChanged(object sender, RoutedEventArgs e) =>
-        UpdateClosingEmailSummary();
-
     private void SettingsEmailOptionChanged(object sender, RoutedEventArgs e) =>
         UpdateSettingsEmailSummary();
-
-    private void UpdateClosingEmailSummary()
-    {
-        ClosingEmailChoicesStatusText.Text = BuildClosingEmailSummaryText(
-            ClosingEmailSendCheckBox.IsChecked == true,
-            SelectedClosingEmailReportNames());
-    }
 
     private void UpdateSettingsEmailSummary()
     {
@@ -503,19 +443,6 @@ public sealed partial class MainWindow : Window
             SettingsEmailSendCheckBox.IsChecked == true,
             SelectedSettingsEmailReportNames());
     }
-
-    private IReadOnlyList<string> SelectedClosingEmailReportNames() =>
-        SelectedEmailReportNames(
-            ClosingEmailShiftSummaryCheckBox,
-            ClosingEmailInventoryCheckBox,
-            ClosingEmailSalesDetailCheckBox,
-            ClosingEmailCorrectionsCheckBox,
-            ClosingEmailAnomaliesCheckBox,
-            ClosingEmailPlacementEventsCheckBox,
-            ClosingEmailBinAssignmentsCheckBox,
-            ClosingEmailInitializationCheckBox,
-            ClosingEmailAuditCheckBox,
-            ClosingEmailPdfCheckBox);
 
     private IReadOnlyList<string> SelectedSettingsEmailReportNames() =>
         SelectedEmailReportNames(
@@ -1043,12 +970,7 @@ public sealed partial class MainWindow : Window
         var activeBundle = FindActiveBundle(ticket);
         if (activeBundle is null)
         {
-            _dashboardPendingTicket = ticket;
-            _dashboardPendingTicketAtUtc = DateTime.UtcNow;
-            DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} is not placed. Scan bin.";
-            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | waiting for bin";
-            StatusText.Text = "Bundle is not placed. Scan a bin to activate it.";
-            _ = SpeakAsync("Scan bin.");
+            _ = PromptForActivationBinAsync(ticket);
             return;
         }
 
@@ -1069,28 +991,153 @@ public sealed partial class MainWindow : Window
         RefreshTotals();
     }
 
+    private async Task PromptForActivationBinAsync(ImportTicket ticket)
+    {
+        ClearDashboardPendingScanPair();
+        DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} is not placed. Enter or scan bin.";
+        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | waiting for bin";
+        StatusText.Text = "Bundle is not placed. Enter a bin number or scan a bin barcode.";
+        _ = SpeakAsync("Enter bin number or scan bin.");
+
+        var binNumber = await ShowActivationBinDialogAsync(ticket);
+        if (binNumber is null)
+        {
+            DashboardScannerStatusText.Text = "Bundle activation cancelled.";
+            StatusText.Text = "Bundle activation cancelled.";
+            return;
+        }
+
+        var bin = binNumber.Value.ToString(CultureInfo.InvariantCulture);
+        await ActivateBundleInBinAsync(bin, ticket, updateDashboardStatus: true);
+    }
+
+    private async Task<int?> ShowActivationBinDialogAsync(ImportTicket ticket)
+    {
+        var binBox = new TextBox
+        {
+            Header = "Bin number",
+            PlaceholderText = "Enter bin number or scan BIN barcode"
+        };
+        var statusText = new TextBlock
+        {
+            Text = $"Bundle {ticket.BundleId} is not active. Enter the destination bin or scan its bin barcode.",
+            TextWrapping = TextWrapping.Wrap
+        };
+        int? selectedBin = null;
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Select Bin",
+            Content = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket}",
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    binBox,
+                    statusText
+                }
+            },
+            PrimaryButtonText = "Activate Bundle",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        bool TryAcceptBin()
+        {
+            if (!TryParseBinNumber(binBox.Text, out var parsedBin))
+            {
+                statusText.Text = "Enter or scan a valid bin barcode.";
+                return false;
+            }
+
+            if (!IsConfiguredBin(parsedBin))
+            {
+                statusText.Text = $"Wrong bin {parsedBin.ToString(CultureInfo.CurrentCulture)}. Enter or scan a configured bin.";
+                _ = SpeakAsync("Wrong bin.");
+                return false;
+            }
+
+            selectedBin = parsedBin;
+            return true;
+        }
+
+        binBox.KeyDown += (_, e) =>
+        {
+            if (e.Key != VirtualKey.Enter)
+                return;
+
+            e.Handled = true;
+            if (TryAcceptBin())
+                dialog.Hide();
+        };
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (TryAcceptBin())
+                return;
+
+            args.Cancel = true;
+        };
+        dialog.Opened += (_, _) =>
+        {
+            _ = binBox.Focus(FocusState.Programmatic);
+        };
+
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            var result = await dialog.ShowAsync();
+            if (result == ContentDialogResult.Primary || selectedBin is not null)
+                return selectedBin;
+
+            return null;
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
+    }
+
     private async void PlaceDashboardBundle(string bin, ImportTicket ticket)
+    {
+        await ActivateBundleInBinAsync(bin, ticket, updateDashboardStatus: true);
+    }
+
+    private async Task<bool> ActivateBundleInBinAsync(string bin, ImportTicket ticket, bool updateDashboardStatus)
     {
         if (!int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
             !IsConfiguredBin(binNumber))
         {
-            DashboardScannerStatusText.Text = $"Wrong bin {bin}. Scan a valid bin.";
-            DashboardLastScanText.Text = $"Last scan failed: BIN-{bin}";
+            if (updateDashboardStatus)
+            {
+                DashboardScannerStatusText.Text = $"Wrong bin {bin}. Scan a valid bin.";
+                DashboardLastScanText.Text = $"Last scan failed: BIN-{bin}";
+                ClearDashboardPendingScanPair();
+            }
+
             StatusText.Text = $"Wrong bin {bin}.";
-            ClearDashboardPendingScanPair();
             _ = SpeakAsync("Wrong bin.");
-            return;
+            return false;
         }
 
         var activeBundle = FindActiveBundle(ticket);
         if (activeBundle is not null)
         {
-            DashboardScannerStatusText.Text = $"Bundle already active in bin {activeBundle.Bin}.";
-            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | active in bin {activeBundle.Bin}";
+            if (updateDashboardStatus)
+            {
+                DashboardScannerStatusText.Text = $"Bundle already active in bin {activeBundle.Bin}.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | active in bin {activeBundle.Bin}";
+                ClearDashboardPendingScanPair();
+            }
+
             StatusText.Text = $"Bundle active in bin {activeBundle.Bin}; move it manually.";
-            ClearDashboardPendingScanPair();
             _ = SpeakAsync($"Bundle active in bin {activeBundle.Bin}, move it manually.");
-            return;
+            return false;
         }
 
         if (GamePriceCents(ticket.GameId) <= 0)
@@ -1098,24 +1145,33 @@ public sealed partial class MainWindow : Window
             var priceSaved = await ShowActivationPriceDialogAsync(bin, ticket);
             if (!priceSaved)
             {
-                DashboardScannerStatusText.Text = $"Price required for game {ticket.GameId}. Bundle not activated.";
-                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
+                if (updateDashboardStatus)
+                {
+                    DashboardScannerStatusText.Text = $"Price required for game {ticket.GameId}. Bundle not activated.";
+                    DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
+                    ClearDashboardPendingScanPair();
+                }
+
                 StatusText.Text = $"Enter a price before activating game {ticket.GameId}.";
-                ClearDashboardPendingScanPair();
                 _ = SpeakAsync("Price required.");
-                return;
+                return false;
             }
         }
 
         var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin, "activation");
         _imports.Insert(0, line);
         SaveImportLine(line);
-        DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
-        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
+        if (updateDashboardStatus)
+        {
+            DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
+            ClearDashboardPendingScanPair();
+        }
+
         StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}.";
-        ClearDashboardPendingScanPair();
         _ = SpeakAsync($"Bundle activated in bin {bin}.");
         RefreshOperationalPages();
+        return true;
     }
 
     private void ExpireDashboardPendingScanPair()
@@ -1130,7 +1186,7 @@ public sealed partial class MainWindow : Window
         ClearDashboardPendingScanPair();
         DashboardScannerStatusText.Text = $"Pending bin/bundle scan expired after {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds.";
         DashboardLastScanText.Text = "Last scan pair expired.";
-        StatusText.Text = "Scan bin and bundle again within the configured pair window.";
+        StatusText.Text = "Scan bin and bundle again within the activation scan timeout.";
     }
 
     private void ClearDashboardPendingScanPair()
@@ -1917,9 +1973,6 @@ public sealed partial class MainWindow : Window
         SettingsContent.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
         SetSelectedNav(section);
         StatusText.Text = section;
-
-        if (section == "Closing")
-            _ = SpeakAsync("Closing page. Press start closing scan when ready.");
     }
 
     private void SetSelectedNav(string section)
@@ -1948,14 +2001,14 @@ public sealed partial class MainWindow : Window
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
     {
         ShowSection("Closing");
-        _ = SpeakAsync("Review closing totals. Confirm close shift when ready.");
+        _ = SpeakAsync("Start closing.");
 
         var saleCount = _sales.Count;
         var ticketCount = _sales.Sum(s => s.Quantity);
         var revenue = _sales.Sum(s => s.Amount);
         var closingEmailSummary = BuildClosingEmailSummaryText(
-            ClosingEmailSendCheckBox.IsChecked == true,
-            SelectedClosingEmailReportNames());
+            SettingsEmailSendCheckBox.IsChecked == true,
+            SelectedSettingsEmailReportNames());
 
         var dialog = new ContentDialog
         {
@@ -2453,6 +2506,15 @@ public sealed partial class MainWindow : Window
         }
 
         ClosingEvidenceText.Text = $"0 / {_configuredBinCount.ToString(CultureInfo.CurrentCulture)}";
+        ClosingBinDetailText.Text = "Select a bin to view expected game, bundle, and ticket.";
+    }
+
+    private void ClosingBinsGridView_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not ClosingBinCard bin)
+            return;
+
+        ClosingBinDetailText.Text = bin.Detail;
     }
 
     private void RefreshSettingsSummary()
@@ -2467,7 +2529,8 @@ public sealed partial class MainWindow : Window
         SettingsBarcodeText.Text = string.IsNullOrWhiteSpace(_storeBarcodeLayout)
             ? "Barcode format: not selected"
             : $"Barcode format: {_storeBarcodeLayout}";
-        SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; pair window {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
+        RefreshLicenseRegistrationStatus();
+        SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         RefreshScannerPairingStatus();
         RefreshRegisteredDisplayCards();
@@ -2475,6 +2538,19 @@ public sealed partial class MainWindow : Window
         DisplayStatusText.Text = registered == 0
             ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
             : $"Rdisplay API listening on port {RdisplayService.ApiPort}. {registered} display{(registered == 1 ? string.Empty : "s")} registered.";
+    }
+
+    private void RefreshLicenseRegistrationStatus()
+    {
+        var state = _store.Load();
+        var licenseStatus = ReadSetting(state, LicenseStatusSettingKey);
+        var lastCheckUtc = ReadDateTimeSetting(state, LicenseLastCheckUtcSettingKey);
+        LicenseRegistrationText.Text = string.IsNullOrWhiteSpace(licenseStatus)
+            ? "Device registration has not been checked."
+            : $"License status: {licenseStatus}";
+        LicenseLastCheckedText.Text = lastCheckUtc == DateTime.MinValue
+            ? "License last checked: never"
+            : $"License last checked: {lastCheckUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
     }
 
     private void RefreshRegisteredDisplayCards()
@@ -2583,15 +2659,89 @@ public sealed partial class MainWindow : Window
         ShowBinDetail(card);
     }
 
+    private async void AddBundleToBinButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedBinNumber is not { } binNumber)
+        {
+            StatusText.Text = "Select a bin before adding a bundle.";
+            return;
+        }
+
+        _ = SpeakAsync("Scan bundle.");
+        var barcodeBox = new TextBox
+        {
+            Header = "Bundle or ticket barcode",
+            PlaceholderText = "Scan bundle/ticket barcode"
+        };
+        var statusText = new TextBlock
+        {
+            Text = $"Scan or enter the bundle/ticket barcode for bin {binNumber.ToString(CultureInfo.CurrentCulture)}.",
+            TextWrapping = TextWrapping.Wrap
+        };
+        ImportTicket? parsedTicket = null;
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = $"Add Bundle to Bin {binNumber.ToString(CultureInfo.CurrentCulture)}",
+            Content = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    barcodeBox,
+                    statusText
+                }
+            },
+            PrimaryButtonText = "Activate Bundle",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            parsedTicket = TryParseImportTicket(barcodeBox.Text.Trim());
+            if (parsedTicket is not null)
+                return;
+
+            args.Cancel = true;
+            statusText.Text = "Scan or enter a valid configured-state ticket barcode before activating.";
+        };
+
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            _ = barcodeBox.Focus(FocusState.Programmatic);
+            var result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary || parsedTicket is null)
+                return;
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
+
+        var bin = binNumber.ToString(CultureInfo.InvariantCulture);
+        var activated = await ActivateBundleInBinAsync(bin, parsedTicket, updateDashboardStatus: false);
+        if (activated)
+            ShowBinDetail(binNumber);
+    }
+
     private void ShowBinDetail(BinCard card)
+    {
+        ShowBinDetail(card.Number);
+    }
+
+    private void ShowBinDetail(int binNumber)
     {
         _selectedBinBundles.Clear();
         var lines = _imports
-            .Where(i => string.Equals(i.Bin, card.Number.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
+            .Where(i => string.Equals(i.Bin, binNumber.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
             .ToList();
 
+        _selectedBinNumber = binNumber;
+        AddBundleToBinButton.IsEnabled = true;
         var bundleLabel = lines.Count == 1 ? "bundle" : "bundles";
-        BinDetailText.Text = $"Bin {card.Number} Details ({lines.Count.ToString(CultureInfo.CurrentCulture)} {bundleLabel})";
+        BinDetailText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} Details ({lines.Count.ToString(CultureInfo.CurrentCulture)} {bundleLabel})";
 
         for (var i = 0; i < lines.Count; i++)
             _selectedBinBundles.Add(BundleDetailLine.From(lines[i], GameNameForDetail(lines[i].GameId), i == 0));
@@ -2616,7 +2766,7 @@ public sealed partial class MainWindow : Window
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
     {
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
-        _ = SpeakAsync("Start closing scan. Scan the current ticket from each physical bin.");
+        _ = SpeakAsync("Start scanning.");
 
         var dialog = new ContentDialog
         {
@@ -2629,7 +2779,6 @@ public sealed partial class MainWindow : Window
 
         await dialog.ShowAsync();
         ClosingStatusText.Text = "Closing scan route is not active yet. Scanner collection will be wired next.";
-        _ = SpeakAsync("Closing scan collection is not active yet.");
     }
 
     private async void AddGameButton_Click(object sender, RoutedEventArgs e)
@@ -3116,8 +3265,27 @@ public sealed partial class MainWindow : Window
         _scanPairTimeoutSeconds = Math.Clamp(CoerceInt(ScanPairTimeoutBox.Value, 5), 1, 30);
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         SaveSetting(ScanPairTimeoutSettingKey, _scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
-        SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; pair window {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
+        SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScannerPairingStatusText.Text = "Scanner settings saved.";
+    }
+
+    private void CheckLicenseButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireManagerAccess("license registration"))
+            return;
+
+        if (string.IsNullOrWhiteSpace(_storeName) ||
+            string.IsNullOrWhiteSpace(_storeState))
+        {
+            LicenseStatusText.Text = "Store name and state are required before checking license registration.";
+            return;
+        }
+
+        var checkedAtUtc = DateTime.UtcNow;
+        SaveSetting(LicenseStatusSettingKey, "Pending license service");
+        SaveSetting(LicenseLastCheckUtcSettingKey, checkedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        RefreshLicenseRegistrationStatus();
+        LicenseStatusText.Text = "License service is not connected in this scaffold. Store identity is ready for the WindowsPOS-compatible license check adapter.";
     }
 
     private async void PairScannerButton_Click(object sender, RoutedEventArgs e)
@@ -3356,18 +3524,8 @@ public sealed partial class MainWindow : Window
             SaveSecretSetting("smtp_password", SmtpPasswordBox.Password);
         SaveSetting("email_to", EmailToBox.Text.Trim());
         SaveClosingEmailSettingsFromSettings();
-        CopySettingsEmailOptionsToClosing();
         SmtpPasswordBox.Password = string.Empty;
         EmailSettingsStatusText.Text = $"Email settings saved. Application password is stored encrypted. {SettingsEmailChoicesStatusText.Text}";
-    }
-
-    private void SaveClosingEmailChoicesButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (!SaveClosingEmailSettingsFromClosing())
-            return;
-
-        CopyClosingEmailOptionsToSettings();
-        ClosingStatusText.Text = $"Closing email choices saved. {ClosingEmailChoicesStatusText.Text}";
     }
 
     private static string SanitizePathSegment(string value)
@@ -3673,8 +3831,8 @@ public sealed partial class MainWindow : Window
         public static ClosingBinCard From(int number, ImportLine? current, bool scanned)
         {
             var detail = current is null
-                ? "Empty"
-                : $"G{current.GameId} T{current.Ticket}";
+                ? $"Bin {number.ToString(CultureInfo.CurrentCulture)} is empty."
+                : $"Bin {number.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}Expected game ID: {current.GameId}{Environment.NewLine}Bundle ID: {current.BundleId}{Environment.NewLine}Current ticket: {current.Ticket}{Environment.NewLine}Scan status: {(scanned ? "Scanned" : "Needs scan")}";
             var status = scanned
                 ? "Scanned"
                 : current is null

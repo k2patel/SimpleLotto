@@ -294,6 +294,7 @@ Bundle activation definition:
 - Activation is based on bin assignment state, not ticket number.
 - A bundle does not have to start at ticket `000` to be activated.
 - If a scanned bundle has no existing record in any bin during normal bin/inventory workflow, the system should treat that scan as a bundle activation candidate.
+- If a bundle is scanned before a bin and is not active, the app should open a focused bin-entry dialog, speak `Enter bin number or scan bin`, and allow a typed bin number or scanned bin barcode to close the dialog and use that bin as the placement location.
 - The exception is inventory receiving: bundle scans captured while adding/receiving inventory are receiving records only and must not be treated as activation until the user assigns the bundle to a bin.
 
 Regular bundle activation:
@@ -305,6 +306,7 @@ Regular bundle activation:
 - The scan-pair window must be configurable under Settings > Scanner and Display.
 - When a clerk activates a bundle, the bin can be identified either by scanning the bin barcode or by entering/selecting the bin number on screen.
 - Scanning the bin and entering/selecting the bin number are equivalent activation inputs; either one satisfies the bin-identification requirement.
+- The Bins detail panel should provide an Add Bundle action for the selected bin so the clerk can activate a scanned bundle directly into that bin without scanning the bin barcode again.
 - If the clerk scans or enters a bin number that does not exist, block activation and ask the clerk to scan the bin again or enter the correct bin number.
 - For an invalid bin, the app should give audio feedback such as `Wrong bin`.
 - Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.
@@ -443,6 +445,7 @@ Closing page bin status:
 - Closing page should show all bins, active and inactive.
 - Unscanned bins should be gray.
 - Scanned bins should be green.
+- Closing bin tiles should stay visually compact: show bin number and color state only, not repeated status words like Empty or Needs scan on every tile.
 - If the user missed a bin, it is the user's responsibility to scan/fix it before final submit.
 - Clicking a bin during closing should show expected game ID, Bundle ID, and ticket ID/current ticket.
 - If the user scans while the closing scan dialog is open, the system matches that ticket to the related active bin/bundle after the dialog closes.
@@ -455,6 +458,7 @@ Settings owns configuration and system management. This includes store setup, di
 Settings must include state setup and technical setup:
 
 - Follow the same state setup pattern as `../WindowsPOS`.
+- Store settings should show store address/details and license registration as two noticeable cards. The registration card should include a Check License action and clear last-check/status text.
 - Displays: handles Rdisplay registration, health, config, and diagnostics.
 - Scanner: handles scanner pairing, health, config, and diagnostics.
 - Settings > Scanner and Display should present scanner controls and display registration as two noticeable cards, with registered displays listed below as individual display cards.
@@ -748,8 +752,8 @@ Email rules:
 - Email settings live under Settings.
 - Email report recipients are configured once and reused by shift closing.
 - Closing email can send CSV reports and the PDF closing report when available.
-- The user must be able to choose which closing artifacts are included or excluded from the closing email before closing.
-- Closing email content choices should include each standard artifact separately: shift summary, inventory, sales detail, corrections, anomalies, placement events, bin assignments, initialization, closing audit, and PDF closing report.
+- The user must be able to choose which closing artifacts are included or excluded from the closing email as a global Settings > Email preference, not as a per-closing choice.
+- Global closing email content choices should include each standard artifact separately: shift summary, inventory, sales detail, corrections, anomalies, placement events, bin assignments, initialization, closing audit, and PDF closing report.
 - Email failure must not invalidate a completed close.
 - Email status should be visible in Reporting/Closing history.
 - Manual test email should be available from Settings.

@@ -506,6 +506,7 @@
                                     <Grid RowSpacing="10">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
                                         <TextBlock x:Name="BinDetailText"
@@ -579,6 +580,12 @@
                                                 </DataTemplate>
                                             </ListView.ItemTemplate>
                                         </ListView>
+                                        <Button x:Name="AddBundleToBinButton"
+                                                Grid.Row="2"
+                                                Content="Add Bundle"
+                                                HorizontalAlignment="Stretch"
+                                                IsEnabled="False"
+                                                Click="AddBundleToBinButton_Click"/>
                                     </Grid>
                                 </Border>
                             </Grid>
@@ -1141,6 +1148,8 @@
                                         <GridView x:Name="ClosingBinsGridView"
                                                   Grid.Row="2"
                                                   MinHeight="360"
+                                                  IsItemClickEnabled="True"
+                                                  ItemClick="ClosingBinsGridView_ItemClick"
                                                   SelectionMode="None">
                                             <GridView.ItemContainerStyle>
                                                 <Style TargetType="GridViewItem">
@@ -1165,22 +1174,13 @@
                                                             BorderBrush="{Binding BorderBrush}"
                                                             BorderThickness="1"
                                                             Background="{Binding BackgroundBrush}">
-                                                        <StackPanel Spacing="0"
-                                                                    VerticalAlignment="Center">
-                                                            <TextBlock Text="{Binding BinText}"
-                                                                       Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="14"
-                                                                       FontWeight="Bold"
-                                                                       HorizontalAlignment="Stretch"
-                                                                       TextAlignment="Center"/>
-                                                            <TextBlock Text="{Binding Status}"
-                                                                       Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="10"
-                                                                       HorizontalAlignment="Stretch"
-                                                                       TextAlignment="Center"
-                                                                       TextTrimming="CharacterEllipsis"
-                                                                       MaxLines="1"/>
-                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding BinText}"
+                                                                   Foreground="{Binding ForegroundBrush}"
+                                                                   FontSize="14"
+                                                                   FontWeight="Bold"
+                                                                   HorizontalAlignment="Stretch"
+                                                                   VerticalAlignment="Center"
+                                                                   TextAlignment="Center"/>
                                                     </Border>
                                                 </DataTemplate>
                                             </GridView.ItemTemplate>
@@ -1195,61 +1195,11 @@
                                                 Click="StartClosingScanButton_Click"/>
                                         <TextBlock Text="Scan dialog collects ticket evidence only. Bin scans are ignored during closing collection."
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
-                                        <TextBlock Text="Closing Email"
+                                        <TextBlock Text="Selected Bin"
                                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                        <CheckBox x:Name="ClosingEmailSendCheckBox"
-                                                  Content="Send closing email"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <TextBlock Text="Include"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                        <CheckBox x:Name="ClosingEmailShiftSummaryCheckBox"
-                                                  Content="Shift summary CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailInventoryCheckBox"
-                                                  Content="Inventory CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailSalesDetailCheckBox"
-                                                  Content="Sales detail CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailCorrectionsCheckBox"
-                                                  Content="Corrections CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailAnomaliesCheckBox"
-                                                  Content="Anomalies CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailPlacementEventsCheckBox"
-                                                  Content="Placement events CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailBinAssignmentsCheckBox"
-                                                  Content="Bin assignments CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailInitializationCheckBox"
-                                                  Content="Initialization CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailAuditCheckBox"
-                                                  Content="Closing audit CSV"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <CheckBox x:Name="ClosingEmailPdfCheckBox"
-                                                  Content="PDF closing report"
-                                                  Checked="ClosingEmailOptionChanged"
-                                                  Unchecked="ClosingEmailOptionChanged"/>
-                                        <Button x:Name="SaveClosingEmailChoicesButton"
-                                                Content="Save email choices"
-                                                HorizontalAlignment="Stretch"
-                                                Click="SaveClosingEmailChoicesButton_Click"/>
-                                        <TextBlock x:Name="ClosingEmailChoicesStatusText"
-                                                   Text="Closing email includes all reports."
-                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                        <TextBlock x:Name="ClosingBinDetailText"
+                                                   Text="Select a bin to view expected game, bundle, and ticket."
+                                                   Foreground="{ThemeResource SlTextBrush}"
                                                    TextWrapping="Wrap"/>
                                         <TextBlock x:Name="ClosingStatusText"
                                                    Text="No closing scan session started."
@@ -1282,24 +1232,63 @@
                                 <TabViewItem x:Name="StoreSettingsTab"
                                              Header="Store"
                                              IsClosable="False">
-                                    <Border Style="{StaticResource SlPanelBorderStyle}">
-                                        <StackPanel Spacing="10"
-                                                    MaxWidth="560"
-                                                    HorizontalAlignment="Left">
+                                    <Grid RowSpacing="14">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="2">
                                             <TextBlock Text="Store"
                                                        Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                            <TextBlock x:Name="SettingsStoreText"
-                                                       Text="Store setup not completed."
-                                                       Foreground="{ThemeResource SlTextBrush}"
-                                                       TextWrapping="Wrap"/>
-                                            <TextBlock x:Name="SettingsStateText"
-                                                       Text="State: not selected"
-                                                       Style="{StaticResource SlCaptionTextStyle}"/>
-                                            <TextBlock x:Name="SettingsBarcodeText"
-                                                       Text="Barcode format: not selected"
+                                            <TextBlock Text="Store identity and registration status for this installation."
                                                        Style="{StaticResource SlCaptionTextStyle}"/>
                                         </StackPanel>
-                                    </Border>
+                                        <Grid Grid.Row="1"
+                                              ColumnSpacing="14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Style="{StaticResource SlPanelBorderStyle}">
+                                                <StackPanel Spacing="10">
+                                                    <TextBlock Text="Store Address"
+                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                    <TextBlock x:Name="SettingsStoreText"
+                                                               Text="Store setup not completed."
+                                                               Foreground="{ThemeResource SlTextBrush}"
+                                                               TextWrapping="Wrap"/>
+                                                    <TextBlock x:Name="SettingsStateText"
+                                                               Text="State: not selected"
+                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock x:Name="SettingsBarcodeText"
+                                                               Text="Barcode format: not selected"
+                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Grid.Column="1"
+                                                    Style="{StaticResource SlPanelBorderStyle}">
+                                                <StackPanel Spacing="10">
+                                                    <TextBlock Text="Registration"
+                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                    <TextBlock x:Name="LicenseRegistrationText"
+                                                               Text="Device registration has not been checked."
+                                                               Foreground="{ThemeResource SlTextBrush}"
+                                                               TextWrapping="Wrap"/>
+                                                    <TextBlock x:Name="LicenseLastCheckedText"
+                                                               Text="License last checked: never"
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
+                                                    <Button Content="Check License"
+                                                            HorizontalAlignment="Stretch"
+                                                            Click="CheckLicenseButton_Click"/>
+                                                    <TextBlock x:Name="LicenseStatusText"
+                                                               Text="License check uses the WindowsPOS-compatible registration service when available."
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
+                                    </Grid>
                                 </TabViewItem>
 
                                 <TabViewItem x:Name="ScannerDisplaySettingsTab"
@@ -1345,13 +1334,16 @@
                                                                    TextWrapping="Wrap"/>
                                                     </StackPanel>
                                                     <NumberBox x:Name="ScanPairTimeoutBox"
-                                                               Header="Pair window"
+                                                               Header="Activation scan timeout"
                                                                Value="5"
                                                                Minimum="1"
                                                                Maximum="30"
                                                                SmallChange="1"
                                                                LargeChange="5"
                                                                SpinButtonPlacementMode="Compact"/>
+                                                    <TextBlock Text="Seconds allowed between a bin scan and a bundle or ticket scan."
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
                                                     <Grid ColumnSpacing="8">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="*"/>
