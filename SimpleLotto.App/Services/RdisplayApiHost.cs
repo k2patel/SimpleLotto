@@ -67,7 +67,9 @@ public sealed class RdisplayApiHost
             if (display is null)
                 return Error("INVALID_TOKEN", "auth_token did not match any registered display.", 401);
 
-            _rdisplay.UpdateHardware(display.Id, body.hardware);
+            var screensChanged = _rdisplay.UpdateHardware(display.Id, body.hardware);
+            if (screensChanged)
+                await _rdisplay.PushToAllAsync();
             display = _rdisplay.LookupByAuthToken(body.AuthToken) ?? display;
 
             var snapshot = _rdisplay.BuildSnapshotPayloadForDisplay(display);
@@ -100,7 +102,9 @@ public sealed class RdisplayApiHost
             if (display is null)
                 return Error("INVALID_TOKEN", "auth_token did not match any registered display.", 401);
 
-            _rdisplay.UpdateHardware(display.Id, body.hardware);
+            var screensChanged = _rdisplay.UpdateHardware(display.Id, body.hardware);
+            if (screensChanged)
+                await _rdisplay.PushToAllAsync();
             display = _rdisplay.LookupByAuthToken(body.AuthToken) ?? display;
             var snapshot = _rdisplay.BuildSnapshotPayloadForDisplay(display);
             var serverSignature = _rdisplay.SnapshotSignature(snapshot);

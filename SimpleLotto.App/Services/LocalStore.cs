@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -181,10 +181,12 @@ public sealed class LocalStore
         cmd.CommandText = """
             INSERT INTO rdisplay_displays (
                 id, slug, name, host, port, screen_order, is_active, active_screen_count,
-                created_at_utc, last_seen_at_utc, auth_token, hardware_json, last_registered_at_utc)
+                created_at_utc, last_seen_at_utc, auth_token, hardware_json, last_registered_at_utc,
+                last_server_url)
             VALUES (
                 $id, $slug, $name, $host, $port, $screen_order, $is_active, $active_screen_count,
-                $created_at_utc, $last_seen_at_utc, $auth_token, $hardware_json, $last_registered_at_utc)
+                $created_at_utc, $last_seen_at_utc, $auth_token, $hardware_json, $last_registered_at_utc,
+                $last_server_url)
             ON CONFLICT(id) DO UPDATE SET
                 slug = excluded.slug,
                 name = excluded.name,
@@ -197,7 +199,8 @@ public sealed class LocalStore
                 last_seen_at_utc = excluded.last_seen_at_utc,
                 auth_token = excluded.auth_token,
                 hardware_json = excluded.hardware_json,
-                last_registered_at_utc = excluded.last_registered_at_utc
+                last_registered_at_utc = excluded.last_registered_at_utc,
+                last_server_url = excluded.last_server_url
             """;
         cmd.Parameters.AddWithValue("$id", display.Id);
         cmd.Parameters.AddWithValue("$slug", display.Slug);
@@ -212,6 +215,7 @@ public sealed class LocalStore
         cmd.Parameters.AddWithValue("$auth_token", display.AuthToken ?? string.Empty);
         cmd.Parameters.AddWithValue("$hardware_json", display.HardwareJson ?? string.Empty);
         cmd.Parameters.AddWithValue("$last_registered_at_utc", NullableDateTimeValue(display.LastRegisteredAtUtc));
+        cmd.Parameters.AddWithValue("$last_server_url", display.LastServerUrl ?? string.Empty);
         cmd.ExecuteNonQuery();
     }
 
@@ -292,11 +296,13 @@ public sealed class LocalStore
                     last_seen_at_utc TEXT NULL,
                     auth_token TEXT NOT NULL,
                     hardware_json TEXT NOT NULL,
-                    last_registered_at_utc TEXT NULL
+                    last_registered_at_utc TEXT NULL,
+                    last_server_url TEXT NOT NULL DEFAULT ''
                 )
                 """);
+            EnsureColumn(conn, "rdisplay_displays", "last_server_url", "TEXT NOT NULL DEFAULT ''");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_rdisplay_displays_token ON rdisplay_displays(auth_token)");
-            Exec(conn, "INSERT OR IGNORE INTO settings (key, value) VALUES ('schema_version', '1')");
+            Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             _schemaReady = true;
         }
     }
@@ -355,7 +361,8 @@ public sealed class LocalStore
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, slug, name, host, port, screen_order, is_active, active_screen_count,
-                   created_at_utc, last_seen_at_utc, auth_token, hardware_json, last_registered_at_utc
+                   created_at_utc, last_seen_at_utc, auth_token, hardware_json, last_registered_at_utc,
+                   last_server_url
             FROM rdisplay_displays
             ORDER BY screen_order, id
             """;
@@ -375,7 +382,8 @@ public sealed class LocalStore
                 reader.IsDBNull(9) ? null : ReadNullableDateTime(reader.GetString(9)),
                 reader.IsDBNull(10) ? string.Empty : reader.GetString(10),
                 reader.IsDBNull(11) ? string.Empty : reader.GetString(11),
-                reader.IsDBNull(12) ? null : ReadNullableDateTime(reader.GetString(12))));
+                reader.IsDBNull(12) ? null : ReadNullableDateTime(reader.GetString(12)),
+                reader.IsDBNull(13) ? string.Empty : reader.GetString(13)));
         }
         return rows;
     }
@@ -486,4 +494,5 @@ public sealed record StoredRdisplayDisplay(
     DateTime? LastSeenAtUtc,
     string? AuthToken,
     string? HardwareJson,
-    DateTime? LastRegisteredAtUtc);
+    DateTime? LastRegisteredAtUtc,
+    string? LastServerUrl);

@@ -216,6 +216,7 @@ public sealed partial class MainWindow : Window
         GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
         RegisteredDisplaysListView.ItemsSource = _registeredDisplayCards;
+        _rdisplay.DisplaysChanged += Rdisplay_DisplaysChanged;
         OrderInventoryTabs();
         RootGrid.AddHandler(
             UIElement.KeyDownEvent,
@@ -1749,7 +1750,17 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
+        _rdisplay.DisplaysChanged -= Rdisplay_DisplaysChanged;
         DisposeLifetimeResources();
+    }
+
+    private void Rdisplay_DisplaysChanged(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            RefreshRegisteredDisplayCards();
+            RefreshSettingsSummary();
+        });
     }
 
     private bool IsScannerPaired => _isScannerPaired;
@@ -3749,7 +3760,16 @@ public sealed partial class MainWindow : Window
         }
 
         DisplayStatusText.Text = $"Refreshing {display.Name}...";
+        SyncRdisplayTiles();
+        var probe = await _rdisplay.ProbeDisplayHardwareAsync(display.Id);
+        if (!probe.IsSuccess)
+        {
+            DisplayStatusText.Text = probe.ErrorMessage ?? "Display hardware probe failed.";
+            return;
+        }
+
         var result = await _rdisplay.RefreshDisplayAsync(display.Id);
+        RefreshRegisteredDisplayCards();
         DisplayStatusText.Text = result.IsSuccess
             ? $"Refresh sent to {display.Name}."
             : result.ErrorMessage ?? "Display refresh failed.";
@@ -4021,11 +4041,8 @@ public sealed partial class MainWindow : Window
         string GameName,
         BinActivity Activity)
     {
-        public string BinText => $"Bin {Number.ToString(CultureInfo.InvariantCulture)}";
-        public string GameTextShort => BundleCount == 0 ? string.Empty : GameName;
-        public string TooltipText => BundleCount == 0
-            ? $"Bin {Number.ToString(CultureInfo.CurrentCulture)} is empty."
-            : $"Bin {Number.ToString(CultureInfo.CurrentCulture)} | {GameName}";
+        public string BinText => Number.ToString(CultureInfo.InvariantCulture);
+        public string GameTextShort => BundleCount == 0 ? string.Empty : CompactGameName(GameName);
         public Visibility GameTextVisibility => BundleCount == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -4046,18 +4063,6 @@ public sealed partial class MainWindow : Window
                 _ => LowTileStackedBrush
             };
         public Brush ForegroundBrush => DarkTileTextBrush;
-        public Brush RibbonBrush => BundleCount == 0
-            ? EmptyTileBrush
-            : Activity switch
-            {
-                BinActivity.High => HighTileStackedBrush,
-                BinActivity.Medium => MediumTileStackedBrush,
-                _ => LowTileStackedBrush
-            };
-        public Brush RibbonBorderBrush => BundleCount == 0
-            ? EmptyTileBorderBrush
-            : BorderBrush;
-        public Brush RibbonForegroundBrush => DarkTileTextBrush;
 
         public static BinCard From(
             int number,
@@ -4068,6 +4073,13 @@ public sealed partial class MainWindow : Window
             current is null
                 ? new BinCard(number, 0, string.Empty, BinActivity.Low)
                 : new BinCard(number, bundleCount, gameName, activity);
+
+        private static string CompactGameName(string gameName)
+        {
+            var text = string.IsNullOrWhiteSpace(gameName) ? string.Empty : gameName.Trim();
+            const int maxLength = 8;
+            return text.Length <= maxLength ? text : text[..maxLength];
+        }
     }
 
     private enum BinActivity
@@ -4182,6 +4194,7 @@ public sealed partial class MainWindow : Window
         long Id,
         string Name,
         string Endpoint,
+        string ServerUrlText,
         string Status,
         string ScreenText,
         string LastSeenText,
@@ -4206,6 +4219,9 @@ public sealed partial class MainWindow : Window
                 display.Id,
                 display.Name,
                 display.BaseUrl,
+                string.IsNullOrWhiteSpace(display.LastServerUrl)
+                    ? "Server URL not sent yet"
+                    : $"Server URL {display.LastServerUrl}",
                 status,
                 screenText,
                 lastSeen,

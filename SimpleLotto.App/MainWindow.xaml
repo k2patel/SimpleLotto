@@ -85,47 +85,62 @@
 
                     <Button Tag="Dashboard"
                             HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
                             Click="NavButton_Click"
                             ToolTipService.ToolTip="Dashboard">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10"
+                                    HorizontalAlignment="Left">
                             <FontIcon Glyph="&#xE80F;" FontSize="16"/>
-                            <TextBlock x:Name="DashboardNavLabel" Text="Dashboard" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="DashboardNavLabel" Text="Dashboard" TextAlignment="Left" FontWeight="SemiBold"/>
                         </StackPanel>
                     </Button>
                     <Button Tag="Bins"
                             HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
                             Click="NavButton_Click"
                             ToolTipService.ToolTip="Bins">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10"
+                                    HorizontalAlignment="Left">
                             <FontIcon Glyph="&#xECA5;" FontSize="16"/>
-                            <TextBlock x:Name="BinsNavLabel" Text="Bins"/>
+                            <TextBlock x:Name="BinsNavLabel" Text="Bins" TextAlignment="Left"/>
                         </StackPanel>
                     </Button>
                     <Button Tag="Inventory"
                             HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
                             Click="NavButton_Click"
                             ToolTipService.ToolTip="Inventory">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10"
+                                    HorizontalAlignment="Left">
                             <FontIcon Glyph="&#xE7B8;" FontSize="16"/>
-                            <TextBlock x:Name="InventoryNavLabel" Text="Inventory"/>
+                            <TextBlock x:Name="InventoryNavLabel" Text="Inventory" TextAlignment="Left"/>
                         </StackPanel>
                     </Button>
                     <Button Tag="Closing"
                             HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
                             Click="NavButton_Click"
                             ToolTipService.ToolTip="Closing">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10"
+                                    HorizontalAlignment="Left">
                             <FontIcon Glyph="&#xE9D5;" FontSize="16"/>
-                            <TextBlock x:Name="ClosingNavLabel" Text="Closing"/>
+                            <TextBlock x:Name="ClosingNavLabel" Text="Closing" TextAlignment="Left"/>
                         </StackPanel>
                     </Button>
                     <Button Tag="Settings"
                             HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
                             Click="NavButton_Click"
                             ToolTipService.ToolTip="Settings">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10"
+                                    HorizontalAlignment="Left">
                             <FontIcon Glyph="&#xE713;" FontSize="16"/>
-                            <TextBlock x:Name="SettingsNavLabel" Text="Settings"/>
+                            <TextBlock x:Name="SettingsNavLabel" Text="Settings" TextAlignment="Left"/>
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -467,41 +482,30 @@
                                                 <DataTemplate>
                                                     <Border Width="{StaticResource SlBinTileSize}"
                                                             Height="{StaticResource SlBinTileSize}"
-                                                            Padding="3"
+                                                            Padding="4,2"
                                                             CornerRadius="6"
                                                             BorderBrush="{Binding BorderBrush}"
                                                             BorderThickness="1"
                                                             Background="{Binding BackgroundBrush}"
-                                                            ToolTipService.ToolTip="{Binding TooltipText}"
                                                             Tapped="BinTile_Tapped">
-                                                        <Grid RowSpacing="2">
-                                                            <Grid.RowDefinitions>
-                                                                <RowDefinition Height="Auto"/>
-                                                                <RowDefinition Height="*"/>
-                                                            </Grid.RowDefinitions>
-                                                            <Border Background="{Binding RibbonBrush}"
-                                                                    BorderBrush="{Binding RibbonBorderBrush}"
-                                                                    BorderThickness="1"
-                                                                    CornerRadius="4"
-                                                                    Padding="2,0">
-                                                                <TextBlock Text="{Binding BinText}"
-                                                                           Foreground="{Binding RibbonForegroundBrush}"
-                                                                           FontSize="11"
-                                                                           FontWeight="Bold"
-                                                                           HorizontalAlignment="Stretch"
-                                                                           TextAlignment="Center"/>
-                                                            </Border>
+                                                        <StackPanel Spacing="0"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding BinText}"
+                                                                       Foreground="{Binding ForegroundBrush}"
+                                                                       FontSize="16"
+                                                                       FontWeight="Bold"
+                                                                       HorizontalAlignment="Stretch"
+                                                                       TextAlignment="Center"/>
                                                             <TextBlock Text="{Binding GameTextShort}"
-                                                                       Grid.Row="1"
                                                                        Foreground="{Binding ForegroundBrush}"
                                                                        FontSize="12"
                                                                        HorizontalAlignment="Stretch"
-                                                                       VerticalAlignment="Center"
                                                                        TextAlignment="Center"
                                                                        TextTrimming="CharacterEllipsis"
                                                                        MaxLines="1"
                                                                        Visibility="{Binding GameTextVisibility}"/>
-                                                        </Grid>
+                                                        </StackPanel>
                                                     </Border>
                                                 </DataTemplate>
                                             </GridView.ItemTemplate>
@@ -1510,6 +1514,9 @@
                                                                                FontWeight="SemiBold"/>
                                                                     <TextBlock Text="{Binding Endpoint}"
                                                                                Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                    <TextBlock Text="{Binding ServerUrlText}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                                               TextTrimming="CharacterEllipsis"/>
                                                                 </StackPanel>
                                                                 <StackPanel Grid.Column="1"
                                                                             Spacing="2">

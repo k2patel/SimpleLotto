@@ -16,6 +16,7 @@ namespace SimpleLotto.App.Services;
 public sealed class RdisplayService : IDisposable
 {
     public const int ApiPort = 5000;
+    public event EventHandler? DisplaysChanged;
 
     private readonly LocalStore _store;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
@@ -25,6 +26,8 @@ public sealed class RdisplayService : IDisposable
     private long _nextDisplayId = 1;
     private bool _burnInEnabled = true;
     private int _burnInIntervalMinutes = 15;
+    private const string MasterResetHeader = "X-LottoPos-Override";
+    private const string MasterResetToken = "REPLACE_BEFORE_RELEASE_master_reset_2026_xyz";
 
     public RdisplayService(LocalStore store)
     {
@@ -85,22 +88,45 @@ public sealed class RdisplayService : IDisposable
     public RdisplayRegistration? VerifyToken(string? authToken) =>
         LookupByAuthToken(authToken);
 
-    public void UpdateHardware(long displayId, JsonElement? hardware)
+    public bool UpdateHardware(long displayId, JsonElement? hardware)
     {
         if (hardware is null || hardware.Value.ValueKind != JsonValueKind.Object)
-            return;
+            return false;
 
         lock (_gate)
         {
             var display = _displays.FirstOrDefault(d => d.Id == displayId);
             if (display is null)
-                return;
+                return false;
 
+            var previousScreenCount = display.ActiveScreenCount;
             display.HardwareJson = hardware.Value.GetRawText();
             display.ActiveScreenCount = ActiveScreenCountFromHardware(hardware.Value);
             display.LastSeenAt = DateTime.UtcNow;
             PersistDisplay(display);
+            var changed = previousScreenCount != display.ActiveScreenCount;
+            if (changed)
+                DisplaysChanged?.Invoke(this, EventArgs.Empty);
+            return changed;
         }
+    }
+
+    public async Task<RdisplayActionResult> ProbeDisplayHardwareAsync(long id, CancellationToken ct = default)
+    {
+        var display = GetDisplay(id);
+        if (display is null)
+            return RdisplayActionResult.Fail("Display not found.");
+
+        var hardware = await ProbeHardwareAsync(display.Host, display.Port, ct);
+        if (!hardware.IsSuccess)
+            return RdisplayActionResult.Fail($"Hardware probe failed: {hardware.ErrorMessage}");
+
+        using var doc = JsonDocument.Parse(hardware.HardwareJson ?? "{}");
+        var changed = UpdateHardware(id, doc.RootElement);
+        if (changed)
+            await PushToAllAsync(ct);
+
+        return RdisplayActionResult.Ok();
     }
 
     public async Task<RdisplayRegisterResult> RegisterAsync(
@@ -125,41 +151,27 @@ public sealed class RdisplayService : IDisposable
             return RdisplayRegisterResult.Fail($"Hardware probe failed: {hardware.ErrorMessage}");
 
         var token = GenerateAuthToken();
+        var serverUrl = OwnServerUrl();
         var payload = new JsonObject
         {
-            ["server_url"] = OwnServerUrl(),
+            ["server_url"] = serverUrl,
             ["slug"] = display.Slug,
             ["auth_token"] = token,
             ["display_config"] = BuildDisplayConfigJson()
         };
+        var bodyJson = payload.ToJsonString();
 
-        using var req = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"http://{cleanHost}:{port}/api/display/register")
+        var register = await SendRegisterAsync(cleanHost, port, bodyJson, display.AuthToken, ct);
+        if (!register.IsSuccess && !string.IsNullOrWhiteSpace(display.AuthToken))
+            register = await SendRegisterAsync(cleanHost, port, bodyJson, null, ct);
+        if (!register.IsSuccess && register.StatusCode == 409)
         {
-            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
-        };
-        if (!string.IsNullOrWhiteSpace(display.AuthToken))
-            req.Headers.Add("X-Display-Token", display.AuthToken);
-
-        try
-        {
-            using var resp = await _http.SendAsync(req, ct);
-            if (!resp.IsSuccessStatusCode)
-            {
-                var body = await resp.Content.ReadAsStringAsync(ct);
-                return RdisplayRegisterResult.Fail(
-                    $"Display rejected register (HTTP {(int)resp.StatusCode}): {Truncate(body, 220)}");
-            }
+            var reset = await ForceResetByHostAsync(cleanHost, port, ct);
+            if (reset)
+                register = await SendRegisterAsync(cleanHost, port, bodyJson, null, ct);
         }
-        catch (TaskCanceledException)
-        {
-            return RdisplayRegisterResult.Fail("Timed out reaching display.");
-        }
-        catch (Exception ex)
-        {
-            return RdisplayRegisterResult.Fail($"Could not reach display: {ex.Message}");
-        }
+        if (!register.IsSuccess)
+            return RdisplayRegisterResult.Fail(BuildRegisterError(register));
 
         lock (_gate)
         {
@@ -169,9 +181,11 @@ public sealed class RdisplayService : IDisposable
             mutable.ActiveScreenCount = ActiveScreenCountFromHardware(hardware.HardwareJson);
             mutable.LastRegisteredAt = DateTime.UtcNow;
             mutable.LastSeenAt = DateTime.UtcNow;
+            mutable.LastServerUrl = serverUrl;
             mutable.IsActive = true;
             PersistDisplay(mutable);
         }
+        DisplaysChanged?.Invoke(this, EventArgs.Empty);
 
         var registered = GetDisplay(id)!;
         await PushSnapshotAsync(registered, ct);
@@ -187,10 +201,14 @@ public sealed class RdisplayService : IDisposable
         if (!display.IsRegistered)
             return RdisplayActionResult.Fail("Display is not registered.");
 
+        UpdateLastServerUrl(display.Id, OwnServerUrl());
+        var configPushed = await PushConfigAsync(display, ct);
         var pushed = await PushSnapshotAndImagesAsync(display, ct);
         return pushed
             ? RdisplayActionResult.Ok()
-            : RdisplayActionResult.Fail("Display did not accept the refresh.");
+            : configPushed
+                ? RdisplayActionResult.Ok()
+                : RdisplayActionResult.Fail("Display did not accept the refresh. If the display was reinstalled, deregister it on the display and register again.");
     }
 
     public async Task<RdisplayActionResult> UnregisterAsync(long id, CancellationToken ct = default)
@@ -222,6 +240,7 @@ public sealed class RdisplayService : IDisposable
         try
         {
             _store.DeleteRdisplayDisplay(id);
+            DisplaysChanged?.Invoke(this, EventArgs.Empty);
         }
         catch
         {
@@ -372,9 +391,75 @@ public sealed class RdisplayService : IDisposable
             await PostToDisplayAsync(display, "/api/display/event", new Dictionary<string, object?>
             {
                 ["type"] = "image_ready",
+                ["server_url"] = OwnServerUrl(),
                 ["game_id"] = gameId
             }, ct);
         }
+    }
+
+    private async Task<RegisterPostResult> SendRegisterAsync(
+        string host,
+        int port,
+        string bodyJson,
+        string? existingToken,
+        CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"http://{host}:{port}/api/display/register")
+        {
+            Content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
+        };
+        if (!string.IsNullOrWhiteSpace(existingToken))
+            req.Headers.Add("X-Display-Token", existingToken);
+
+        try
+        {
+            using var resp = await _http.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode)
+                return RegisterPostResult.Ok();
+
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return RegisterPostResult.Rejected((int)resp.StatusCode, body);
+        }
+        catch (TaskCanceledException)
+        {
+            return RegisterPostResult.Failed("Timed out reaching display.");
+        }
+        catch (Exception ex)
+        {
+            return RegisterPostResult.Failed($"Could not reach display: {ex.Message}");
+        }
+    }
+
+    private async Task<bool> ForceResetByHostAsync(string host, int port, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"http://{host}:{port}/health");
+        req.Headers.Add(MasterResetHeader, MasterResetToken);
+
+        try
+        {
+            using var resp = await _http.SendAsync(req, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildRegisterError(RegisterPostResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return result.ErrorMessage;
+
+        var body = string.IsNullOrWhiteSpace(result.Body)
+            ? string.Empty
+            : $": {Truncate(result.Body, 220)}";
+        var message = $"Display rejected register (HTTP {result.StatusCode}){body}";
+        if (result.StatusCode == 409)
+            message += ". The display is already registered with another token and did not accept the recovery reset.";
+        return message;
     }
 
     private async Task<bool> PostToDisplayAsync(
@@ -544,9 +629,43 @@ public sealed class RdisplayService : IDisposable
     {
         var total = TryGetInt(hardware, "displays_total");
         var connected = TryGetInt(hardware, "displays_connected");
+        if ((total <= 0 || connected <= 0) &&
+            TryCountConnectedDisplays(hardware, out var countedTotal, out var countedConnected))
+        {
+            total = countedTotal;
+            connected = countedConnected;
+        }
+
         if (total <= 0)
             return 1;
         return Math.Clamp(connected, 0, total);
+    }
+
+    private static bool TryCountConnectedDisplays(JsonElement hardware, out int total, out int connected)
+    {
+        total = 0;
+        connected = 0;
+        if (!hardware.TryGetProperty("displays", out var displays) ||
+            displays.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var display in displays.EnumerateArray())
+        {
+            if (display.ValueKind != JsonValueKind.Object)
+                continue;
+
+            total++;
+            if (display.TryGetProperty("status", out var status) &&
+                status.ValueKind == JsonValueKind.String &&
+                string.Equals(status.GetString(), "connected", StringComparison.OrdinalIgnoreCase))
+            {
+                connected++;
+            }
+        }
+
+        return total > 0;
     }
 
     private static int TryGetInt(JsonElement obj, string name)
@@ -619,7 +738,8 @@ public sealed class RdisplayService : IDisposable
             LastSeenAt = display.LastSeenAtUtc,
             AuthToken = display.AuthToken,
             HardwareJson = display.HardwareJson,
-            LastRegisteredAt = display.LastRegisteredAtUtc
+            LastRegisteredAt = display.LastRegisteredAtUtc,
+            LastServerUrl = display.LastServerUrl
         };
 
     private void PersistDisplay(RdisplayRegistration display)
@@ -639,11 +759,25 @@ public sealed class RdisplayService : IDisposable
                 display.LastSeenAt,
                 display.AuthToken,
                 display.HardwareJson,
-                display.LastRegisteredAt));
+                display.LastRegisteredAt,
+                display.LastServerUrl));
         }
         catch
         {
             // Display state is runtime-support data; callers still proceed.
+        }
+    }
+
+    private void UpdateLastServerUrl(long displayId, string serverUrl)
+    {
+        lock (_gate)
+        {
+            var display = _displays.FirstOrDefault(d => d.Id == displayId);
+            if (display is null)
+                return;
+
+            display.LastServerUrl = serverUrl;
+            PersistDisplay(display);
         }
     }
 
@@ -713,6 +847,17 @@ public sealed class RdisplayService : IDisposable
         RdisplayRegistration Display,
         int LocalScreenIndex,
         int GlobalScreenIndex);
+
+    private sealed record RegisterPostResult(
+        bool IsSuccess,
+        int? StatusCode,
+        string? Body,
+        string? ErrorMessage)
+    {
+        public static RegisterPostResult Ok() => new(true, null, null, null);
+        public static RegisterPostResult Rejected(int statusCode, string body) => new(false, statusCode, body, null);
+        public static RegisterPostResult Failed(string message) => new(false, null, null, message);
+    }
 }
 
 public sealed record RdisplayTileState(
@@ -737,6 +882,7 @@ public sealed record RdisplayRegistration
     public string? AuthToken { get; set; }
     public string? HardwareJson { get; set; }
     public DateTime? LastRegisteredAt { get; set; }
+    public string? LastServerUrl { get; set; }
     public string BaseUrl => $"http://{Host}:{Port}";
     public bool IsRegistered => !string.IsNullOrWhiteSpace(AuthToken);
 }
