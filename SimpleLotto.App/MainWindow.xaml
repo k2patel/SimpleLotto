@@ -72,11 +72,15 @@
                 <StackPanel Spacing="8">
                     <Grid>
                         <Button x:Name="NavToggleButton"
-                                Content="&lt;-"
                                 Width="42"
                                 Height="32"
                                 HorizontalAlignment="Right"
-                                Click="NavToggleButton_Click"/>
+                                Click="NavToggleButton_Click"
+                                ToolTipService.ToolTip="Collapse navigation">
+                            <FontIcon x:Name="NavToggleIcon"
+                                      Glyph="&#xE76B;"
+                                      FontSize="16"/>
+                        </Button>
                     </Grid>
 
                     <Button Tag="Dashboard"
@@ -463,30 +467,41 @@
                                                 <DataTemplate>
                                                     <Border Width="{StaticResource SlBinTileSize}"
                                                             Height="{StaticResource SlBinTileSize}"
-                                                            Padding="4,2"
+                                                            Padding="3"
                                                             CornerRadius="6"
                                                             BorderBrush="{Binding BorderBrush}"
                                                             BorderThickness="1"
                                                             Background="{Binding BackgroundBrush}"
+                                                            ToolTipService.ToolTip="{Binding TooltipText}"
                                                             Tapped="BinTile_Tapped">
-                                                        <StackPanel Spacing="0"
-                                                                    HorizontalAlignment="Stretch"
-                                                                    VerticalAlignment="Center">
-                                                            <TextBlock Text="{Binding BinText}"
-                                                                       Foreground="{Binding ForegroundBrush}"
-                                                                       FontSize="16"
-                                                                       FontWeight="Bold"
-                                                                       HorizontalAlignment="Stretch"
-                                                                       TextAlignment="Center"/>
+                                                        <Grid RowSpacing="2">
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="*"/>
+                                                            </Grid.RowDefinitions>
+                                                            <Border Background="{Binding RibbonBrush}"
+                                                                    BorderBrush="{Binding RibbonBorderBrush}"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="4"
+                                                                    Padding="2,0">
+                                                                <TextBlock Text="{Binding BinText}"
+                                                                           Foreground="{Binding RibbonForegroundBrush}"
+                                                                           FontSize="11"
+                                                                           FontWeight="Bold"
+                                                                           HorizontalAlignment="Stretch"
+                                                                           TextAlignment="Center"/>
+                                                            </Border>
                                                             <TextBlock Text="{Binding GameTextShort}"
+                                                                       Grid.Row="1"
                                                                        Foreground="{Binding ForegroundBrush}"
                                                                        FontSize="12"
                                                                        HorizontalAlignment="Stretch"
+                                                                       VerticalAlignment="Center"
                                                                        TextAlignment="Center"
                                                                        TextTrimming="CharacterEllipsis"
                                                                        MaxLines="1"
                                                                        Visibility="{Binding GameTextVisibility}"/>
-                                                        </StackPanel>
+                                                        </Grid>
                                                     </Border>
                                                 </DataTemplate>
                                             </GridView.ItemTemplate>
@@ -1400,6 +1415,29 @@
                                                     <Button Content="Register Rdisplay"
                                                             HorizontalAlignment="Stretch"
                                                             Click="RegisterDisplayButton_Click"/>
+                                                    <Grid ColumnSpacing="8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="112"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <CheckBox x:Name="DisplayBurnInCheckBox"
+                                                                  Content="Burn-in protection"
+                                                                  IsChecked="True"
+                                                                  VerticalAlignment="Center"/>
+                                                        <NumberBox x:Name="DisplayBurnInIntervalBox"
+                                                                   Grid.Column="1"
+                                                                   Header="Minutes"
+                                                                   Value="15"
+                                                                   Minimum="1"
+                                                                   Maximum="1440"
+                                                                   SpinButtonPlacementMode="Compact"/>
+                                                    </Grid>
+                                                    <TextBlock Text="Burn-in protection periodically runs the Rdisplay sweep to reduce image persistence."
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
+                                                    <Button Content="Save Display Settings"
+                                                            HorizontalAlignment="Stretch"
+                                                            Click="SaveScannerSettingsButton_Click"/>
                                                     <TextBlock x:Name="DisplayStatusText"
                                                                Text="No display registered."
                                                                Foreground="{ThemeResource SlTextBrush}"
@@ -1413,7 +1451,12 @@
                                                 <RowDefinition Height="Auto"/>
                                                 <RowDefinition Height="*"/>
                                             </Grid.RowDefinitions>
-                                            <StackPanel Spacing="2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0"
+                                                        Spacing="2">
                                                 <TextBlock Text="Registered Displays"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                                 <TextBlock x:Name="RegisteredDisplaysEmptyText"
@@ -1421,10 +1464,26 @@
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
                                             </StackPanel>
+                                            <StackPanel Grid.Row="0"
+                                                        Grid.Column="1"
+                                                        Orientation="Horizontal"
+                                                        Spacing="8"
+                                                        HorizontalAlignment="Right">
+                                                <Button x:Name="RefreshSelectedDisplayButton"
+                                                        Content="Refresh Screen"
+                                                        IsEnabled="False"
+                                                        Click="RefreshSelectedDisplayButton_Click"/>
+                                                <Button x:Name="DeregisterSelectedDisplayButton"
+                                                        Content="Deregister"
+                                                        IsEnabled="False"
+                                                        Click="DeregisterSelectedDisplayButton_Click"/>
+                                            </StackPanel>
                                             <ListView x:Name="RegisteredDisplaysListView"
                                                       Grid.Row="1"
+                                                      Grid.ColumnSpan="2"
                                                       MinHeight="180"
-                                                      SelectionMode="None">
+                                                      SelectionMode="Single"
+                                                      SelectionChanged="RegisteredDisplaysListView_SelectionChanged">
                                                 <ListView.ItemContainerStyle>
                                                     <Style TargetType="ListViewItem">
                                                         <Setter Property="Margin" Value="0,0,0,8"/>

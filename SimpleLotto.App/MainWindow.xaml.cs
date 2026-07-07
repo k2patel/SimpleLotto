@@ -84,6 +84,8 @@ public sealed partial class MainWindow : Window
     private string _storeCity = string.Empty;
     private int _configuredBinCount = 90;
     private int _scanPairTimeoutSeconds = 5;
+    private bool _displayBurnInEnabled = true;
+    private int _displayBurnInIntervalMinutes = 15;
     private string _scannerVid = string.Empty;
     private string _scannerPid = string.Empty;
     private string _scannerSerial = string.Empty;
@@ -112,6 +114,8 @@ public sealed partial class MainWindow : Window
     private const string ScannerPidSettingKey = "barcode_scanner_pid";
     private const string ScannerSerialSettingKey = "barcode_scanner_serial";
     private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
+    private const string DisplayBurnInEnabledSettingKey = "display_burn_in_enabled";
+    private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
     private const string LicenseStatusSettingKey = "license_status";
     private const string LicenseLastCheckUtcSettingKey = "license_last_check_utc";
     private const string EmailSendClosingSettingKey = "email_send_closing";
@@ -259,6 +263,8 @@ public sealed partial class MainWindow : Window
         _storeCity = ReadSetting(state, "store_city");
         _configuredBinCount = Math.Clamp(ReadIntSetting(state, "configured_bin_count", 90), 1, 500);
         _scanPairTimeoutSeconds = Math.Clamp(ReadIntSetting(state, ScanPairTimeoutSettingKey, 5), 1, 30);
+        _displayBurnInEnabled = ReadBoolSetting(state, DisplayBurnInEnabledSettingKey, true);
+        _displayBurnInIntervalMinutes = Math.Clamp(ReadIntSetting(state, DisplayBurnInIntervalSettingKey, 15), 1, 1440);
         _scannerVid = ReadSetting(state, ScannerVidSettingKey);
         _scannerPid = ReadSetting(state, ScannerPidSettingKey);
         _scannerSerial = ReadSetting(state, ScannerSerialSettingKey);
@@ -272,6 +278,9 @@ public sealed partial class MainWindow : Window
         StoreCityBox.Text = _storeCity;
         BinCountBox.Value = _configuredBinCount;
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
+        DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
+        _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
         ManagerPasswordBox.Password = string.Empty;
         ClerkNameBox.Text = _clerkName;
         ClerkPasswordBox.Password = string.Empty;
@@ -1954,7 +1963,8 @@ public sealed partial class MainWindow : Window
     {
         _isNavCollapsed = collapsed;
         NavColumn.Width = new GridLength(_isNavCollapsed ? 64 : 190);
-        NavToggleButton.Content = _isNavCollapsed ? "->" : "<-";
+        NavToggleIcon.Glyph = _isNavCollapsed ? "\uE76C" : "\uE76B";
+        ToolTipService.SetToolTip(NavToggleButton, _isNavCollapsed ? "Expand navigation" : "Collapse navigation");
         var labelVisibility = _isNavCollapsed ? Visibility.Collapsed : Visibility.Visible;
         DashboardNavLabel.Visibility = labelVisibility;
         BinsNavLabel.Visibility = labelVisibility;
@@ -2558,6 +2568,8 @@ public sealed partial class MainWindow : Window
         RefreshLicenseRegistrationStatus();
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
+        DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
         RefreshScannerPairingStatus();
         RefreshRegisteredDisplayCards();
         var registered = _registeredDisplayCards.Count;
@@ -2593,6 +2605,17 @@ public sealed partial class MainWindow : Window
         RegisteredDisplaysEmptyText.Visibility = _registeredDisplayCards.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
+        UpdateRegisteredDisplayActionState();
+    }
+
+    private void RegisteredDisplaysListView_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateRegisteredDisplayActionState();
+
+    private void UpdateRegisteredDisplayActionState()
+    {
+        var hasSelected = RegisteredDisplaysListView.SelectedItem is RegisteredDisplayCard;
+        RefreshSelectedDisplayButton.IsEnabled = hasSelected;
+        DeregisterSelectedDisplayButton.IsEnabled = hasSelected;
     }
 
     private void RefreshScannerPairingStatus()
@@ -3517,10 +3540,16 @@ public sealed partial class MainWindow : Window
     private void SaveScannerSettingsButton_Click(object sender, RoutedEventArgs e)
     {
         _scanPairTimeoutSeconds = Math.Clamp(CoerceInt(ScanPairTimeoutBox.Value, 5), 1, 30);
+        _displayBurnInEnabled = DisplayBurnInCheckBox.IsChecked == true;
+        _displayBurnInIntervalMinutes = Math.Clamp(CoerceInt(DisplayBurnInIntervalBox.Value, 15), 1, 1440);
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
         SaveSetting(ScanPairTimeoutSettingKey, _scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
+        SaveSetting(DisplayBurnInEnabledSettingKey, BoolSetting(_displayBurnInEnabled));
+        SaveSetting(DisplayBurnInIntervalSettingKey, _displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture));
+        _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
-        ScannerPairingStatusText.Text = "Scanner settings saved.";
+        ScannerPairingStatusText.Text = "Scanner and display settings saved.";
     }
 
     private void CheckLicenseButton_Click(object sender, RoutedEventArgs e)
@@ -3697,6 +3726,7 @@ public sealed partial class MainWindow : Window
         var host = DisplayHostBox.Text.Trim();
         var port = CoerceInt(DisplayPortBox.Value, 5001);
         DisplayStatusText.Text = "Registering Rdisplay...";
+        _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
 
         var result = await _rdisplay.RegisterAsync(host, port);
         if (!result.IsSuccess || result.Display is null)
@@ -3708,6 +3738,51 @@ public sealed partial class MainWindow : Window
         DisplayStatusText.Text = $"Registered {result.Display.Name} at {result.Display.BaseUrl}.";
         RefreshRegisteredDisplayCards();
         SyncRdisplayTiles();
+    }
+
+    private async void RefreshSelectedDisplayButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (RegisteredDisplaysListView.SelectedItem is not RegisteredDisplayCard display)
+        {
+            DisplayStatusText.Text = "Select a registered display before refreshing.";
+            return;
+        }
+
+        DisplayStatusText.Text = $"Refreshing {display.Name}...";
+        var result = await _rdisplay.RefreshDisplayAsync(display.Id);
+        DisplayStatusText.Text = result.IsSuccess
+            ? $"Refresh sent to {display.Name}."
+            : result.ErrorMessage ?? "Display refresh failed.";
+    }
+
+    private async void DeregisterSelectedDisplayButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (RegisteredDisplaysListView.SelectedItem is not RegisteredDisplayCard display)
+        {
+            DisplayStatusText.Text = "Select a registered display before deregistering.";
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Deregister Rdisplay?",
+            Content = $"Deregister {display.Name} at {display.Endpoint}? The display will need to be registered again before it can show SimpleLotto tiles.",
+            PrimaryButtonText = "Deregister",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+
+        var response = await dialog.ShowAsync();
+        if (response != ContentDialogResult.Primary)
+            return;
+
+        DisplayStatusText.Text = $"Deregistering {display.Name}...";
+        var result = await _rdisplay.UnregisterAsync(display.Id);
+        DisplayStatusText.Text = result.IsSuccess
+            ? $"{display.Name} deregistered."
+            : result.ErrorMessage ?? "Deregister failed.";
+        RefreshRegisteredDisplayCards();
     }
 
     private void BackupNowButton_Click(object sender, RoutedEventArgs e)
@@ -3931,16 +4006,6 @@ public sealed partial class MainWindow : Window
             : manual.Name.Trim();
     }
 
-    private static string CompactGameName(string gameName)
-    {
-        var text = string.IsNullOrWhiteSpace(gameName)
-            ? string.Empty
-            : gameName.Trim();
-
-        const int maxLength = 8;
-        return text.Length <= maxLength ? text : text[..maxLength];
-    }
-
     private void ResizeWindow(int widthDip, int heightDip)
     {
         var hwnd = WindowNative.GetWindowHandle(this);
@@ -3956,8 +4021,11 @@ public sealed partial class MainWindow : Window
         string GameName,
         BinActivity Activity)
     {
-        public string BinText => Number.ToString(CultureInfo.InvariantCulture);
-        public string GameTextShort => BundleCount == 0 ? string.Empty : CompactGameName(GameName);
+        public string BinText => $"Bin {Number.ToString(CultureInfo.InvariantCulture)}";
+        public string GameTextShort => BundleCount == 0 ? string.Empty : GameName;
+        public string TooltipText => BundleCount == 0
+            ? $"Bin {Number.ToString(CultureInfo.CurrentCulture)} is empty."
+            : $"Bin {Number.ToString(CultureInfo.CurrentCulture)} | {GameName}";
         public Visibility GameTextVisibility => BundleCount == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -3978,6 +4046,18 @@ public sealed partial class MainWindow : Window
                 _ => LowTileStackedBrush
             };
         public Brush ForegroundBrush => DarkTileTextBrush;
+        public Brush RibbonBrush => BundleCount == 0
+            ? EmptyTileBrush
+            : Activity switch
+            {
+                BinActivity.High => HighTileStackedBrush,
+                BinActivity.Medium => MediumTileStackedBrush,
+                _ => LowTileStackedBrush
+            };
+        public Brush RibbonBorderBrush => BundleCount == 0
+            ? EmptyTileBorderBrush
+            : BorderBrush;
+        public Brush RibbonForegroundBrush => DarkTileTextBrush;
 
         public static BinCard From(
             int number,
@@ -4099,6 +4179,7 @@ public sealed partial class MainWindow : Window
     private sealed record ClosingScanRow(string ScannedText, string Status);
 
     private sealed record RegisteredDisplayCard(
+        long Id,
         string Name,
         string Endpoint,
         string Status,
@@ -4122,6 +4203,7 @@ public sealed partial class MainWindow : Window
                 : "Inactive";
 
             return new RegisteredDisplayCard(
+                display.Id,
                 display.Name,
                 display.BaseUrl,
                 status,

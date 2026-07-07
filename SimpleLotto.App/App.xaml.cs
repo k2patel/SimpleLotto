@@ -6,14 +6,15 @@ namespace SimpleLotto.App;
 
 public partial class App : Application
 {
-    private readonly RdisplayService _rdisplay = new();
     private readonly LocalStore _store = new();
+    private readonly RdisplayService _rdisplay;
     private readonly RdisplayApiHost _rdisplayApiHost;
     private Window? _window;
 
     public App()
     {
         InitializeComponent();
+        _rdisplay = new RdisplayService(_store);
         _rdisplayApiHost = new RdisplayApiHost(_rdisplay, _store);
     }
 

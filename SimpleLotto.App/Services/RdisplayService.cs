@@ -17,11 +17,20 @@ public sealed class RdisplayService : IDisposable
 {
     public const int ApiPort = 5000;
 
+    private readonly LocalStore _store;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly object _gate = new();
     private readonly List<RdisplayRegistration> _displays = new();
     private readonly List<RdisplayTileState> _tiles = new();
     private long _nextDisplayId = 1;
+    private bool _burnInEnabled = true;
+    private int _burnInIntervalMinutes = 15;
+
+    public RdisplayService(LocalStore store)
+    {
+        _store = store;
+        LoadPersistedDisplays();
+    }
 
     public IReadOnlyList<RdisplayRegistration> Displays
     {
@@ -43,6 +52,17 @@ public sealed class RdisplayService : IDisposable
         _ = PushToAllAsync();
     }
 
+    public void ConfigureDisplaySettings(bool burnInEnabled, int burnInIntervalMinutes)
+    {
+        lock (_gate)
+        {
+            _burnInEnabled = burnInEnabled;
+            _burnInIntervalMinutes = Math.Clamp(burnInIntervalMinutes, 1, 1440);
+        }
+
+        _ = PushConfigToAllAsync();
+    }
+
     public RdisplayRegistration? LookupByAuthToken(string? authToken)
     {
         if (string.IsNullOrWhiteSpace(authToken))
@@ -56,7 +76,9 @@ public sealed class RdisplayService : IDisposable
                 return null;
 
             display.LastSeenAt = DateTime.UtcNow;
-            return display with { };
+            var copy = display with { };
+            PersistDisplay(copy);
+            return copy;
         }
     }
 
@@ -77,6 +99,7 @@ public sealed class RdisplayService : IDisposable
             display.HardwareJson = hardware.Value.GetRawText();
             display.ActiveScreenCount = ActiveScreenCountFromHardware(hardware.Value);
             display.LastSeenAt = DateTime.UtcNow;
+            PersistDisplay(display);
         }
     }
 
@@ -107,15 +130,7 @@ public sealed class RdisplayService : IDisposable
             ["server_url"] = OwnServerUrl(),
             ["slug"] = display.Slug,
             ["auth_token"] = token,
-            ["display_config"] = new JsonObject
-            {
-                ["show_price"] = true,
-                ["show_remaining_count"] = false,
-                ["serial_contrast"] = "auto",
-                ["layout_mode"] = "auto",
-                ["burn_in_enabled"] = true,
-                ["burn_in_interval_minutes"] = 15
-            }
+            ["display_config"] = BuildDisplayConfigJson()
         };
 
         using var req = new HttpRequestMessage(
@@ -155,12 +170,65 @@ public sealed class RdisplayService : IDisposable
             mutable.LastRegisteredAt = DateTime.UtcNow;
             mutable.LastSeenAt = DateTime.UtcNow;
             mutable.IsActive = true;
+            PersistDisplay(mutable);
         }
 
         var registered = GetDisplay(id)!;
         await PushSnapshotAsync(registered, ct);
         await PushImageReadyForDisplayAsync(registered, ct);
         return RdisplayRegisterResult.Ok(registered);
+    }
+
+    public async Task<RdisplayActionResult> RefreshDisplayAsync(long id, CancellationToken ct = default)
+    {
+        var display = GetDisplay(id);
+        if (display is null)
+            return RdisplayActionResult.Fail("Display not found.");
+        if (!display.IsRegistered)
+            return RdisplayActionResult.Fail("Display is not registered.");
+
+        var pushed = await PushSnapshotAndImagesAsync(display, ct);
+        return pushed
+            ? RdisplayActionResult.Ok()
+            : RdisplayActionResult.Fail("Display did not accept the refresh.");
+    }
+
+    public async Task<RdisplayActionResult> UnregisterAsync(long id, CancellationToken ct = default)
+    {
+        var display = GetDisplay(id);
+        if (display is null)
+            return RdisplayActionResult.Fail("Display not found.");
+
+        if (!string.IsNullOrWhiteSpace(display.AuthToken))
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{display.BaseUrl}/api/display/unregister")
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
+            };
+            req.Headers.Add("X-Display-Token", display.AuthToken);
+            try
+            {
+                using var response = await _http.SendAsync(req, ct);
+            }
+            catch
+            {
+                // Local deregistration still proceeds; the display can be registered again later.
+            }
+        }
+
+        lock (_gate)
+            _displays.RemoveAll(d => d.Id == id);
+
+        try
+        {
+            _store.DeleteRdisplayDisplay(id);
+        }
+        catch
+        {
+            return RdisplayActionResult.Fail("Display was removed from memory, but SQLite cleanup failed.");
+        }
+
+        return RdisplayActionResult.Ok();
     }
 
     public Dictionary<string, object?> BuildSnapshotPayloadForDisplay(RdisplayRegistration display)
@@ -242,20 +310,47 @@ public sealed class RdisplayService : IDisposable
         return PushManyAsync(displays, ct);
     }
 
+    public Task PushConfigToAllAsync(CancellationToken ct = default)
+    {
+        List<RdisplayRegistration> displays;
+        lock (_gate)
+        {
+            displays = _displays
+                .Where(d => d.IsActive && d.IsRegistered)
+                .Select(d => d with { })
+                .ToList();
+        }
+
+        return PushConfigManyAsync(displays, ct);
+    }
+
     private async Task PushManyAsync(IEnumerable<RdisplayRegistration> displays, CancellationToken ct)
     {
         foreach (var display in displays)
             await PushSnapshotAndImagesAsync(display, ct);
     }
 
+    private async Task PushConfigManyAsync(IEnumerable<RdisplayRegistration> displays, CancellationToken ct)
+    {
+        foreach (var display in displays)
+            await PushConfigAsync(display, ct);
+    }
+
     private Task<bool> PushSnapshotAsync(RdisplayRegistration display, CancellationToken ct = default) =>
         PostToDisplayAsync(display, "/api/display/snapshot", BuildSnapshotPayloadForDisplay(display), ct);
 
-    private async Task PushSnapshotAndImagesAsync(RdisplayRegistration display, CancellationToken ct = default)
+    private async Task<bool> PushSnapshotAndImagesAsync(RdisplayRegistration display, CancellationToken ct = default)
     {
-        await PushSnapshotAsync(display, ct);
+        var pushed = await PushSnapshotAsync(display, ct);
         await PushImageReadyForDisplayAsync(display, ct);
+        return pushed;
     }
+
+    private Task<bool> PushConfigAsync(RdisplayRegistration display, CancellationToken ct = default) =>
+        PostToDisplayAsync(display, "/api/display/config", new Dictionary<string, object?>
+        {
+            ["display_config"] = BuildDisplayConfigDictionary()
+        }, ct);
 
     private async Task PushImageReadyForDisplayAsync(RdisplayRegistration display, CancellationToken ct = default)
     {
@@ -332,6 +427,7 @@ public sealed class RdisplayService : IDisposable
                 CreatedAt = DateTime.UtcNow
             };
             _displays.Add(row);
+            PersistDisplay(row);
             return row.Id;
         }
     }
@@ -486,6 +582,96 @@ public sealed class RdisplayService : IDisposable
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    private void LoadPersistedDisplays()
+    {
+        try
+        {
+            var state = _store.Load();
+            lock (_gate)
+            {
+                _displays.Clear();
+                _displays.AddRange(state.RdisplayDisplays.Select(ToRegistration));
+                _nextDisplayId = _displays.Count == 0 ? 1 : _displays.Max(d => d.Id) + 1;
+            }
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                _displays.Clear();
+                _nextDisplayId = 1;
+            }
+        }
+    }
+
+    private static RdisplayRegistration ToRegistration(StoredRdisplayDisplay display) =>
+        new()
+        {
+            Id = display.Id,
+            Slug = display.Slug,
+            Name = display.Name,
+            Host = display.Host,
+            Port = display.Port,
+            ScreenOrder = display.ScreenOrder,
+            IsActive = display.IsActive,
+            ActiveScreenCount = display.ActiveScreenCount,
+            CreatedAt = display.CreatedAtUtc,
+            LastSeenAt = display.LastSeenAtUtc,
+            AuthToken = display.AuthToken,
+            HardwareJson = display.HardwareJson,
+            LastRegisteredAt = display.LastRegisteredAtUtc
+        };
+
+    private void PersistDisplay(RdisplayRegistration display)
+    {
+        try
+        {
+            _store.UpsertRdisplayDisplay(new StoredRdisplayDisplay(
+                display.Id,
+                display.Slug,
+                display.Name,
+                display.Host,
+                display.Port,
+                display.ScreenOrder,
+                display.IsActive,
+                display.ActiveScreenCount,
+                display.CreatedAt,
+                display.LastSeenAt,
+                display.AuthToken,
+                display.HardwareJson,
+                display.LastRegisteredAt));
+        }
+        catch
+        {
+            // Display state is runtime-support data; callers still proceed.
+        }
+    }
+
+    private JsonObject BuildDisplayConfigJson()
+    {
+        var config = BuildDisplayConfigDictionary();
+        var obj = new JsonObject();
+        foreach (var kv in config)
+            obj[kv.Key] = ConvertToJsonNode(kv.Value);
+        return obj;
+    }
+
+    private Dictionary<string, object?> BuildDisplayConfigDictionary()
+    {
+        lock (_gate)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["show_price"] = true,
+                ["show_remaining_count"] = false,
+                ["serial_contrast"] = "auto",
+                ["layout_mode"] = "auto",
+                ["burn_in_enabled"] = _burnInEnabled,
+                ["burn_in_interval_minutes"] = _burnInIntervalMinutes
+            };
+        }
+    }
+
     private static JsonNode? ConvertToJsonNode(object? value)
     {
         switch (value)
@@ -565,6 +751,17 @@ public readonly record struct RdisplayRegisterResult(
 
     public static RdisplayRegisterResult Fail(string message) =>
         new(false, null, message);
+}
+
+public readonly record struct RdisplayActionResult(
+    bool IsSuccess,
+    string? ErrorMessage)
+{
+    public static RdisplayActionResult Ok() =>
+        new(true, null);
+
+    public static RdisplayActionResult Fail(string message) =>
+        new(false, message);
 }
 
 public readonly record struct HardwareProbeResult(

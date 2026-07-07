@@ -55,6 +55,7 @@ public sealed class LocalStore
         state.Imports.AddRange(QueryImports(conn));
         state.Sales.AddRange(QuerySales(conn));
         state.ManualGames.AddRange(QueryManualGames(conn));
+        state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
         return state;
     }
 
@@ -173,6 +174,56 @@ public sealed class LocalStore
         cmd.ExecuteNonQuery();
     }
 
+    public void UpsertRdisplayDisplay(StoredRdisplayDisplay display)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO rdisplay_displays (
+                id, slug, name, host, port, screen_order, is_active, active_screen_count,
+                created_at_utc, last_seen_at_utc, auth_token, hardware_json, last_registered_at_utc)
+            VALUES (
+                $id, $slug, $name, $host, $port, $screen_order, $is_active, $active_screen_count,
+                $created_at_utc, $last_seen_at_utc, $auth_token, $hardware_json, $last_registered_at_utc)
+            ON CONFLICT(id) DO UPDATE SET
+                slug = excluded.slug,
+                name = excluded.name,
+                host = excluded.host,
+                port = excluded.port,
+                screen_order = excluded.screen_order,
+                is_active = excluded.is_active,
+                active_screen_count = excluded.active_screen_count,
+                created_at_utc = excluded.created_at_utc,
+                last_seen_at_utc = excluded.last_seen_at_utc,
+                auth_token = excluded.auth_token,
+                hardware_json = excluded.hardware_json,
+                last_registered_at_utc = excluded.last_registered_at_utc
+            """;
+        cmd.Parameters.AddWithValue("$id", display.Id);
+        cmd.Parameters.AddWithValue("$slug", display.Slug);
+        cmd.Parameters.AddWithValue("$name", display.Name);
+        cmd.Parameters.AddWithValue("$host", display.Host);
+        cmd.Parameters.AddWithValue("$port", display.Port);
+        cmd.Parameters.AddWithValue("$screen_order", display.ScreenOrder);
+        cmd.Parameters.AddWithValue("$is_active", display.IsActive ? 1 : 0);
+        cmd.Parameters.AddWithValue("$active_screen_count", display.ActiveScreenCount);
+        cmd.Parameters.AddWithValue("$created_at_utc", display.CreatedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$last_seen_at_utc", NullableDateTimeValue(display.LastSeenAtUtc));
+        cmd.Parameters.AddWithValue("$auth_token", display.AuthToken ?? string.Empty);
+        cmd.Parameters.AddWithValue("$hardware_json", display.HardwareJson ?? string.Empty);
+        cmd.Parameters.AddWithValue("$last_registered_at_utc", NullableDateTimeValue(display.LastRegisteredAtUtc));
+        cmd.ExecuteNonQuery();
+    }
+
+    public void DeleteRdisplayDisplay(long id)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM rdisplay_displays WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.ExecuteNonQuery();
+    }
+
     private static void EnsureSchema(SqliteConnection conn)
     {
         lock (SchemaLock)
@@ -227,6 +278,24 @@ public sealed class LocalStore
                 )
                 """);
             EnsureColumn(conn, "manual_games", "price_cents", "INTEGER NOT NULL DEFAULT 0");
+            Exec(conn, """
+                CREATE TABLE IF NOT EXISTS rdisplay_displays (
+                    id INTEGER PRIMARY KEY,
+                    slug TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    screen_order INTEGER NOT NULL,
+                    is_active INTEGER NOT NULL,
+                    active_screen_count INTEGER NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    last_seen_at_utc TEXT NULL,
+                    auth_token TEXT NOT NULL,
+                    hardware_json TEXT NOT NULL,
+                    last_registered_at_utc TEXT NULL
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_rdisplay_displays_token ON rdisplay_displays(auth_token)");
             Exec(conn, "INSERT OR IGNORE INTO settings (key, value) VALUES ('schema_version', '1')");
             _schemaReady = true;
         }
@@ -280,6 +349,37 @@ public sealed class LocalStore
         return rows;
     }
 
+    private static List<StoredRdisplayDisplay> QueryRdisplayDisplays(SqliteConnection conn)
+    {
+        var rows = new List<StoredRdisplayDisplay>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, slug, name, host, port, screen_order, is_active, active_screen_count,
+                   created_at_utc, last_seen_at_utc, auth_token, hardware_json, last_registered_at_utc
+            FROM rdisplay_displays
+            ORDER BY screen_order, id
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new StoredRdisplayDisplay(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6) != 0,
+                reader.GetInt32(7),
+                ReadDateTime(reader.GetString(8)),
+                reader.IsDBNull(9) ? null : ReadNullableDateTime(reader.GetString(9)),
+                reader.IsDBNull(10) ? string.Empty : reader.GetString(10),
+                reader.IsDBNull(11) ? string.Empty : reader.GetString(11),
+                reader.IsDBNull(12) ? null : ReadNullableDateTime(reader.GetString(12))));
+        }
+        return rows;
+    }
+
     private static void EnsureColumn(SqliteConnection conn, string table, string column, string definition)
     {
         using (var check = conn.CreateCommand())
@@ -316,6 +416,21 @@ public sealed class LocalStore
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
     }
+
+    private static object NullableDateTimeValue(DateTime? value) =>
+        value is null
+            ? DBNull.Value
+            : value.Value.ToString("O", CultureInfo.InvariantCulture);
+
+    private static DateTime ReadDateTime(string value) =>
+        DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : DateTime.UtcNow;
+
+    private static DateTime? ReadNullableDateTime(string value) =>
+        DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
 }
 
 public sealed class PersistedState
@@ -324,6 +439,7 @@ public sealed class PersistedState
     public List<StoredImportLine> Imports { get; } = new();
     public List<StoredSaleLine> Sales { get; } = new();
     public List<StoredGameRecord> ManualGames { get; } = new();
+    public List<StoredRdisplayDisplay> RdisplayDisplays { get; } = new();
 }
 
 public sealed record StoreSetup(
@@ -356,3 +472,18 @@ public sealed record StoredGameRecord(
     string Source,
     string ImageUri,
     string ImageStatus);
+
+public sealed record StoredRdisplayDisplay(
+    long Id,
+    string Slug,
+    string Name,
+    string Host,
+    int Port,
+    int ScreenOrder,
+    bool IsActive,
+    int ActiveScreenCount,
+    DateTime CreatedAtUtc,
+    DateTime? LastSeenAtUtc,
+    string? AuthToken,
+    string? HardwareJson,
+    DateTime? LastRegisteredAtUtc);
