@@ -51,6 +51,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
     private readonly ObservableCollection<GameCatalogRecord> _pagedGameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
+    private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private readonly SpeechSynthesizer _speechSynthesizer = new();
     private readonly MediaPlayer _speechPlayer = new()
@@ -108,6 +109,17 @@ public sealed partial class MainWindow : Window
     private const string ScannerPidSettingKey = "barcode_scanner_pid";
     private const string ScannerSerialSettingKey = "barcode_scanner_serial";
     private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
+    private const string EmailSendClosingSettingKey = "email_send_closing";
+    private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
+    private const string EmailIncludeInventorySettingKey = "email_include_inventory";
+    private const string EmailIncludeSalesDetailSettingKey = "email_include_sales_detail";
+    private const string EmailIncludeCorrectionsSettingKey = "email_include_corrections";
+    private const string EmailIncludeAnomaliesSettingKey = "email_include_anomalies";
+    private const string EmailIncludePlacementEventsSettingKey = "email_include_placement_events";
+    private const string EmailIncludeBinAssignmentsSettingKey = "email_include_bin_assignments";
+    private const string EmailIncludeInitializationSettingKey = "email_include_initialization";
+    private const string EmailIncludeClosingAuditSettingKey = "email_include_closing_audit";
+    private const string EmailIncludePdfSettingKey = "email_include_pdf";
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -193,6 +205,7 @@ public sealed partial class MainWindow : Window
         InventoryListView.ItemsSource = _pagedInventoryRecords;
         GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
+        RegisteredDisplaysListView.ItemsSource = _registeredDisplayCards;
         OrderInventoryTabs();
         RootGrid.AddHandler(
             UIElement.KeyDownEvent,
@@ -262,6 +275,7 @@ public sealed partial class MainWindow : Window
         SmtpUserBox.Text = ReadSetting(state, "smtp_user");
         SmtpPasswordBox.Password = string.Empty;
         EmailToBox.Text = ReadSetting(state, "email_to");
+        ApplyClosingEmailSettings(state);
         SetScannerPaired(!string.IsNullOrWhiteSpace(_scannerVid) && !string.IsNullOrWhiteSpace(_scannerPid));
 
         var selectedState = StateOptions.FirstOrDefault(s => s.Code == _storeState);
@@ -358,11 +372,217 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void ApplyClosingEmailSettings(PersistedState state)
+    {
+        SetEmailCheckBoxPair(ClosingEmailSendCheckBox, SettingsEmailSendCheckBox, ReadBoolSetting(state, EmailSendClosingSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailShiftSummaryCheckBox, SettingsEmailShiftSummaryCheckBox, ReadBoolSetting(state, EmailIncludeShiftSummarySettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailInventoryCheckBox, SettingsEmailInventoryCheckBox, ReadBoolSetting(state, EmailIncludeInventorySettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailSalesDetailCheckBox, SettingsEmailSalesDetailCheckBox, ReadBoolSetting(state, EmailIncludeSalesDetailSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailCorrectionsCheckBox, SettingsEmailCorrectionsCheckBox, ReadBoolSetting(state, EmailIncludeCorrectionsSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailAnomaliesCheckBox, SettingsEmailAnomaliesCheckBox, ReadBoolSetting(state, EmailIncludeAnomaliesSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailPlacementEventsCheckBox, SettingsEmailPlacementEventsCheckBox, ReadBoolSetting(state, EmailIncludePlacementEventsSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailBinAssignmentsCheckBox, SettingsEmailBinAssignmentsCheckBox, ReadBoolSetting(state, EmailIncludeBinAssignmentsSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailInitializationCheckBox, SettingsEmailInitializationCheckBox, ReadBoolSetting(state, EmailIncludeInitializationSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailAuditCheckBox, SettingsEmailAuditCheckBox, ReadBoolSetting(state, EmailIncludeClosingAuditSettingKey, true));
+        SetEmailCheckBoxPair(ClosingEmailPdfCheckBox, SettingsEmailPdfCheckBox, ReadBoolSetting(state, EmailIncludePdfSettingKey, true));
+        UpdateClosingEmailSummary();
+        UpdateSettingsEmailSummary();
+    }
+
+    private static void SetEmailCheckBoxPair(CheckBox closingCheckBox, CheckBox settingsCheckBox, bool value)
+    {
+        closingCheckBox.IsChecked = value;
+        settingsCheckBox.IsChecked = value;
+    }
+
+    private bool SaveClosingEmailSettingsFromClosing() =>
+        SaveClosingEmailSettings(
+            ClosingEmailSendCheckBox,
+            ClosingEmailShiftSummaryCheckBox,
+            ClosingEmailInventoryCheckBox,
+            ClosingEmailSalesDetailCheckBox,
+            ClosingEmailCorrectionsCheckBox,
+            ClosingEmailAnomaliesCheckBox,
+            ClosingEmailPlacementEventsCheckBox,
+            ClosingEmailBinAssignmentsCheckBox,
+            ClosingEmailInitializationCheckBox,
+            ClosingEmailAuditCheckBox,
+            ClosingEmailPdfCheckBox);
+
+    private bool SaveClosingEmailSettingsFromSettings() =>
+        SaveClosingEmailSettings(
+            SettingsEmailSendCheckBox,
+            SettingsEmailShiftSummaryCheckBox,
+            SettingsEmailInventoryCheckBox,
+            SettingsEmailSalesDetailCheckBox,
+            SettingsEmailCorrectionsCheckBox,
+            SettingsEmailAnomaliesCheckBox,
+            SettingsEmailPlacementEventsCheckBox,
+            SettingsEmailBinAssignmentsCheckBox,
+            SettingsEmailInitializationCheckBox,
+            SettingsEmailAuditCheckBox,
+            SettingsEmailPdfCheckBox);
+
+    private bool SaveClosingEmailSettings(
+        CheckBox sendEmail,
+        CheckBox shiftSummary,
+        CheckBox inventory,
+        CheckBox salesDetail,
+        CheckBox corrections,
+        CheckBox anomalies,
+        CheckBox placementEvents,
+        CheckBox binAssignments,
+        CheckBox initialization,
+        CheckBox closingAudit,
+        CheckBox pdf)
+    {
+        var saved = SaveSetting(EmailSendClosingSettingKey, BoolSetting(sendEmail.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeShiftSummarySettingKey, BoolSetting(shiftSummary.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeInventorySettingKey, BoolSetting(inventory.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeSalesDetailSettingKey, BoolSetting(salesDetail.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeCorrectionsSettingKey, BoolSetting(corrections.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeAnomaliesSettingKey, BoolSetting(anomalies.IsChecked == true));
+        saved &= SaveSetting(EmailIncludePlacementEventsSettingKey, BoolSetting(placementEvents.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeBinAssignmentsSettingKey, BoolSetting(binAssignments.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeInitializationSettingKey, BoolSetting(initialization.IsChecked == true));
+        saved &= SaveSetting(EmailIncludeClosingAuditSettingKey, BoolSetting(closingAudit.IsChecked == true));
+        saved &= SaveSetting(EmailIncludePdfSettingKey, BoolSetting(pdf.IsChecked == true));
+        return saved;
+    }
+
+    private static string BoolSetting(bool value) => value ? "1" : "0";
+
+    private void CopyClosingEmailOptionsToSettings()
+    {
+        SettingsEmailSendCheckBox.IsChecked = ClosingEmailSendCheckBox.IsChecked;
+        SettingsEmailShiftSummaryCheckBox.IsChecked = ClosingEmailShiftSummaryCheckBox.IsChecked;
+        SettingsEmailInventoryCheckBox.IsChecked = ClosingEmailInventoryCheckBox.IsChecked;
+        SettingsEmailSalesDetailCheckBox.IsChecked = ClosingEmailSalesDetailCheckBox.IsChecked;
+        SettingsEmailCorrectionsCheckBox.IsChecked = ClosingEmailCorrectionsCheckBox.IsChecked;
+        SettingsEmailAnomaliesCheckBox.IsChecked = ClosingEmailAnomaliesCheckBox.IsChecked;
+        SettingsEmailPlacementEventsCheckBox.IsChecked = ClosingEmailPlacementEventsCheckBox.IsChecked;
+        SettingsEmailBinAssignmentsCheckBox.IsChecked = ClosingEmailBinAssignmentsCheckBox.IsChecked;
+        SettingsEmailInitializationCheckBox.IsChecked = ClosingEmailInitializationCheckBox.IsChecked;
+        SettingsEmailAuditCheckBox.IsChecked = ClosingEmailAuditCheckBox.IsChecked;
+        SettingsEmailPdfCheckBox.IsChecked = ClosingEmailPdfCheckBox.IsChecked;
+        UpdateSettingsEmailSummary();
+    }
+
+    private void CopySettingsEmailOptionsToClosing()
+    {
+        ClosingEmailSendCheckBox.IsChecked = SettingsEmailSendCheckBox.IsChecked;
+        ClosingEmailShiftSummaryCheckBox.IsChecked = SettingsEmailShiftSummaryCheckBox.IsChecked;
+        ClosingEmailInventoryCheckBox.IsChecked = SettingsEmailInventoryCheckBox.IsChecked;
+        ClosingEmailSalesDetailCheckBox.IsChecked = SettingsEmailSalesDetailCheckBox.IsChecked;
+        ClosingEmailCorrectionsCheckBox.IsChecked = SettingsEmailCorrectionsCheckBox.IsChecked;
+        ClosingEmailAnomaliesCheckBox.IsChecked = SettingsEmailAnomaliesCheckBox.IsChecked;
+        ClosingEmailPlacementEventsCheckBox.IsChecked = SettingsEmailPlacementEventsCheckBox.IsChecked;
+        ClosingEmailBinAssignmentsCheckBox.IsChecked = SettingsEmailBinAssignmentsCheckBox.IsChecked;
+        ClosingEmailInitializationCheckBox.IsChecked = SettingsEmailInitializationCheckBox.IsChecked;
+        ClosingEmailAuditCheckBox.IsChecked = SettingsEmailAuditCheckBox.IsChecked;
+        ClosingEmailPdfCheckBox.IsChecked = SettingsEmailPdfCheckBox.IsChecked;
+        UpdateClosingEmailSummary();
+    }
+
+    private void ClosingEmailOptionChanged(object sender, RoutedEventArgs e) =>
+        UpdateClosingEmailSummary();
+
+    private void SettingsEmailOptionChanged(object sender, RoutedEventArgs e) =>
+        UpdateSettingsEmailSummary();
+
+    private void UpdateClosingEmailSummary()
+    {
+        ClosingEmailChoicesStatusText.Text = BuildClosingEmailSummaryText(
+            ClosingEmailSendCheckBox.IsChecked == true,
+            SelectedClosingEmailReportNames());
+    }
+
+    private void UpdateSettingsEmailSummary()
+    {
+        SettingsEmailChoicesStatusText.Text = BuildClosingEmailSummaryText(
+            SettingsEmailSendCheckBox.IsChecked == true,
+            SelectedSettingsEmailReportNames());
+    }
+
+    private IReadOnlyList<string> SelectedClosingEmailReportNames() =>
+        SelectedEmailReportNames(
+            ClosingEmailShiftSummaryCheckBox,
+            ClosingEmailInventoryCheckBox,
+            ClosingEmailSalesDetailCheckBox,
+            ClosingEmailCorrectionsCheckBox,
+            ClosingEmailAnomaliesCheckBox,
+            ClosingEmailPlacementEventsCheckBox,
+            ClosingEmailBinAssignmentsCheckBox,
+            ClosingEmailInitializationCheckBox,
+            ClosingEmailAuditCheckBox,
+            ClosingEmailPdfCheckBox);
+
+    private IReadOnlyList<string> SelectedSettingsEmailReportNames() =>
+        SelectedEmailReportNames(
+            SettingsEmailShiftSummaryCheckBox,
+            SettingsEmailInventoryCheckBox,
+            SettingsEmailSalesDetailCheckBox,
+            SettingsEmailCorrectionsCheckBox,
+            SettingsEmailAnomaliesCheckBox,
+            SettingsEmailPlacementEventsCheckBox,
+            SettingsEmailBinAssignmentsCheckBox,
+            SettingsEmailInitializationCheckBox,
+            SettingsEmailAuditCheckBox,
+            SettingsEmailPdfCheckBox);
+
+    private static IReadOnlyList<string> SelectedEmailReportNames(
+        CheckBox shiftSummary,
+        CheckBox inventory,
+        CheckBox salesDetail,
+        CheckBox corrections,
+        CheckBox anomalies,
+        CheckBox placementEvents,
+        CheckBox binAssignments,
+        CheckBox initialization,
+        CheckBox closingAudit,
+        CheckBox pdf)
+    {
+        var names = new List<string>();
+        AddSelected(names, shiftSummary, "shift summary");
+        AddSelected(names, inventory, "inventory");
+        AddSelected(names, salesDetail, "sales detail");
+        AddSelected(names, corrections, "corrections");
+        AddSelected(names, anomalies, "anomalies");
+        AddSelected(names, placementEvents, "placement events");
+        AddSelected(names, binAssignments, "bin assignments");
+        AddSelected(names, initialization, "initialization");
+        AddSelected(names, closingAudit, "closing audit");
+        AddSelected(names, pdf, "PDF report");
+        return names;
+    }
+
+    private static void AddSelected(List<string> names, CheckBox checkBox, string name)
+    {
+        if (checkBox.IsChecked == true)
+            names.Add(name);
+    }
+
+    private static string BuildClosingEmailSummaryText(bool sendEmail, IReadOnlyList<string> selectedReports)
+    {
+        if (!sendEmail)
+            return "Closing email will not be sent.";
+
+        if (selectedReports.Count == 0)
+            return "Closing email is enabled, but no reports are selected.";
+
+        return $"Closing email includes {selectedReports.Count.ToString(CultureInfo.CurrentCulture)} item{(selectedReports.Count == 1 ? string.Empty : "s")}: {string.Join(", ", selectedReports)}.";
+    }
+
     private static string ReadSetting(PersistedState state, string key) =>
         state.Settings.TryGetValue(key, out var value) ? value : string.Empty;
 
     private static bool ReadBoolSetting(PersistedState state, string key) =>
         ReadSetting(state, key) == "1";
+
+    private static bool ReadBoolSetting(PersistedState state, string key, bool fallback) =>
+        state.Settings.TryGetValue(key, out var value)
+            ? value == "1"
+            : fallback;
 
     private static int ReadIntSetting(PersistedState state, string key, int fallback) =>
         int.TryParse(ReadSetting(state, key), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
@@ -1733,14 +1953,17 @@ public sealed partial class MainWindow : Window
         var saleCount = _sales.Count;
         var ticketCount = _sales.Sum(s => s.Quantity);
         var revenue = _sales.Sum(s => s.Amount);
+        var closingEmailSummary = BuildClosingEmailSummaryText(
+            ClosingEmailSendCheckBox.IsChecked == true,
+            SelectedClosingEmailReportNames());
 
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
             Title = "Close the current shift?",
             Content = saleCount == 0
-                ? "No sales are recorded since the previous close. Close anyway?"
-                : $"Close {saleCount.ToString(CultureInfo.CurrentCulture)} sale entr{(saleCount == 1 ? "y" : "ies")} for {ticketCount.ToString(CultureInfo.CurrentCulture)} ticket{(ticketCount == 1 ? string.Empty : "s")} totaling {revenue.ToString("C", CultureInfo.CurrentCulture)}?",
+                ? $"No sales are recorded since the previous close. Close anyway?{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}"
+                : $"Close {saleCount.ToString(CultureInfo.CurrentCulture)} sale entr{(saleCount == 1 ? "y" : "ies")} for {ticketCount.ToString(CultureInfo.CurrentCulture)} ticket{(ticketCount == 1 ? string.Empty : "s")} totaling {revenue.ToString("C", CultureInfo.CurrentCulture)}?{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Close Shift",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -1759,7 +1982,7 @@ public sealed partial class MainWindow : Window
 
         _sales.Clear();
         StatusText.Text = "Shift closed.";
-        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. New sales count toward the next close.";
+        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. New sales count toward the next close. {closingEmailSummary}";
         _ = SpeakAsync("Shift closed. New sales count toward the next close.");
         RefreshTotals();
     }
@@ -2247,10 +2470,27 @@ public sealed partial class MainWindow : Window
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; pair window {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         RefreshScannerPairingStatus();
-        var registered = _rdisplay.Displays.Count(d => d.IsRegistered);
+        RefreshRegisteredDisplayCards();
+        var registered = _registeredDisplayCards.Count;
         DisplayStatusText.Text = registered == 0
             ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
             : $"Rdisplay API listening on port {RdisplayService.ApiPort}. {registered} display{(registered == 1 ? string.Empty : "s")} registered.";
+    }
+
+    private void RefreshRegisteredDisplayCards()
+    {
+        _registeredDisplayCards.Clear();
+        foreach (var display in _rdisplay.Displays
+                     .Where(d => d.IsRegistered)
+                     .OrderBy(d => d.ScreenOrder)
+                     .ThenBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase))
+        {
+            _registeredDisplayCards.Add(RegisteredDisplayCard.From(display));
+        }
+
+        RegisteredDisplaysEmptyText.Visibility = _registeredDisplayCards.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void RefreshScannerPairingStatus()
@@ -3044,6 +3284,7 @@ public sealed partial class MainWindow : Window
         }
 
         DisplayStatusText.Text = $"Registered {result.Display.Name} at {result.Display.BaseUrl}.";
+        RefreshRegisteredDisplayCards();
         SyncRdisplayTiles();
     }
 
@@ -3114,8 +3355,19 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(SmtpPasswordBox.Password))
             SaveSecretSetting("smtp_password", SmtpPasswordBox.Password);
         SaveSetting("email_to", EmailToBox.Text.Trim());
+        SaveClosingEmailSettingsFromSettings();
+        CopySettingsEmailOptionsToClosing();
         SmtpPasswordBox.Password = string.Empty;
-        EmailSettingsStatusText.Text = "Email settings saved. Application password is stored encrypted.";
+        EmailSettingsStatusText.Text = $"Email settings saved. Application password is stored encrypted. {SettingsEmailChoicesStatusText.Text}";
+    }
+
+    private void SaveClosingEmailChoicesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!SaveClosingEmailSettingsFromClosing())
+            return;
+
+        CopyClosingEmailOptionsToSettings();
+        ClosingStatusText.Text = $"Closing email choices saved. {ClosingEmailChoicesStatusText.Text}";
     }
 
     private static string SanitizePathSegment(string value)
@@ -3429,6 +3681,39 @@ public sealed partial class MainWindow : Window
                     ? "Empty"
                     : "Need scan";
             return new ClosingBinCard(number, status, detail, scanned, current is not null);
+        }
+    }
+
+    private sealed record RegisteredDisplayCard(
+        string Name,
+        string Endpoint,
+        string Status,
+        string ScreenText,
+        string LastSeenText,
+        string RegisteredText)
+    {
+        public static RegisteredDisplayCard From(RdisplayRegistration display)
+        {
+            var screenText = display.ActiveScreenCount <= 0
+                ? "No active screens"
+                : $"{display.ActiveScreenCount.ToString(CultureInfo.CurrentCulture)} active screen{(display.ActiveScreenCount == 1 ? string.Empty : "s")}";
+            var lastSeen = display.LastSeenAt is null
+                ? "Never seen"
+                : $"Seen {display.LastSeenAt.Value.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
+            var registered = display.LastRegisteredAt is null
+                ? "Registration pending"
+                : $"Registered {display.LastRegisteredAt.Value.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
+            var status = display.IsActive
+                ? "Active"
+                : "Inactive";
+
+            return new RegisteredDisplayCard(
+                display.Name,
+                display.BaseUrl,
+                status,
+                screenText,
+                lastSeen,
+                registered);
         }
     }
 

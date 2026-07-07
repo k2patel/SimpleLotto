@@ -457,6 +457,7 @@ Settings must include state setup and technical setup:
 - Follow the same state setup pattern as `../WindowsPOS`.
 - Displays: handles Rdisplay registration, health, config, and diagnostics.
 - Scanner: handles scanner pairing, health, config, and diagnostics.
+- Settings > Scanner and Display should present scanner controls and display registration as two noticeable cards, with registered displays listed below as individual display cards.
 - Backup and email settings belong here when available.
 - Game setup does not live under Settings; it belongs under Inventory.
 
@@ -746,7 +747,9 @@ Email rules:
 
 - Email settings live under Settings.
 - Email report recipients are configured once and reused by shift closing.
-- Closing email sends CSV reports and the PDF closing report when available.
+- Closing email can send CSV reports and the PDF closing report when available.
+- The user must be able to choose which closing artifacts are included or excluded from the closing email before closing.
+- Closing email content choices should include each standard artifact separately: shift summary, inventory, sales detail, corrections, anomalies, placement events, bin assignments, initialization, closing audit, and PDF closing report.
 - Email failure must not invalidate a completed close.
 - Email status should be visible in Reporting/Closing history.
 - Manual test email should be available from Settings.

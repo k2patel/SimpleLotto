@@ -1195,6 +1195,62 @@
                                                 Click="StartClosingScanButton_Click"/>
                                         <TextBlock Text="Scan dialog collects ticket evidence only. Bin scans are ignored during closing collection."
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <TextBlock Text="Closing Email"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <CheckBox x:Name="ClosingEmailSendCheckBox"
+                                                  Content="Send closing email"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <TextBlock Text="Include"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                        <CheckBox x:Name="ClosingEmailShiftSummaryCheckBox"
+                                                  Content="Shift summary CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailInventoryCheckBox"
+                                                  Content="Inventory CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailSalesDetailCheckBox"
+                                                  Content="Sales detail CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailCorrectionsCheckBox"
+                                                  Content="Corrections CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailAnomaliesCheckBox"
+                                                  Content="Anomalies CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailPlacementEventsCheckBox"
+                                                  Content="Placement events CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailBinAssignmentsCheckBox"
+                                                  Content="Bin assignments CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailInitializationCheckBox"
+                                                  Content="Initialization CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailAuditCheckBox"
+                                                  Content="Closing audit CSV"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <CheckBox x:Name="ClosingEmailPdfCheckBox"
+                                                  Content="PDF closing report"
+                                                  Checked="ClosingEmailOptionChanged"
+                                                  Unchecked="ClosingEmailOptionChanged"/>
+                                        <Button x:Name="SaveClosingEmailChoicesButton"
+                                                Content="Save email choices"
+                                                HorizontalAlignment="Stretch"
+                                                Click="SaveClosingEmailChoicesButton_Click"/>
+                                        <TextBlock x:Name="ClosingEmailChoicesStatusText"
+                                                   Text="Closing email includes all reports."
+                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                   TextWrapping="Wrap"/>
                                         <TextBlock x:Name="ClosingStatusText"
                                                    Text="No closing scan session started."
                                                    Foreground="{ThemeResource SlTextBrush}"
@@ -1249,90 +1305,175 @@
                                 <TabViewItem x:Name="ScannerDisplaySettingsTab"
                                              Header="Scanner and Display"
                                              IsClosable="False">
-                                    <Border Style="{StaticResource SlPanelBorderStyle}">
-                                        <StackPanel Spacing="10"
-                                                    MaxWidth="620"
-                                                    HorizontalAlignment="Left">
+                                    <Grid RowSpacing="14">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Spacing="2">
                                             <TextBlock Text="Scanner and Display"
                                                        Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                            <TextBlock x:Name="SettingsScannerText"
-                                                       Text="Scanner: WindowsPOS global capture model"
-                                                       Foreground="{ThemeResource SlTextBrush}"
-                                                       TextWrapping="Wrap"/>
-                                            <TextBlock Text="Pairing and RawInput background capture will use the WindowsPOS scanner model."
+                                            <TextBlock Text="Scanner pairing and Rdisplay registration stay visible for daily support checks."
                                                        Style="{StaticResource SlCaptionTextStyle}"/>
-                                            <TextBlock Text="Rdisplay API runs on port 5000 and uses the existing WindowsPOS wire contract."
-                                                       Style="{StaticResource SlCaptionTextStyle}"/>
-                                            <Grid ColumnSpacing="8">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="140"/>
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Spacing="2">
-                                                    <TextBlock x:Name="ScannerPairingStatusText"
-                                                               Text="No scanner paired"
+                                        </StackPanel>
+                                        <Grid Grid.Row="1"
+                                              ColumnSpacing="14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Style="{StaticResource SlPanelBorderStyle}">
+                                                <StackPanel Spacing="10">
+                                                    <TextBlock Text="Scanner"
+                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                    <TextBlock x:Name="SettingsScannerText"
+                                                               Text="Scanner: WindowsPOS global capture model"
                                                                Foreground="{ThemeResource SlTextBrush}"
                                                                TextWrapping="Wrap"/>
-                                                    <TextBlock x:Name="ScannerPairingDetailText"
-                                                               Text="Scans only register while the app has focus."
+                                                    <TextBlock Text="Pairing and RawInput background capture will use the WindowsPOS scanner model."
                                                                Style="{StaticResource SlCaptionTextStyle}"
                                                                TextWrapping="Wrap"/>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock x:Name="ScannerPairingStatusText"
+                                                                   Text="No scanner paired"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock x:Name="ScannerPairingDetailText"
+                                                                   Text="Scans only register while the app has focus."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                    <NumberBox x:Name="ScanPairTimeoutBox"
+                                                               Header="Pair window"
+                                                               Value="5"
+                                                               Minimum="1"
+                                                               Maximum="30"
+                                                               SmallChange="1"
+                                                               LargeChange="5"
+                                                               SpinButtonPlacementMode="Compact"/>
+                                                    <Grid ColumnSpacing="8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Button x:Name="PairScannerButton"
+                                                                Content="Pair scanner"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="PairScannerButton_Click"/>
+                                                        <Button x:Name="UnpairScannerButton"
+                                                                Grid.Column="1"
+                                                                Content="Unpair scanner"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="UnpairScannerButton_Click"/>
+                                                        <Button Grid.Column="2"
+                                                                Content="Save"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="SaveScannerSettingsButton_Click"/>
+                                                    </Grid>
                                                 </StackPanel>
-                                                <NumberBox x:Name="ScanPairTimeoutBox"
-                                                           Grid.Column="1"
-                                                           Header="Pair window"
-                                                           Value="5"
-                                                           Minimum="1"
-                                                           Maximum="30"
-                                                           SmallChange="1"
-                                                           LargeChange="5"
-                                                           SpinButtonPlacementMode="Compact"/>
-                                            </Grid>
-                                            <Grid ColumnSpacing="8">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                </Grid.ColumnDefinitions>
-                                                <Button x:Name="PairScannerButton"
-                                                        Content="Pair scanner"
-                                                        HorizontalAlignment="Stretch"
-                                                        Click="PairScannerButton_Click"/>
-                                                <Button x:Name="UnpairScannerButton"
-                                                        Grid.Column="1"
-                                                        Content="Unpair scanner"
-                                                        HorizontalAlignment="Stretch"
-                                                        Click="UnpairScannerButton_Click"/>
-                                                <Button Grid.Column="2"
-                                                        Content="Save scanner settings"
-                                                        HorizontalAlignment="Stretch"
-                                                        Click="SaveScannerSettingsButton_Click"/>
-                                            </Grid>
-                                            <Grid ColumnSpacing="8">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="92"/>
-                                                </Grid.ColumnDefinitions>
-                                                <TextBox x:Name="DisplayHostBox"
-                                                         Header="Display host"
-                                                         PlaceholderText="Pi IP or hostname"/>
-                                                <NumberBox x:Name="DisplayPortBox"
-                                                           Grid.Column="1"
-                                                           Header="Port"
-                                                           Value="5001"
-                                                           Minimum="1"
-                                                           Maximum="65535"
-                                                           SpinButtonPlacementMode="Compact"/>
-                                            </Grid>
-                                            <Button Content="Register Rdisplay"
-                                                    HorizontalAlignment="Stretch"
-                                                    Click="RegisterDisplayButton_Click"/>
-                                            <TextBlock x:Name="DisplayStatusText"
-                                                       Text="No display registered."
-                                                       Foreground="{ThemeResource SlTextBrush}"
-                                                       TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                    </Border>
+                                            </Border>
+                                            <Border Grid.Column="1"
+                                                    Style="{StaticResource SlPanelBorderStyle}">
+                                                <StackPanel Spacing="10">
+                                                    <TextBlock Text="Display"
+                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                    <TextBlock Text="Rdisplay API runs on port 5000 and uses the existing WindowsPOS wire contract."
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
+                                                    <Grid ColumnSpacing="8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="92"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="DisplayHostBox"
+                                                                 Header="Display host"
+                                                                 PlaceholderText="Pi IP or hostname"/>
+                                                        <NumberBox x:Name="DisplayPortBox"
+                                                                   Grid.Column="1"
+                                                                   Header="Port"
+                                                                   Value="5001"
+                                                                   Minimum="1"
+                                                                   Maximum="65535"
+                                                                   SpinButtonPlacementMode="Compact"/>
+                                                    </Grid>
+                                                    <Button Content="Register Rdisplay"
+                                                            HorizontalAlignment="Stretch"
+                                                            Click="RegisterDisplayButton_Click"/>
+                                                    <TextBlock x:Name="DisplayStatusText"
+                                                               Text="No display registered."
+                                                               Foreground="{ThemeResource SlTextBrush}"
+                                                               TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
+                                        <Grid Grid.Row="2"
+                                              RowSpacing="8">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="*"/>
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="Registered Displays"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock x:Name="RegisteredDisplaysEmptyText"
+                                                           Text="No registered displays yet."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                            <ListView x:Name="RegisteredDisplaysListView"
+                                                      Grid.Row="1"
+                                                      MinHeight="180"
+                                                      SelectionMode="None">
+                                                <ListView.ItemContainerStyle>
+                                                    <Style TargetType="ListViewItem">
+                                                        <Setter Property="Margin" Value="0,0,0,8"/>
+                                                        <Setter Property="Padding" Value="0"/>
+                                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    </Style>
+                                                </ListView.ItemContainerStyle>
+                                                <ListView.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Padding="12"
+                                                                CornerRadius="8"
+                                                                BorderBrush="{ThemeResource SlBorderBrush}"
+                                                                BorderThickness="1"
+                                                                Background="{ThemeResource SlSurfaceBrush}">
+                                                            <Grid ColumnSpacing="12">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="150"/>
+                                                                    <ColumnDefinition Width="150"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel Spacing="2">
+                                                                    <TextBlock Text="{Binding Name}"
+                                                                               Foreground="{ThemeResource SlTextBrush}"
+                                                                               FontWeight="SemiBold"/>
+                                                                    <TextBlock Text="{Binding Endpoint}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                </StackPanel>
+                                                                <StackPanel Grid.Column="1"
+                                                                            Spacing="2">
+                                                                    <TextBlock Text="{Binding Status}"
+                                                                               Foreground="{ThemeResource SlTextBrush}"/>
+                                                                    <TextBlock Text="{Binding ScreenText}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                </StackPanel>
+                                                                <StackPanel Grid.Column="2"
+                                                                            Spacing="2">
+                                                                    <TextBlock Text="{Binding LastSeenText}"
+                                                                               Foreground="{ThemeResource SlTextBrush}"/>
+                                                                    <TextBlock Text="{Binding RegisteredText}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ListView.ItemTemplate>
+                                            </ListView>
+                                        </Grid>
+                                    </Grid>
                                 </TabViewItem>
 
                                 <TabViewItem x:Name="BackupSettingsTab"
@@ -1389,6 +1530,67 @@
                                                          PlaceholderText="Leave blank to keep saved password"/>
                                             <TextBox x:Name="EmailToBox"
                                                      Header="Closing email recipient"/>
+                                            <TextBlock Text="Closing email contents"
+                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                            <CheckBox x:Name="SettingsEmailSendCheckBox"
+                                                      Content="Send closing email"
+                                                      Checked="SettingsEmailOptionChanged"
+                                                      Unchecked="SettingsEmailOptionChanged"/>
+                                            <Grid ColumnSpacing="16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="4">
+                                                    <CheckBox x:Name="SettingsEmailShiftSummaryCheckBox"
+                                                              Content="Shift summary CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailInventoryCheckBox"
+                                                              Content="Inventory CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailSalesDetailCheckBox"
+                                                              Content="Sales detail CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailCorrectionsCheckBox"
+                                                              Content="Corrections CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailAnomaliesCheckBox"
+                                                              Content="Anomalies CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1"
+                                                            Spacing="4">
+                                                    <CheckBox x:Name="SettingsEmailPlacementEventsCheckBox"
+                                                              Content="Placement events CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailBinAssignmentsCheckBox"
+                                                              Content="Bin assignments CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailInitializationCheckBox"
+                                                              Content="Initialization CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailAuditCheckBox"
+                                                              Content="Closing audit CSV"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                    <CheckBox x:Name="SettingsEmailPdfCheckBox"
+                                                              Content="PDF closing report"
+                                                              Checked="SettingsEmailOptionChanged"
+                                                              Unchecked="SettingsEmailOptionChanged"/>
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock x:Name="SettingsEmailChoicesStatusText"
+                                                       Text="Closing email includes all reports."
+                                                       Style="{StaticResource SlCaptionTextStyle}"
+                                                       TextWrapping="Wrap"/>
                                             <Button Content="Save email settings"
                                                     HorizontalAlignment="Stretch"
                                                     Click="SaveEmailSettingsButton_Click"/>
