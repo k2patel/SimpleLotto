@@ -21,7 +21,9 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using SimpleLotto.App.Models;
 using SimpleLotto.App.Services;
+using SimpleLotto.App.Services.Win32;
 using WinRT.Interop;
 using Windows.Graphics;
 using Windows.Media.Core;
@@ -75,6 +77,10 @@ public sealed partial class MainWindow : Window
     private string _storeStreet = string.Empty;
     private string _storeCity = string.Empty;
     private int _configuredBinCount = 90;
+    private int _scanPairTimeoutSeconds = 5;
+    private string _scannerVid = string.Empty;
+    private string _scannerPid = string.Empty;
+    private string _scannerSerial = string.Empty;
     private DateTime _lastCloseUtc = DateTime.MinValue;
     private bool _setupComplete;
     private bool _initialImportComplete;
@@ -88,7 +94,13 @@ public sealed partial class MainWindow : Window
     private readonly StringBuilder _focusedScanBuffer = new();
     private string _dashboardPendingBin = string.Empty;
     private ImportTicket? _dashboardPendingTicket;
+    private DateTime? _dashboardPendingBinAtUtc;
+    private DateTime? _dashboardPendingTicketAtUtc;
     private bool _isWorkflowDialogOpen;
+    private const string ScannerVidSettingKey = "barcode_scanner_vid";
+    private const string ScannerPidSettingKey = "barcode_scanner_pid";
+    private const string ScannerSerialSettingKey = "barcode_scanner_serial";
+    private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -219,6 +231,10 @@ public sealed partial class MainWindow : Window
         _storeStreet = ReadSetting(state, "store_street");
         _storeCity = ReadSetting(state, "store_city");
         _configuredBinCount = Math.Clamp(ReadIntSetting(state, "configured_bin_count", 90), 1, 500);
+        _scanPairTimeoutSeconds = Math.Clamp(ReadIntSetting(state, ScanPairTimeoutSettingKey, 5), 1, 30);
+        _scannerVid = ReadSetting(state, ScannerVidSettingKey);
+        _scannerPid = ReadSetting(state, ScannerPidSettingKey);
+        _scannerSerial = ReadSetting(state, ScannerSerialSettingKey);
         _managerPasswordHash = ReadSetting(state, "manager_password_hash");
         _clerkName = ReadSetting(state, "clerk_name");
         _clerkPasswordHash = ReadSetting(state, "clerk_password_hash");
@@ -228,6 +244,7 @@ public sealed partial class MainWindow : Window
         StoreStreetBox.Text = _storeStreet;
         StoreCityBox.Text = _storeCity;
         BinCountBox.Value = _configuredBinCount;
+        ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         ManagerPasswordBox.Password = string.Empty;
         ClerkNameBox.Text = _clerkName;
         ClerkPasswordBox.Password = string.Empty;
@@ -237,6 +254,7 @@ public sealed partial class MainWindow : Window
         SmtpUserBox.Text = ReadSetting(state, "smtp_user");
         SmtpPasswordBox.Password = string.Empty;
         EmailToBox.Text = ReadSetting(state, "email_to");
+        SetScannerPaired(!string.IsNullOrWhiteSpace(_scannerVid) && !string.IsNullOrWhiteSpace(_scannerPid));
 
         var selectedState = StateOptions.FirstOrDefault(s => s.Code == _storeState);
         if (selectedState is not null)
@@ -752,6 +770,8 @@ public sealed partial class MainWindow : Window
 
     private void ProcessFocusedScanSegment(string raw)
     {
+        ExpireDashboardPendingScanPair();
+
         if (TryParseBinNumber(raw, out var binNumber))
         {
             if (!IsConfiguredBin(binNumber))
@@ -764,6 +784,7 @@ public sealed partial class MainWindow : Window
             }
 
             _dashboardPendingBin = binNumber.ToString(CultureInfo.InvariantCulture);
+            _dashboardPendingBinAtUtc = DateTime.UtcNow;
             if (_dashboardPendingTicket is not null)
             {
                 PlaceDashboardBundle(_dashboardPendingBin, _dashboardPendingTicket);
@@ -795,6 +816,7 @@ public sealed partial class MainWindow : Window
         if (activeBundle is null)
         {
             _dashboardPendingTicket = ticket;
+            _dashboardPendingTicketAtUtc = DateTime.UtcNow;
             DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} is not placed. Scan bin.";
             DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | waiting for bin";
             StatusText.Text = "Bundle is not placed. Scan a bin to activate it.";
@@ -827,8 +849,7 @@ public sealed partial class MainWindow : Window
             DashboardScannerStatusText.Text = $"Wrong bin {bin}. Scan a valid bin.";
             DashboardLastScanText.Text = $"Last scan failed: BIN-{bin}";
             StatusText.Text = $"Wrong bin {bin}.";
-            _dashboardPendingBin = string.Empty;
-            _dashboardPendingTicket = null;
+            ClearDashboardPendingScanPair();
             _ = SpeakAsync("Wrong bin.");
             return;
         }
@@ -839,8 +860,7 @@ public sealed partial class MainWindow : Window
             DashboardScannerStatusText.Text = $"Bundle already active in bin {activeBundle.Bin}.";
             DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | active in bin {activeBundle.Bin}";
             StatusText.Text = $"Bundle active in bin {activeBundle.Bin}; move it manually.";
-            _dashboardPendingBin = string.Empty;
-            _dashboardPendingTicket = null;
+            ClearDashboardPendingScanPair();
             _ = SpeakAsync($"Bundle active in bin {activeBundle.Bin}, move it manually.");
             return;
         }
@@ -853,8 +873,7 @@ public sealed partial class MainWindow : Window
                 DashboardScannerStatusText.Text = $"Price required for game {ticket.GameId}. Bundle not activated.";
                 DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
                 StatusText.Text = $"Enter a price before activating game {ticket.GameId}.";
-                _dashboardPendingBin = string.Empty;
-                _dashboardPendingTicket = null;
+                ClearDashboardPendingScanPair();
                 _ = SpeakAsync("Price required.");
                 return;
             }
@@ -866,10 +885,32 @@ public sealed partial class MainWindow : Window
         DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
         DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
         StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}.";
-        _dashboardPendingBin = string.Empty;
-        _dashboardPendingTicket = null;
+        ClearDashboardPendingScanPair();
         _ = SpeakAsync($"Bundle activated in bin {bin}.");
         RefreshOperationalPages();
+    }
+
+    private void ExpireDashboardPendingScanPair()
+    {
+        var now = DateTime.UtcNow;
+        var timeout = TimeSpan.FromSeconds(_scanPairTimeoutSeconds);
+        var expiredBin = _dashboardPendingBinAtUtc is not null && now - _dashboardPendingBinAtUtc.Value > timeout;
+        var expiredTicket = _dashboardPendingTicketAtUtc is not null && now - _dashboardPendingTicketAtUtc.Value > timeout;
+        if (!expiredBin && !expiredTicket)
+            return;
+
+        ClearDashboardPendingScanPair();
+        DashboardScannerStatusText.Text = $"Pending bin/bundle scan expired after {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds.";
+        DashboardLastScanText.Text = "Last scan pair expired.";
+        StatusText.Text = "Scan bin and bundle again within the configured pair window.";
+    }
+
+    private void ClearDashboardPendingScanPair()
+    {
+        _dashboardPendingBin = string.Empty;
+        _dashboardPendingTicket = null;
+        _dashboardPendingBinAtUtc = null;
+        _dashboardPendingTicketAtUtc = null;
     }
 
     private async Task<bool> ShowActivationPriceDialogAsync(string bin, ImportTicket ticket)
@@ -1405,6 +1446,9 @@ public sealed partial class MainWindow : Window
     private void SetScannerPaired(bool isPaired)
     {
         _isScannerPaired = isPaired;
+        DashboardPairingStatusText.Text = isPaired
+            ? "Background capture: scanner paired"
+            : "Background capture: not paired";
     }
 
     private bool EnsureTrayIcon()
@@ -2026,11 +2070,32 @@ public sealed partial class MainWindow : Window
         SettingsBarcodeText.Text = string.IsNullOrWhiteSpace(_storeBarcodeLayout)
             ? "Barcode format: not selected"
             : $"Barcode format: {_storeBarcodeLayout}";
-        SettingsScannerText.Text = "Scanner: WindowsPOS global capture model";
+        SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; pair window {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
+        ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        RefreshScannerPairingStatus();
         var registered = _rdisplay.Displays.Count(d => d.IsRegistered);
         DisplayStatusText.Text = registered == 0
             ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
             : $"Rdisplay API listening on port {RdisplayService.ApiPort}. {registered} display{(registered == 1 ? string.Empty : "s")} registered.";
+    }
+
+    private void RefreshScannerPairingStatus()
+    {
+        var paired = !string.IsNullOrWhiteSpace(_scannerVid) && !string.IsNullOrWhiteSpace(_scannerPid);
+        SetScannerPaired(paired);
+        if (!paired)
+        {
+            ScannerPairingStatusText.Text = "No scanner paired";
+            ScannerPairingDetailText.Text = "Scans only register while the app has focus.";
+            UnpairScannerButton.IsEnabled = false;
+            return;
+        }
+
+        ScannerPairingStatusText.Text = "Scanner paired";
+        ScannerPairingDetailText.Text = string.IsNullOrWhiteSpace(_scannerSerial)
+            ? $"VID {_scannerVid} / PID {_scannerPid} / no serial"
+            : $"VID {_scannerVid} / PID {_scannerPid} / SN {_scannerSerial}";
+        UnpairScannerButton.IsEnabled = true;
     }
 
     private bool IsManager => _activeUserRole == UserRole.Manager;
@@ -2627,6 +2692,165 @@ public sealed partial class MainWindow : Window
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SimpleLotto/0.0.1");
         return client;
     }
+
+    private void SaveScannerSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        _scanPairTimeoutSeconds = Math.Clamp(CoerceInt(ScanPairTimeoutBox.Value, 5), 1, 30);
+        ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        SaveSetting(ScanPairTimeoutSettingKey, _scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
+        SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; pair window {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
+        ScannerPairingStatusText.Text = "Scanner settings saved.";
+    }
+
+    private async void PairScannerButton_Click(object sender, RoutedEventArgs e)
+    {
+        var picked = await ShowScannerPairDialogAsync();
+        if (picked is null)
+            return;
+
+        _scannerVid = picked.Vid;
+        _scannerPid = picked.Pid;
+        _scannerSerial = picked.Serial;
+        SaveSetting(ScannerVidSettingKey, _scannerVid);
+        SaveSetting(ScannerPidSettingKey, _scannerPid);
+        SaveSetting(ScannerSerialSettingKey, _scannerSerial);
+        RefreshScannerPairingStatus();
+        ScannerPairingStatusText.Text = $"Scanner paired: {picked.DisplayLabel}";
+        StatusText.Text = $"Scanner paired: {picked.DisplayLabel}.";
+    }
+
+    private void UnpairScannerButton_Click(object sender, RoutedEventArgs e)
+    {
+        _scannerVid = string.Empty;
+        _scannerPid = string.Empty;
+        _scannerSerial = string.Empty;
+        SaveSetting(ScannerVidSettingKey, string.Empty);
+        SaveSetting(ScannerPidSettingKey, string.Empty);
+        SaveSetting(ScannerSerialSettingKey, string.Empty);
+        RefreshScannerPairingStatus();
+        ScannerPairingStatusText.Text = "Scanner unpaired.";
+        StatusText.Text = "Scanner unpaired. Focused scan capture remains available.";
+    }
+
+    private async Task<HidDeviceInfo?> ShowScannerPairDialogAsync()
+    {
+        var devices = HidDeviceEnumerator.Enumerate()
+            .Select(d => d.Info)
+            .OrderBy(d => LooksLikeScanner(d) ? 0 : 1)
+            .ThenBy(d => d.DisplayLabel, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(d => d.Vid, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(d => d.Pid, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        HidDeviceInfo? selected = null;
+        ContentDialog? dialog = null;
+        var deviceButtons = new Dictionary<RadioButton, HidDeviceInfo>();
+        var statusText = new TextBlock
+        {
+            Text = devices.Count == 0
+                ? "No HID keyboard-class USB devices were found."
+                : "Select the barcode scanner from the detected HID keyboard devices.",
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        var deviceList = new StackPanel { Spacing = 8 };
+        foreach (var device in devices)
+        {
+            var detail = ScannerDeviceDetail(device);
+            var label = new StackPanel { Spacing = 2 };
+            label.Children.Add(new TextBlock
+            {
+                Text = device.DisplayLabel,
+                FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap
+            });
+            label.Children.Add(new TextBlock
+            {
+                Text = detail,
+                FontSize = 12,
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap
+            });
+
+            var radio = new RadioButton
+            {
+                Content = label,
+                GroupName = "SimpleLottoScannerPairDevices",
+                Tag = device
+            };
+            radio.Checked += (_, _) =>
+            {
+                selected = device;
+                if (dialog is not null)
+                    dialog.IsPrimaryButtonEnabled = true;
+                statusText.Text = $"Selected: {device.DisplayLabel}";
+            };
+            deviceButtons[radio] = device;
+            deviceList.Children.Add(radio);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_scannerVid) && !string.IsNullOrWhiteSpace(_scannerPid))
+        {
+            foreach (var entry in deviceButtons)
+            {
+                if (!entry.Value.MatchesIdentity(_scannerVid, _scannerPid, _scannerSerial))
+                    continue;
+
+                entry.Key.IsChecked = true;
+                selected = entry.Value;
+                break;
+            }
+        }
+
+        var panel = new StackPanel
+        {
+            Spacing = 12,
+            MaxWidth = 560,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        panel.Children.Add(statusText);
+        panel.Children.Add(new ScrollViewer
+        {
+            Content = deviceList,
+            MaxHeight = 320,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "If the scanner is not listed, plug it in, close this dialog, and open Pair scanner again.",
+            Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        dialog = new ContentDialog
+        {
+            Title = "Pair barcode scanner",
+            Content = panel,
+            PrimaryButtonText = "Pair this device",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            IsPrimaryButtonEnabled = selected is not null,
+            XamlRoot = RootGrid.XamlRoot
+        };
+
+        var result = await dialog.ShowAsync();
+        return result == ContentDialogResult.Primary ? selected : null;
+    }
+
+    private static bool LooksLikeScanner(HidDeviceInfo device)
+    {
+        var label = $"{device.Product} {device.Manufacturer}".ToLowerInvariant();
+        return label.Contains("scanner", StringComparison.Ordinal) ||
+               label.Contains("barcode", StringComparison.Ordinal) ||
+               label.Contains("symbol", StringComparison.Ordinal) ||
+               label.Contains("zebra", StringComparison.Ordinal) ||
+               label.Contains("honeywell", StringComparison.Ordinal);
+    }
+
+    private static string ScannerDeviceDetail(HidDeviceInfo info) =>
+        $"VID {info.Vid} / PID {info.Pid}" +
+        (string.IsNullOrWhiteSpace(info.Serial) ? " / no serial" : $" / SN {info.Serial}") +
+        (string.IsNullOrWhiteSpace(info.Manufacturer) ? string.Empty : $" / {info.Manufacturer}");
 
     private async void RegisterDisplayButton_Click(object sender, RoutedEventArgs e)
     {

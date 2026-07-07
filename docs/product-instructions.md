@@ -301,6 +301,8 @@ Regular bundle activation:
 - Regular bundle activation is separate from the closing reconciliation loop.
 - During normal inventory/bin workflow, bins may contain multiple active bundles.
 - A bundle can be activated into a bin by scanning bin then bundle, or bundle then bin.
+- The bin scan and bundle/ticket scan that form one activation pair must happen within the configured scan-pair window. The default is 5 seconds.
+- The scan-pair window must be configurable under Settings > Scanner and Display.
 - When a clerk activates a bundle, the bin can be identified either by scanning the bin barcode or by entering/selecting the bin number on screen.
 - Scanning the bin and entering/selecting the bin number are equivalent activation inputs; either one satisfies the bin-identification requirement.
 - If the clerk scans or enters a bin number that does not exist, block activation and ask the clerk to scan the bin again or enter the correct bin number.
@@ -536,6 +538,7 @@ Scanner rules:
 - Scanner monitoring should not depend on keyboard focus inside a specific text field.
 - If scanner monitoring is unavailable or disconnected, show clear status on Dashboard and Settings.
 - Scanner status and pairing diagnostics belong under Settings.
+- Settings > Scanner and Display must include barcode scanner pairing and unpairing controls. Pairing should reuse the WindowsPOS HID keyboard-class scanner model: list candidate HID devices, store VID/PID/serial when available, and use that pairing as the prerequisite for background scanner capture.
 
 Application lifetime rules:
 

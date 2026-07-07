@@ -506,7 +506,7 @@
                                     <Grid RowSpacing="10">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
                                         <TextBlock x:Name="BinDetailText"
                                                    Text="Bin Details (0 bundles)"
@@ -514,11 +514,15 @@
                                         <ListView x:Name="BinBundlesListView"
                                                   Grid.Row="1"
                                                   MaxHeight="340"
+                                                  Padding="0"
+                                                  VerticalAlignment="Top"
                                                   SelectionMode="None">
                                             <ListView.ItemContainerStyle>
                                                 <Style TargetType="ListViewItem">
                                                     <Setter Property="Padding" Value="0"/>
                                                     <Setter Property="Margin" Value="0,0,0,8"/>
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    <Setter Property="VerticalContentAlignment" Value="Top"/>
                                                 </Style>
                                             </ListView.ItemContainerStyle>
                                             <ListView.ItemTemplate>
@@ -1181,6 +1185,51 @@
                                                        Style="{StaticResource SlCaptionTextStyle}"/>
                                             <TextBlock Text="Rdisplay API runs on port 5000 and uses the existing WindowsPOS wire contract."
                                                        Style="{StaticResource SlCaptionTextStyle}"/>
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="140"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="2">
+                                                    <TextBlock x:Name="ScannerPairingStatusText"
+                                                               Text="No scanner paired"
+                                                               Foreground="{ThemeResource SlTextBrush}"
+                                                               TextWrapping="Wrap"/>
+                                                    <TextBlock x:Name="ScannerPairingDetailText"
+                                                               Text="Scans only register while the app has focus."
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                                <NumberBox x:Name="ScanPairTimeoutBox"
+                                                           Grid.Column="1"
+                                                           Header="Pair window"
+                                                           Value="5"
+                                                           Minimum="1"
+                                                           Maximum="30"
+                                                           SmallChange="1"
+                                                           LargeChange="5"
+                                                           SpinButtonPlacementMode="Compact"/>
+                                            </Grid>
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="PairScannerButton"
+                                                        Content="Pair scanner"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="PairScannerButton_Click"/>
+                                                <Button x:Name="UnpairScannerButton"
+                                                        Grid.Column="1"
+                                                        Content="Unpair scanner"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="UnpairScannerButton_Click"/>
+                                                <Button Grid.Column="2"
+                                                        Content="Save scanner settings"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="SaveScannerSettingsButton_Click"/>
+                                            </Grid>
                                             <Grid ColumnSpacing="8">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
