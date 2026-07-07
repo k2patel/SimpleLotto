@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -15,11 +16,13 @@ namespace SimpleLotto.App.Services;
 public sealed class RdisplayApiHost
 {
     private readonly RdisplayService _rdisplay;
+    private readonly LocalStore _store;
     private WebApplication? _app;
 
-    public RdisplayApiHost(RdisplayService rdisplay)
+    public RdisplayApiHost(RdisplayService rdisplay, LocalStore store)
     {
         _rdisplay = rdisplay;
+        _store = store;
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -138,7 +141,7 @@ public sealed class RdisplayApiHost
             if (string.IsNullOrWhiteSpace(gameId) || gameId.Length > 64)
                 return Error("INVALID_GAME_ID", "game_id is empty or too long.", 400);
 
-            var path = ResolvePlaceholderImagePath();
+            var path = ResolveCachedImagePath(gameId);
             if (path is null)
                 return Error("NOT_CACHED", "Image not yet cached for this game.", 404);
 
@@ -152,7 +155,7 @@ public sealed class RdisplayApiHost
 
             return Results.File(
                 path,
-                contentType: "image/png",
+                contentType: ContentTypeForPath(path),
                 fileDownloadName: null,
                 lastModified: null,
                 entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{etag}\""));
@@ -161,16 +164,68 @@ public sealed class RdisplayApiHost
         return app;
     }
 
-    private static string? ResolvePlaceholderImagePath()
+    private string? ResolveCachedImagePath(string gameId)
     {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "Assets", "SimpleLottoLogo.png"),
-            Path.Combine(AppContext.BaseDirectory, "Assets", "SimpleLottoLogo64.png")
-        };
+        var cached = CachedGameImagePath(gameId);
+        if (cached is not null)
+            return cached;
 
-        return Array.Find(candidates, File.Exists);
+        try
+        {
+            var state = _store.Load();
+            var game = state.ManualGames.FirstOrDefault(g =>
+                string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+            if (game is null)
+                return null;
+
+            return CachedFileImagePath(game.ImageUri);
+        }
+        catch
+        {
+            return null;
+        }
     }
+
+    private static string? CachedGameImagePath(string gameId)
+    {
+        var safe = SafeGameImageKey(gameId);
+        var jpg = Path.Combine(GameImageCacheDir, $"{safe}.jpg");
+        if (File.Exists(jpg))
+            return jpg;
+
+        var png = Path.Combine(GameImageCacheDir, $"{safe}.png");
+        return File.Exists(png) ? png : null;
+    }
+
+    private static string? CachedFileImagePath(string imageUri)
+    {
+        if (!Uri.TryCreate(imageUri, UriKind.Absolute, out var uri) ||
+            !uri.IsFile ||
+            !File.Exists(uri.LocalPath))
+        {
+            return null;
+        }
+
+        return uri.LocalPath;
+    }
+
+    private static string SafeGameImageKey(string gameId)
+    {
+        var chars = gameId
+            .Where(c => char.IsLetterOrDigit(c) || c == '-' || c == '_')
+            .ToArray();
+        return chars.Length == 0 ? "unknown" : new string(chars);
+    }
+
+    private static string GameImageCacheDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SimpleLotto",
+        "game-images");
+
+    private static string ContentTypeForPath(string path) =>
+        string.Equals(Path.GetExtension(path), ".png", StringComparison.OrdinalIgnoreCase)
+            ? "image/png"
+            : "image/jpeg";
 
     private static async Task<string> ComputeEtagAsync(string path)
     {

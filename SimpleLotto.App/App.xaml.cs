@@ -7,19 +7,20 @@ namespace SimpleLotto.App;
 public partial class App : Application
 {
     private readonly RdisplayService _rdisplay = new();
+    private readonly LocalStore _store = new();
     private readonly RdisplayApiHost _rdisplayApiHost;
     private Window? _window;
 
     public App()
     {
         InitializeComponent();
-        _rdisplayApiHost = new RdisplayApiHost(_rdisplay);
+        _rdisplayApiHost = new RdisplayApiHost(_rdisplay, _store);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _ = StartRdisplayApiAsync();
-        _window = new MainWindow(_rdisplay);
+        _window = new MainWindow(_rdisplay, _store);
         _window.Activate();
     }
 

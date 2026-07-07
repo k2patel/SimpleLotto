@@ -38,7 +38,7 @@ namespace SimpleLotto.App;
 public sealed partial class MainWindow : Window
 {
     private readonly RdisplayService _rdisplay;
-    private readonly LocalStore _store = new();
+    private readonly LocalStore _store;
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
     private readonly ObservableCollection<ImportBin> _importBins = new();
@@ -51,8 +51,10 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
     private readonly ObservableCollection<GameCatalogRecord> _pagedGameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
+    private readonly ObservableCollection<ClosingScanRow> _closingScanRows = new();
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
+    private readonly HashSet<int> _closingScannedBins = new();
     private readonly SpeechSynthesizer _speechSynthesizer = new();
     private readonly MediaPlayer _speechPlayer = new()
     {
@@ -189,9 +191,10 @@ public sealed partial class MainWindow : Window
     [DllImport("comctl32.dll")]
     private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, UIntPtr wParam, IntPtr lParam);
 
-    public MainWindow(RdisplayService rdisplay)
+    public MainWindow(RdisplayService rdisplay, LocalStore store)
     {
         _rdisplay = rdisplay;
+        _store = store;
         _subclassProc = TraySubclassProc;
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
@@ -740,6 +743,19 @@ public sealed partial class MainWindow : Window
         RefreshOperationalPages();
     }
 
+    private void LogoutButton_Click(object sender, RoutedEventArgs e)
+    {
+        _activeUserRole = UserRole.None;
+        _activeUserName = string.Empty;
+        LoginPasswordBox.Password = string.Empty;
+        StartupOverlay.Visibility = Visibility.Visible;
+        ShowLoginStage();
+        StatusText.Text = "Logged out.";
+        DashboardScannerStatusText.Text = "Login required before scanner input.";
+        _focusedScanBuffer.Clear();
+        _startupScanBuffer.Clear();
+    }
+
     private void ShowSetupStage()
     {
         _startupStage = StartupStage.Setup;
@@ -1171,6 +1187,7 @@ public sealed partial class MainWindow : Window
         StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}.";
         _ = SpeakAsync($"Bundle activated in bin {bin}.");
         RefreshOperationalPages();
+        _ = EnsureGameImageCachedForGameAsync(ticket.GameId);
         return true;
     }
 
@@ -1379,6 +1396,7 @@ public sealed partial class MainWindow : Window
         ImportScanStatusText.Text = $"Imported bin {bin.Number}: game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}.";
         _ = SpeakAsync($"Success. Bin {bin.Number} imported.");
         RefreshOperationalPages();
+        _ = EnsureGameImageCachedForGameAsync(ticket.GameId);
     }
 
     private void FailImport(string message, string spoken)
@@ -2497,15 +2515,23 @@ public sealed partial class MainWindow : Window
         var grouped = _imports
             .GroupBy(i => i.Bin)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        var activeBinCount = 0;
 
         for (var i = 1; i <= _configuredBinCount; i++)
         {
             var bin = i.ToString(CultureInfo.InvariantCulture);
             grouped.TryGetValue(bin, out var bundles);
-            _closingBinCards.Add(ClosingBinCard.From(i, bundles?.FirstOrDefault(), scanned: false));
+            var current = bundles?.FirstOrDefault();
+            if (current is not null)
+                activeBinCount++;
+
+            _closingBinCards.Add(ClosingBinCard.From(
+                i,
+                current,
+                scanned: _closingScannedBins.Contains(i)));
         }
 
-        ClosingEvidenceText.Text = $"0 / {_configuredBinCount.ToString(CultureInfo.CurrentCulture)}";
+        ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {activeBinCount.ToString(CultureInfo.CurrentCulture)}";
         ClosingBinDetailText.Text = "Select a bin to view expected game, bundle, and ticket.";
     }
 
@@ -2768,17 +2794,224 @@ public sealed partial class MainWindow : Window
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
         _ = SpeakAsync("Start scanning.");
 
+        var scanBox = new TextBox
+        {
+            Header = "Scan barcode",
+            PlaceholderText = "Scan current ticket",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        var totalText = new TextBlock
+        {
+            Text = _closingScannedBins.Count.ToString(CultureInfo.CurrentCulture),
+            Style = (Style)Application.Current.Resources["SlMetricTextStyle"],
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center
+        };
+        var statusText = new TextBlock
+        {
+            Text = "Ready for closing scan.",
+            Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+            TextWrapping = TextWrapping.Wrap
+        };
+        var scanList = new ListView
+        {
+            ItemsSource = _closingScanRows,
+            DisplayMemberPath = "ScannedText",
+            MinHeight = 300
+        };
+
+        void RefreshDialogTotals()
+        {
+            totalText.Text = _closingScannedBins.Count.ToString(CultureInfo.CurrentCulture);
+            ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
+        }
+
+        void AcceptDialogScan()
+        {
+            var raw = scanBox.Text.Trim();
+            scanBox.Text = string.Empty;
+            if (string.IsNullOrWhiteSpace(raw))
+                return;
+
+            var processed = false;
+            foreach (var segment in SplitImportScanInput(raw))
+            {
+                processed = true;
+                ProcessClosingScanSegment(segment, statusText);
+            }
+
+            if (!processed)
+                statusText.Text = "Scan was empty.";
+
+            RefreshDialogTotals();
+            RefreshClosingBins();
+        }
+
+        scanBox.KeyDown += (_, args) =>
+        {
+            if (args.Key != VirtualKey.Enter)
+                return;
+
+            args.Handled = true;
+            AcceptDialogScan();
+        };
+
+        var content = new Grid
+        {
+            MinWidth = 760,
+            MinHeight = 420,
+            RowSpacing = 12,
+            ColumnSpacing = 16
+        };
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4, GridUnitType.Star) });
+
+        Grid.SetColumn(scanBox, 0);
+        Grid.SetColumnSpan(scanBox, 2);
+        content.Children.Add(scanBox);
+
+        var leftPanel = new Border
+        {
+            Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            Child = new StackPanel
+            {
+                Spacing = 8,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Scanned number",
+                        Style = (Style)Application.Current.Resources["SlSectionTitleTextStyle"]
+                    },
+                    scanList
+                }
+            }
+        };
+        Grid.SetRow(leftPanel, 1);
+        Grid.SetColumn(leftPanel, 0);
+        content.Children.Add(leftPanel);
+
+        var totalView = new Viewbox
+        {
+            Stretch = Stretch.Uniform,
+            Child = totalText
+        };
+        Grid.SetRow(totalView, 0);
+
+        var totalLabel = new TextBlock
+        {
+            Text = "total scanned",
+            Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center
+        };
+        Grid.SetRow(totalLabel, 1);
+
+        var totalGrid = new Grid
+        {
+            RowDefinitions =
+            {
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
+                new RowDefinition { Height = GridLength.Auto }
+            },
+            Children =
+            {
+                totalView,
+                totalLabel
+            }
+        };
+
+        var rightPanel = new Border
+        {
+            Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            Child = totalGrid
+        };
+        Grid.SetRow(rightPanel, 1);
+        Grid.SetColumn(rightPanel, 1);
+        content.Children.Add(rightPanel);
+
+        Grid.SetRow(statusText, 2);
+        Grid.SetColumn(statusText, 0);
+        Grid.SetColumnSpan(statusText, 2);
+        content.Children.Add(statusText);
+
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
             Title = "Closing Scan",
-            Content = "Closing scan collection is the next workflow wiring step. This page now shows all bins so scan evidence can mark bins green and leave missed bins gray.",
-            PrimaryButtonText = "OK",
-            DefaultButton = ContentDialogButton.Primary
+            Content = content,
+            CloseButtonText = "Close scanning",
+            DefaultButton = ContentDialogButton.Close
         };
+        dialog.Opened += (_, _) => _ = scanBox.Focus(FocusState.Programmatic);
 
-        await dialog.ShowAsync();
-        ClosingStatusText.Text = "Closing scan route is not active yet. Scanner collection will be wired next.";
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+            RefreshClosingBins();
+            ClosingStatusText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. Unscanned active bins remain marked.";
+        }
+    }
+
+    private int ActiveClosingBinCount() =>
+        _imports
+            .Select(i => i.Bin)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count(bin => int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
+                          IsConfiguredBin(number));
+
+    private void ProcessClosingScanSegment(string raw, TextBlock statusText)
+    {
+        var ticket = TryParseImportTicket(raw);
+        if (ticket is not null)
+        {
+            var activeBundle = FindActiveBundle(ticket);
+            if (activeBundle is null ||
+                !int.TryParse(activeBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
+                !IsConfiguredBin(binNumber))
+            {
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, "No active bin"));
+                statusText.Text = $"No active bin matched scan {raw}.";
+                return;
+            }
+
+            _closingScannedBins.Add(binNumber);
+            _closingScanRows.Insert(0, new ClosingScanRow(
+                $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
+                "Scanned"));
+            statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned.";
+            return;
+        }
+
+        if (TryParseBinNumber(raw, out var directBin) && IsConfiguredBin(directBin))
+        {
+            var hasActiveBundle = _imports.Any(i =>
+                string.Equals(i.Bin, directBin.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase));
+            if (!hasActiveBundle)
+            {
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Empty bin"));
+                statusText.Text = $"Bin {directBin.ToString(CultureInfo.CurrentCulture)} is empty and was not counted.";
+                return;
+            }
+
+            _closingScannedBins.Add(directBin);
+            _closingScanRows.Insert(0, new ClosingScanRow(
+                $"Bin {directBin.ToString(CultureInfo.CurrentCulture)}",
+                "Scanned"));
+            statusText.Text = $"Bin {directBin.ToString(CultureInfo.CurrentCulture)} scanned.";
+            return;
+        }
+
+        _closingScanRows.Insert(0, new ClosingScanRow(raw, "Unrecognized"));
+        statusText.Text = $"Scan was not recognized: {raw}";
     }
 
     private async void AddGameButton_Click(object sender, RoutedEventArgs e)
@@ -3157,6 +3390,27 @@ public sealed partial class MainWindow : Window
         if (!quiet)
             GameCatalogStatusText.Text = $"Official image was not found for game {game.GameId}.";
         return false;
+    }
+
+    private async Task EnsureGameImageCachedForGameAsync(string gameId)
+    {
+        if (string.IsNullOrWhiteSpace(gameId))
+            return;
+
+        var game = _gameCatalog.FirstOrDefault(g =>
+                       string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase)) ??
+                   _manualGameCatalog.FirstOrDefault(g =>
+                       string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase)) ??
+                   GameCatalogRecord.FromImport(gameId);
+
+        try
+        {
+            await FetchAndApplyGameImageAsync(game, quiet: true);
+        }
+        catch
+        {
+            // Image lookup is best-effort and must not block activation/import.
+        }
     }
 
     private static bool IsCachedGameImage(GameCatalogRecord game)
@@ -3817,14 +4071,14 @@ public sealed partial class MainWindow : Window
     {
         public string BinText => Number.ToString(CultureInfo.InvariantCulture);
         public Brush BackgroundBrush => Scanned
-            ? HighTileBrush
+            ? MediumTileBrush
             : HasBundle
-                ? LowTileBrush
+                ? HighTileBrush
                 : EmptyTileBrush;
         public Brush BorderBrush => Scanned
-            ? HighTileStackedBrush
+            ? MediumTileStackedBrush
             : HasBundle
-                ? LowTileStackedBrush
+                ? HighTileStackedBrush
                 : EmptyTileBorderBrush;
         public Brush ForegroundBrush => DarkTileTextBrush;
 
@@ -3841,6 +4095,8 @@ public sealed partial class MainWindow : Window
             return new ClosingBinCard(number, status, detail, scanned, current is not null);
         }
     }
+
+    private sealed record ClosingScanRow(string ScannedText, string Status);
 
     private sealed record RegisteredDisplayCard(
         string Name,

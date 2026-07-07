@@ -245,11 +245,17 @@ public sealed class RdisplayService : IDisposable
     private async Task PushManyAsync(IEnumerable<RdisplayRegistration> displays, CancellationToken ct)
     {
         foreach (var display in displays)
-            await PushSnapshotAsync(display, ct);
+            await PushSnapshotAndImagesAsync(display, ct);
     }
 
     private Task<bool> PushSnapshotAsync(RdisplayRegistration display, CancellationToken ct = default) =>
         PostToDisplayAsync(display, "/api/display/snapshot", BuildSnapshotPayloadForDisplay(display), ct);
+
+    private async Task PushSnapshotAndImagesAsync(RdisplayRegistration display, CancellationToken ct = default)
+    {
+        await PushSnapshotAsync(display, ct);
+        await PushImageReadyForDisplayAsync(display, ct);
+    }
 
     private async Task PushImageReadyForDisplayAsync(RdisplayRegistration display, CancellationToken ct = default)
     {
