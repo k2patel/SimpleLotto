@@ -652,8 +652,8 @@
                                                     </StackPanel>
                                                     <TextBox x:Name="ReceivingSearchBox"
                                                              Grid.Column="1"
-                                                             Header="Search Game ID"
-                                                             PlaceholderText="Game, bundle, or status"
+                                                             Header="Search Receiving"
+                                                             PlaceholderText="Game, bundle, or ticket"
                                                              TextChanged="ReceivingSearchBox_TextChanged"/>
                                                     <Button x:Name="ReceivingPreviousPageButton"
                                                             Grid.Column="2"
@@ -676,12 +676,10 @@
                                                         <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="110"/>
-                                                        <ColumnDefinition Width="130"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Received" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game / Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="3" Text="Status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <TextBlock x:Name="ReceivingPageStatusText"
                                                            Grid.Row="2"
@@ -701,7 +699,6 @@
                                                                     <ColumnDefinition Width="110"/>
                                                                     <ColumnDefinition Width="*"/>
                                                                     <ColumnDefinition Width="110"/>
-                                                                    <ColumnDefinition Width="130"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <TextBlock Text="{Binding Source}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>
@@ -715,9 +712,6 @@
                                                                 <TextBlock Grid.Column="2"
                                                                            Text="{Binding Ticket}"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
-                                                                <TextBlock Grid.Column="3"
-                                                                           Text="{Binding Status}"
-                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
                                                             </Grid>
                                                         </DataTemplate>
                                                     </ListView.ItemTemplate>
@@ -774,8 +768,8 @@
                                                     </StackPanel>
                                                     <TextBox x:Name="OpenBundleSearchBox"
                                                              Grid.Column="1"
-                                                             Header="Search Game ID"
-                                                             PlaceholderText="Game, bundle, bin, or status"
+                                                             Header="Search Open / Active"
+                                                             PlaceholderText="Bin, game, bundle, or ticket"
                                                              TextChanged="OpenBundleSearchBox_TextChanged"/>
                                                     <Button x:Name="OpenBundlePreviousPageButton"
                                                             Grid.Column="2"

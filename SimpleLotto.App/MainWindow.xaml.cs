@@ -1954,6 +1954,7 @@ public sealed partial class MainWindow : Window
                 line.GameId,
                 line.BundleId,
                 line.Ticket,
+                line.Bin,
                 $"Active in bin {line.Bin}"));
 
         ApplyReceivingPage();
@@ -2062,20 +2063,29 @@ public sealed partial class MainWindow : Window
         OpenBundleNextPageButton.IsEnabled = _inventoryPage < totalPages;
     }
 
-    private List<InventoryRecord> FilteredReceivingRecords() =>
-        FilterInventoryRecords(_receivingRecords, ReceivingSearchBox.Text.Trim());
+    private List<InventoryRecord> FilteredReceivingRecords()
+    {
+        var search = ReceivingSearchBox.Text.Trim();
+        return _receivingRecords
+            .Where(r => string.IsNullOrWhiteSpace(search) ||
+                        r.GameId.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.BundleId.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Ticket.StartsWith(search, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(r => r.GameId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.BundleId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     private List<InventoryRecord> FilteredInventoryRecords() =>
-        FilterInventoryRecords(_inventoryRecords, OpenBundleSearchBox.Text.Trim());
+        FilterOpenInventoryRecords(_inventoryRecords, OpenBundleSearchBox.Text.Trim());
 
-    private static List<InventoryRecord> FilterInventoryRecords(IEnumerable<InventoryRecord> records, string search) =>
+    private static List<InventoryRecord> FilterOpenInventoryRecords(IEnumerable<InventoryRecord> records, string search) =>
         records
             .Where(r => string.IsNullOrWhiteSpace(search) ||
                         r.GameId.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
                         r.BundleId.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
-                        r.Ticket.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
-                        r.Source.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
-                        r.Status.StartsWith(search, StringComparison.OrdinalIgnoreCase))
+                        r.Bin.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Ticket.StartsWith(search, StringComparison.OrdinalIgnoreCase))
             .OrderBy(r => r.GameId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.BundleId, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -3358,6 +3368,7 @@ public sealed partial class MainWindow : Window
         string GameId,
         string BundleId,
         string Ticket,
+        string Bin,
         string Status)
     {
         public string GameText => $"Game {GameId}";

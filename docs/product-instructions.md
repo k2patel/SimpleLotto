@@ -341,11 +341,14 @@ Inventory should organize stock and game setup into these tabs, in this order:
 
 The active/open bundle tab should be last. Operators should be able to review active and inactive inventory from the Inventory menu without confusing it with unopened receiving.
 
+Receiving contains unopened bundles that have not been activated into a bin. Once a received bundle is activated, it leaves receiving and becomes an open/active bin record. When all tickets in a bundle are sold, the bundle should no longer appear as an open/active inventory item; it remains as historical database/ledger activity for reporting and audit.
+
 Inventory list behavior:
 
 - The game catalog must be searchable by Game ID.
 - Receiving, Open / Active Bundles, and Game Prices must support fast prefix search usable while typing. Typing `1`, then `12`, then `123` should narrow against records that start with that entered value.
-- Open / Active Bundles search should include game ID, bundle ID, bin/status text, and ticket where practical.
+- Open / Active Bundles search should include bin ID, game ID, bundle ID, and ticket where practical.
+- Receiving search should include game ID, bundle ID, and ticket.
 - Receiving, Open / Active Bundles, and Game Prices should use paging instead of one long vertical scrolling list.
 - Page size should be calculated from the visible list space so page counts grow or shrink with the window size; do not hard-code one fixed row count.
 - Paging controls must show the current page and total pages when known.
