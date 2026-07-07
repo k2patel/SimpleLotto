@@ -209,13 +209,6 @@ jobs:
           "installer_file=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "installer_sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.checksum.outputs.installer_file }}
-          path: ${{ steps.checksum.outputs.installer_path }}
-          if-no-files-found: error
-
       - name: Validate Zipline release folder
         if: env.ZIPLINE_UPLOAD_ALLOWED == 'true'
         id: zipline_folder
