@@ -341,12 +341,13 @@ Inventory should organize stock and game setup into these tabs, in this order:
 
 The active/open bundle tab should be last. Operators should be able to review active and inactive inventory from the Inventory menu without confusing it with unopened receiving.
 
-Game setup list behavior:
+Inventory list behavior:
 
 - The game catalog must be searchable by Game ID.
-- Game ID search should be fast and usable while typing.
-- The game catalog should use paging instead of one long vertical scrolling list.
-- Page size should be fixed or explicitly selectable; avoid loading every game into one long visible list.
+- Receiving, Open / Active Bundles, and Game Prices must support fast prefix search usable while typing. Typing `1`, then `12`, then `123` should narrow against records that start with that entered value.
+- Open / Active Bundles search should include game ID, bundle ID, bin/status text, and ticket where practical.
+- Receiving, Open / Active Bundles, and Game Prices should use paging instead of one long vertical scrolling list.
+- Page size should be calculated from the visible list space so page counts grow or shrink with the window size; do not hard-code one fixed row count.
 - Paging controls must show the current page and total pages when known.
 - The Game Prices section must require a price before a new game type can be used. The Bundle Prices section must let the user add a new game price/bundle price combination.
 - The Game Prices tab must include a control to view the selected game's currently cached image.

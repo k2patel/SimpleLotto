@@ -632,14 +632,42 @@
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="Auto"/>
                                                     <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
                                                     <RowDefinition Height="*"/>
                                                 </Grid.RowDefinitions>
-                                                <StackPanel Spacing="2">
-                                                    <TextBlock Text="Inventory Receiving"
-                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                    <TextBlock Text="Scan unopened new bundles here before they are assigned to bins."
-                                                               Style="{StaticResource SlCaptionTextStyle}"/>
-                                                </StackPanel>
+                                                <Grid ColumnSpacing="12"
+                                                      RowSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="220"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="Inventory Receiving"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="ReceivingCountText"
+                                                                   Text="0 received bundles"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    </StackPanel>
+                                                    <TextBox x:Name="ReceivingSearchBox"
+                                                             Grid.Column="1"
+                                                             Header="Search Game ID"
+                                                             PlaceholderText="Game, bundle, or status"
+                                                             TextChanged="ReceivingSearchBox_TextChanged"/>
+                                                    <Button x:Name="ReceivingPreviousPageButton"
+                                                            Grid.Column="2"
+                                                            Content="Previous"
+                                                            MinWidth="88"
+                                                            VerticalAlignment="Bottom"
+                                                            Click="ReceivingPreviousPageButton_Click"/>
+                                                    <Button x:Name="ReceivingNextPageButton"
+                                                            Grid.Column="3"
+                                                            Content="Next"
+                                                            MinWidth="72"
+                                                            VerticalAlignment="Bottom"
+                                                            Click="ReceivingNextPageButton_Click"/>
+                                                </Grid>
                                                 <Grid Grid.Row="1"
                                                       Padding="12,8"
                                                       Background="{ThemeResource SlSurfaceAltBrush}"
@@ -655,22 +683,45 @@
                                                     <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="3" Text="Status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
-                                                <Grid Grid.Row="2"
-                                                      MinHeight="340">
-                                                    <StackPanel Spacing="8"
-                                                                VerticalAlignment="Center"
-                                                                HorizontalAlignment="Center"
-                                                                MaxWidth="420">
-                                                        <TextBlock Text="No received bundles in the current prototype."
-                                                                   Foreground="{ThemeResource SlTextBrush}"
-                                                                   TextAlignment="Center"
-                                                                   TextWrapping="Wrap"/>
-                                                        <TextBlock Text="This tab is reserved for unopened stock intake. It will not assign bins or create active placements."
-                                                                   Style="{StaticResource SlCaptionTextStyle}"
-                                                                   TextAlignment="Center"
-                                                                   TextWrapping="Wrap"/>
-                                                    </StackPanel>
-                                                </Grid>
+                                                <TextBlock x:Name="ReceivingPageStatusText"
+                                                           Grid.Row="2"
+                                                           Text="Page 1 of 1"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <ListView x:Name="ReceivingListView"
+                                                          Grid.Row="3"
+                                                          MinHeight="220"
+                                                          SelectionMode="None"
+                                                          SizeChanged="InventoryPagedList_SizeChanged">
+                                                    <ListView.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid MinHeight="44"
+                                                                  Padding="12,8"
+                                                                  ColumnSpacing="12">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="130"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Text="{Binding Source}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                <StackPanel Grid.Column="1"
+                                                                            Spacing="1">
+                                                                    <TextBlock Text="{Binding GameText}"
+                                                                               Foreground="{ThemeResource SlTextBrush}"/>
+                                                                    <TextBlock Text="{Binding BundleText}"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="2"
+                                                                           Text="{Binding Ticket}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                <TextBlock Grid.Column="3"
+                                                                           Text="{Binding Status}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ListView.ItemTemplate>
+                                                </ListView>
                                             </Grid>
                                         </Border>
                                         <Border Grid.Column="1"
@@ -703,10 +754,42 @@
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="Auto"/>
                                                     <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
                                                     <RowDefinition Height="*"/>
                                                 </Grid.RowDefinitions>
-                                                <TextBlock Text="Open / Active Bundles"
-                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <Grid ColumnSpacing="12"
+                                                      RowSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="220"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="Open / Active Bundles"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="OpenBundleCountText"
+                                                                   Text="0 open bundles"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    </StackPanel>
+                                                    <TextBox x:Name="OpenBundleSearchBox"
+                                                             Grid.Column="1"
+                                                             Header="Search Game ID"
+                                                             PlaceholderText="Game, bundle, bin, or status"
+                                                             TextChanged="OpenBundleSearchBox_TextChanged"/>
+                                                    <Button x:Name="OpenBundlePreviousPageButton"
+                                                            Grid.Column="2"
+                                                            Content="Previous"
+                                                            MinWidth="88"
+                                                            VerticalAlignment="Bottom"
+                                                            Click="OpenBundlePreviousPageButton_Click"/>
+                                                    <Button x:Name="OpenBundleNextPageButton"
+                                                            Grid.Column="3"
+                                                            Content="Next"
+                                                            MinWidth="72"
+                                                            VerticalAlignment="Bottom"
+                                                            Click="OpenBundleNextPageButton_Click"/>
+                                                </Grid>
                                                 <Grid Grid.Row="1"
                                                       Padding="12,8"
                                                       Background="{ThemeResource SlSurfaceAltBrush}"
@@ -722,9 +805,14 @@
                                                     <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="3" Text="Status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
+                                                <TextBlock x:Name="OpenBundlePageStatusText"
+                                                           Grid.Row="2"
+                                                           Text="Page 1 of 1"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
                                                 <ListView x:Name="InventoryListView"
-                                                          Grid.Row="2"
-                                                          MinHeight="340"
+                                                          Grid.Row="3"
+                                                          MinHeight="220"
+                                                          SizeChanged="InventoryPagedList_SizeChanged"
                                                           SelectionMode="None">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
@@ -819,7 +907,6 @@
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <TextBox x:Name="GameSearchBox"
                                                                  Header="Search Game ID"
@@ -842,10 +929,6 @@
                                                                 MinWidth="72"
                                                                 VerticalAlignment="Bottom"
                                                                 Click="GameNextPageButton_Click"/>
-                                                        <TextBlock Grid.Column="4"
-                                                                   Text="20 per page"
-                                                                   Style="{StaticResource SlCaptionTextStyle}"
-                                                                   VerticalAlignment="Bottom"/>
                                                     </Grid>
                                                 </Grid>
                                                 <Grid Grid.Row="1"
@@ -869,6 +952,7 @@
                                                           Grid.Row="2"
                                                           MinHeight="340"
                                                           SelectionMode="Single"
+                                                          SizeChanged="InventoryPagedList_SizeChanged"
                                                           SelectionChanged="GameCatalogListView_SelectionChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>

@@ -44,7 +44,10 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<ImportBin> _importBins = new();
     private readonly ObservableCollection<BinCard> _binCards = new();
     private readonly ObservableCollection<BundleDetailLine> _selectedBinBundles = new();
+    private readonly ObservableCollection<InventoryRecord> _receivingRecords = new();
+    private readonly ObservableCollection<InventoryRecord> _pagedReceivingRecords = new();
     private readonly ObservableCollection<InventoryRecord> _inventoryRecords = new();
+    private readonly ObservableCollection<InventoryRecord> _pagedInventoryRecords = new();
     private readonly ObservableCollection<GameCatalogRecord> _gameCatalog = new();
     private readonly ObservableCollection<GameCatalogRecord> _pagedGameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
@@ -88,7 +91,11 @@ public sealed partial class MainWindow : Window
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
     private bool _hasImportFailure;
-    private const int GameCatalogPageSize = 20;
+    private int _receivingPageSize = 8;
+    private int _inventoryPageSize = 8;
+    private int _gameCatalogPageSize = 8;
+    private int _receivingPage = 1;
+    private int _inventoryPage = 1;
     private int _gameCatalogPage = 1;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
@@ -182,7 +189,8 @@ public sealed partial class MainWindow : Window
         ImportBinsGridView.ItemsSource = _importBins;
         BinsGridView.ItemsSource = _binCards;
         BinBundlesListView.ItemsSource = _selectedBinBundles;
-        InventoryListView.ItemsSource = _inventoryRecords;
+        ReceivingListView.ItemsSource = _pagedReceivingRecords;
+        InventoryListView.ItemsSource = _pagedInventoryRecords;
         GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
         OrderInventoryTabs();
@@ -1639,6 +1647,13 @@ public sealed partial class MainWindow : Window
     {
         if (e.NewSize.Width < 1080 && !_isNavCollapsed)
             SetNavCollapsed(true);
+
+        RecalculateInventoryPageSizes();
+    }
+
+    private void InventoryPagedList_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RecalculateInventoryPageSizes();
     }
 
     private void SetNavCollapsed(bool collapsed)
@@ -1682,6 +1697,9 @@ public sealed partial class MainWindow : Window
         SettingsContent.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
         SetSelectedNav(section);
         StatusText.Text = section;
+
+        if (section == "Closing")
+            _ = SpeakAsync("Closing page. Press start closing scan when ready.");
     }
 
     private void SetSelectedNav(string section)
@@ -1710,6 +1728,7 @@ public sealed partial class MainWindow : Window
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
     {
         ShowSection("Closing");
+        _ = SpeakAsync("Review closing totals. Confirm close shift when ready.");
 
         var saleCount = _sales.Count;
         var ticketCount = _sales.Sum(s => s.Quantity);
@@ -1729,7 +1748,10 @@ public sealed partial class MainWindow : Window
 
         var result = await dialog.ShowAsync();
         if (result != ContentDialogResult.Primary)
+        {
+            _ = SpeakAsync("Close cancelled.");
             return;
+        }
 
         _lastCloseUtc = DateTime.UtcNow;
         if (!SaveSetting("last_close_utc", _lastCloseUtc.ToString("O", CultureInfo.InvariantCulture)))
@@ -1738,6 +1760,7 @@ public sealed partial class MainWindow : Window
         _sales.Clear();
         StatusText.Text = "Shift closed.";
         ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. New sales count toward the next close.";
+        _ = SpeakAsync("Shift closed. New sales count toward the next close.");
         RefreshTotals();
     }
 
@@ -1838,7 +1861,7 @@ public sealed partial class MainWindow : Window
         if (index < 0)
             return;
 
-        _gameCatalogPage = (index / GameCatalogPageSize) + 1;
+        _gameCatalogPage = (index / Math.Max(1, _gameCatalogPageSize)) + 1;
         ApplyGameCatalogPage();
         var match = _pagedGameCatalog.FirstOrDefault(g =>
             string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
@@ -1923,6 +1946,7 @@ public sealed partial class MainWindow : Window
 
     private void RefreshInventoryRecords()
     {
+        _receivingRecords.Clear();
         _inventoryRecords.Clear();
         foreach (var line in _imports)
             _inventoryRecords.Add(new InventoryRecord(
@@ -1932,6 +1956,8 @@ public sealed partial class MainWindow : Window
                 line.Ticket,
                 $"Active in bin {line.Bin}"));
 
+        ApplyReceivingPage();
+        ApplyInventoryPage();
         InventoryBundleCountText.Text = _inventoryRecords.Count.ToString(CultureInfo.CurrentCulture);
     }
 
@@ -1963,13 +1989,13 @@ public sealed partial class MainWindow : Window
             _gameCatalogPage = 1;
 
         var filtered = FilteredGameCatalog();
-        var totalPages = Math.Max(1, (int)Math.Ceiling(filtered.Count / (double)GameCatalogPageSize));
+        var totalPages = TotalPages(filtered.Count, _gameCatalogPageSize);
         _gameCatalogPage = Math.Clamp(_gameCatalogPage, 1, totalPages);
 
         _pagedGameCatalog.Clear();
         foreach (var game in filtered
-                     .Skip((_gameCatalogPage - 1) * GameCatalogPageSize)
-                     .Take(GameCatalogPageSize))
+                     .Skip((_gameCatalogPage - 1) * _gameCatalogPageSize)
+                     .Take(_gameCatalogPageSize))
         {
             _pagedGameCatalog.Add(game);
         }
@@ -1985,14 +2011,152 @@ public sealed partial class MainWindow : Window
         var search = GameSearchBox.Text.Trim();
         return _gameCatalog
             .Where(g => string.IsNullOrWhiteSpace(search) ||
-                        g.GameId.Contains(search, StringComparison.OrdinalIgnoreCase))
+                        g.GameId.StartsWith(search, StringComparison.OrdinalIgnoreCase))
             .OrderBy(g => g.GameId, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private void ApplyReceivingPage(bool resetPage = false)
+    {
+        if (resetPage)
+            _receivingPage = 1;
+
+        var filtered = FilteredReceivingRecords();
+        var totalPages = TotalPages(filtered.Count, _receivingPageSize);
+        _receivingPage = Math.Clamp(_receivingPage, 1, totalPages);
+
+        _pagedReceivingRecords.Clear();
+        foreach (var record in filtered
+                     .Skip((_receivingPage - 1) * _receivingPageSize)
+                     .Take(_receivingPageSize))
+        {
+            _pagedReceivingRecords.Add(record);
+        }
+
+        ReceivingCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} of {_receivingRecords.Count.ToString(CultureInfo.CurrentCulture)} received bundle{(_receivingRecords.Count == 1 ? string.Empty : "s")}";
+        ReceivingPageStatusText.Text = $"Page {_receivingPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
+        ReceivingPreviousPageButton.IsEnabled = _receivingPage > 1;
+        ReceivingNextPageButton.IsEnabled = _receivingPage < totalPages;
+    }
+
+    private void ApplyInventoryPage(bool resetPage = false)
+    {
+        if (resetPage)
+            _inventoryPage = 1;
+
+        var filtered = FilteredInventoryRecords();
+        var totalPages = TotalPages(filtered.Count, _inventoryPageSize);
+        _inventoryPage = Math.Clamp(_inventoryPage, 1, totalPages);
+
+        _pagedInventoryRecords.Clear();
+        foreach (var record in filtered
+                     .Skip((_inventoryPage - 1) * _inventoryPageSize)
+                     .Take(_inventoryPageSize))
+        {
+            _pagedInventoryRecords.Add(record);
+        }
+
+        OpenBundleCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} of {_inventoryRecords.Count.ToString(CultureInfo.CurrentCulture)} open bundle{(_inventoryRecords.Count == 1 ? string.Empty : "s")}";
+        OpenBundlePageStatusText.Text = $"Page {_inventoryPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
+        OpenBundlePreviousPageButton.IsEnabled = _inventoryPage > 1;
+        OpenBundleNextPageButton.IsEnabled = _inventoryPage < totalPages;
+    }
+
+    private List<InventoryRecord> FilteredReceivingRecords() =>
+        FilterInventoryRecords(_receivingRecords, ReceivingSearchBox.Text.Trim());
+
+    private List<InventoryRecord> FilteredInventoryRecords() =>
+        FilterInventoryRecords(_inventoryRecords, OpenBundleSearchBox.Text.Trim());
+
+    private static List<InventoryRecord> FilterInventoryRecords(IEnumerable<InventoryRecord> records, string search) =>
+        records
+            .Where(r => string.IsNullOrWhiteSpace(search) ||
+                        r.GameId.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.BundleId.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Ticket.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Source.StartsWith(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Status.StartsWith(search, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(r => r.GameId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.BundleId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static int TotalPages(int count, int pageSize) =>
+        Math.Max(1, (int)Math.Ceiling(count / (double)Math.Max(1, pageSize)));
+
+    private void RecalculateInventoryPageSizes()
+    {
+        if (ReceivingListView is null || InventoryListView is null || GameCatalogListView is null)
+            return;
+
+        var nextReceiving = PageSizeForList(ReceivingListView, 44, _receivingPageSize);
+        var nextInventory = PageSizeForList(InventoryListView, 44, _inventoryPageSize);
+        var nextGames = PageSizeForList(GameCatalogListView, 58, _gameCatalogPageSize);
+        if (nextReceiving == _receivingPageSize &&
+            nextInventory == _inventoryPageSize &&
+            nextGames == _gameCatalogPageSize)
+        {
+            return;
+        }
+
+        _receivingPageSize = nextReceiving;
+        _inventoryPageSize = nextInventory;
+        _gameCatalogPageSize = nextGames;
+        ApplyReceivingPage();
+        ApplyInventoryPage();
+        ApplyGameCatalogPage();
+    }
+
+    private static int PageSizeForList(ListView listView, double rowHeight, int fallback)
+    {
+        if (listView.ActualHeight <= rowHeight)
+            return Math.Max(1, fallback);
+
+        return Math.Max(1, (int)Math.Floor((listView.ActualHeight - 4) / rowHeight));
     }
 
     private void GameSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyGameCatalogPage(resetPage: true);
+    }
+
+    private void ReceivingSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyReceivingPage(resetPage: true);
+    }
+
+    private void OpenBundleSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyInventoryPage(resetPage: true);
+    }
+
+    private void ReceivingPreviousPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_receivingPage <= 1)
+            return;
+
+        _receivingPage--;
+        ApplyReceivingPage();
+    }
+
+    private void ReceivingNextPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        _receivingPage++;
+        ApplyReceivingPage();
+    }
+
+    private void OpenBundlePreviousPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_inventoryPage <= 1)
+            return;
+
+        _inventoryPage--;
+        ApplyInventoryPage();
+    }
+
+    private void OpenBundleNextPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        _inventoryPage++;
+        ApplyInventoryPage();
     }
 
     private void GamePreviousPageButton_Click(object sender, RoutedEventArgs e)
@@ -2201,6 +2365,9 @@ public sealed partial class MainWindow : Window
 
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
     {
+        ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
+        _ = SpeakAsync("Start closing scan. Scan the current ticket from each physical bin.");
+
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
@@ -2211,7 +2378,8 @@ public sealed partial class MainWindow : Window
         };
 
         await dialog.ShowAsync();
-        ClosingStatusText.Text = "Closing scan route is not active yet.";
+        ClosingStatusText.Text = "Closing scan route is not active yet. Scanner collection will be wired next.";
+        _ = SpeakAsync("Closing scan collection is not active yet.");
     }
 
     private async void AddGameButton_Click(object sender, RoutedEventArgs e)
