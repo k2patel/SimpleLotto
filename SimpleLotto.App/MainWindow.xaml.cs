@@ -29,6 +29,7 @@ using Windows.Graphics;
 using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.Media.SpeechSynthesis;
+using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI;
@@ -40,6 +41,7 @@ public sealed partial class MainWindow : Window
     private readonly RdisplayService _rdisplay;
     private readonly LocalStore _store;
     private readonly ObservableCollection<SaleLine> _sales = new();
+    private readonly ObservableCollection<SaleLine> _allSales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
     private readonly ObservableCollection<ImportBin> _importBins = new();
     private readonly ObservableCollection<BinCard> _binCards = new();
@@ -55,6 +57,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<ClosingReconciliationRow> _closingReconciliationRows = new();
     private readonly ObservableCollection<ClosingHistoryRow> _closingHistoryRows = new();
     private readonly ObservableCollection<ClosingHistoryRow> _pagedClosingHistoryRows = new();
+    private readonly ObservableCollection<ClosingReportSaleRow> _closingReportSaleRows = new();
     private readonly ObservableCollection<AuditLogRow> _auditLogRows = new();
     private readonly ObservableCollection<AuditLogRow> _pagedAuditLogRows = new();
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
@@ -232,6 +235,7 @@ public sealed partial class MainWindow : Window
         ClosingBinsGridView.ItemsSource = _closingBinCards;
         ClosingReconciliationListView.ItemsSource = _closingReconciliationRows;
         ClosingHistoryListView.ItemsSource = _pagedClosingHistoryRows;
+        ClosingReportSalesListView.ItemsSource = _closingReportSaleRows;
         AuditLogListView.ItemsSource = _pagedAuditLogRows;
         RegisteredDisplaysListView.ItemsSource = _registeredDisplayCards;
         _rdisplay.DisplaysChanged += Rdisplay_DisplaysChanged;
@@ -323,16 +327,20 @@ public sealed partial class MainWindow : Window
             _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
 
         _sales.Clear();
-        foreach (var line in state.Sales.Where(s => s.SoldAtUtc > _lastCloseUtc))
+        _allSales.Clear();
+        foreach (var line in state.Sales)
         {
-            _sales.Add(new SaleLine(
+            var saleLine = new SaleLine(
                 line.SoldAtUtc.ToLocalTime(),
                 line.GameId,
                 line.Bin,
                 line.Ticket,
                 line.Quantity,
                 line.AmountCents / 100m,
-                line.Source));
+                line.Source);
+            _allSales.Add(saleLine);
+            if (line.SoldAtUtc > _lastCloseUtc)
+                _sales.Add(saleLine);
         }
 
         _manualGameCatalog.Clear();
@@ -2091,8 +2099,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _sales.Remove(sale);
-        DeleteSaleLine(sale);
+        var correction = new SaleLine(
+            DateTime.Now,
+            sale.GameId,
+            sale.Bin,
+            sale.Ticket,
+            -sale.Quantity,
+            -sale.Amount,
+            "undo");
+        _sales.Insert(0, correction);
+        SaveSaleLine(correction);
+        TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
         StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
         RefreshTotals();
     }
@@ -2120,6 +2137,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _store.InsertSale(ToStoredSaleLine(line));
+            _allSales.Insert(0, line);
         }
         catch (Exception ex)
         {
@@ -2132,6 +2150,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _store.DeleteSale(ToStoredSaleLine(line));
+            _allSales.Remove(line);
         }
         catch (Exception ex)
         {
@@ -2217,6 +2236,17 @@ public sealed partial class MainWindow : Window
             line.Quantity,
             (long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero),
             line.Source);
+
+    private static string SaleSourceLabel(string source) =>
+        source switch
+        {
+            "normal_sale" => "Sale",
+            "undo" => "Correction",
+            "closing_gap_fill_sold" => "Closing gap-fill",
+            "activation_gap_fill" => "Activation gap-fill",
+            _ when string.IsNullOrWhiteSpace(source) => "Sale",
+            _ => source
+        };
 
     private void RefreshTotals()
     {
@@ -2409,6 +2439,7 @@ public sealed partial class MainWindow : Window
         if (resetPage)
             _closingHistoryPage = 1;
 
+        var selected = ClosingHistoryListView.SelectedItem as ClosingHistoryRow;
         var filtered = FilteredClosingHistoryRows();
         var totalPages = TotalPages(filtered.Count, _closingHistoryPageSize);
         _closingHistoryPage = Math.Clamp(_closingHistoryPage, 1, totalPages);
@@ -2425,6 +2456,10 @@ public sealed partial class MainWindow : Window
         ClosingHistoryPageStatusText.Text = $"Page {_closingHistoryPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
         ClosingHistoryPreviousPageButton.IsEnabled = _closingHistoryPage > 1;
         ClosingHistoryNextPageButton.IsEnabled = _closingHistoryPage < totalPages;
+        if (selected is not null && _pagedClosingHistoryRows.Contains(selected))
+            ClosingHistoryListView.SelectedItem = selected;
+        else if (selected is not null)
+            ClearClosingReport();
     }
 
     private void ApplyAuditLogPage(bool resetPage = false)
@@ -2483,7 +2518,11 @@ public sealed partial class MainWindow : Window
         return _closingHistoryRows
             .Where(r => string.IsNullOrWhiteSpace(search) ||
                         r.ClosedText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.ShiftText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.ReportFolder.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         r.SalesText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.ExpectedCashText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.ManualTotalsText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         r.TicketText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         r.BinText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         r.ReconciliationText.Contains(search, StringComparison.OrdinalIgnoreCase))
@@ -2636,6 +2675,95 @@ public sealed partial class MainWindow : Window
     {
         _closingHistoryPage++;
         ApplyClosingHistoryPage();
+    }
+
+    private void ClosingHistoryListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ClosingHistoryListView.SelectedItem is ClosingHistoryRow row)
+        {
+            ShowClosingReport(row);
+            return;
+        }
+
+        ClearClosingReport();
+    }
+
+    private async void OpenClosingReportButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string folder } ||
+            string.IsNullOrWhiteSpace(folder))
+        {
+            StatusText.Text = "No report folder is available for this closing.";
+            return;
+        }
+
+        if (!Directory.Exists(folder))
+        {
+            StatusText.Text = $"Report folder was not found: {folder}";
+            return;
+        }
+
+        try
+        {
+            var storageFolder = await StorageFolder.GetFolderFromPathAsync(folder);
+            var launched = await Launcher.LaunchFolderAsync(storageFolder);
+            StatusText.Text = launched
+                ? $"Opened report folder: {folder}"
+                : $"Unable to open report folder: {folder}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to open report folder: {ex.Message}";
+        }
+    }
+
+    private void ShowClosingReport(ClosingHistoryRow row)
+    {
+        var sales = SalesForClosing(row);
+        var salesAmount = sales.Sum(s => s.Amount);
+        var ticketCount = sales.Sum(s => s.Quantity);
+
+        _closingReportSaleRows.Clear();
+        foreach (var sale in sales)
+            _closingReportSaleRows.Add(ClosingReportSaleRow.From(sale));
+
+        ClosingReportSummaryText.Text =
+            $"Shift {row.ShiftText}{Environment.NewLine}" +
+            $"Closed {row.ClosedText}{Environment.NewLine}" +
+            $"Interval start: {row.IntervalStartText}{Environment.NewLine}" +
+            $"Expected cash: {row.ExpectedCashText}{Environment.NewLine}" +
+            $"Instant ticket sales: {row.SalesText} across {row.TicketText} ticket(s)";
+        ClosingReportSalesText.Text =
+            $"Sales ledger: {sales.Count.ToString(CultureInfo.CurrentCulture)} row(s), " +
+            $"{salesAmount.ToString("C", CultureInfo.CurrentCulture)}, " +
+            $"{ticketCount.ToString(CultureInfo.CurrentCulture)} ticket(s)";
+        ClosingReportInventoryText.Text =
+            $"Manual totals: {row.ManualTotalsText}{Environment.NewLine}" +
+            $"Inventory reconciliation: {row.ReconciliationText}";
+        ClosingReportStatusText.Text = sales.Count == 0
+            ? "No sales ledger rows were found for this closing interval."
+            : $"Report folder: {row.ReportFolderText}";
+    }
+
+    private List<SaleLine> SalesForClosing(ClosingHistoryRow row)
+    {
+        var intervalStart = row.IntervalStart;
+        return _allSales
+            .Where(s => s.SoldAt <= row.ClosedAt &&
+                        (intervalStart == DateTime.MinValue || s.SoldAt > intervalStart))
+            .OrderBy(s => s.SoldAt)
+            .ThenBy(s => s.GameId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.Ticket, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void ClearClosingReport()
+    {
+        _closingReportSaleRows.Clear();
+        ClosingReportSummaryText.Text = "Select a closing to view report details.";
+        ClosingReportSalesText.Text = "Sales: 0";
+        ClosingReportInventoryText.Text = "Inventory: 0 closed";
+        ClosingReportStatusText.Text = "Reports are built from sales ledger rows for the selected close interval.";
     }
 
     private void AuditLogPreviousPageButton_Click(object sender, RoutedEventArgs e)
@@ -3525,8 +3653,21 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (!TryReadMoneyCents(ClosingOnlineSaleBox, out var onlineSaleCents) ||
+            !TryReadMoneyCents(ClosingOnlineCashoutBox, out var onlineCashoutCents) ||
+            !TryReadMoneyCents(ClosingInstantCashoutBox, out var instantCashoutCents))
+        {
+            ClosingStatusText.Text = "Manual totals must be valid dollar amounts.";
+            StatusText.Text = "Manual closing totals must be valid dollar amounts.";
+            return;
+        }
+
         var closedBundles = ClosingSoldOutBundles();
         var generatedSales = BuildClosingGeneratedSales(closedBundles, DateTime.UtcNow);
+        var instantTicketSalesCents = (long)Math.Round(
+            (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
+            MidpointRounding.AwayFromZero);
+        var expectedCashCents = instantTicketSalesCents + onlineSaleCents - instantCashoutCents - onlineCashoutCents;
         var closingEmailSummary = BuildClosingEmailSummaryText(
             SettingsEmailSendCheckBox.IsChecked == true,
             SelectedSettingsEmailReportNames());
@@ -3535,7 +3676,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Finalize shift closing?",
-            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {closedBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedBundles.Count == 1 ? string.Empty : "s")} will be closed out as closing gap-fill sold.{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {closedBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedBundles.Count == 1 ? string.Empty : "s")} will be closed out as closing gap-fill sold.{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Finalize Closing",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -3548,23 +3689,59 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var intervalStartUtc = _lastCloseUtc;
         var closedAtUtc = DateTime.UtcNow;
+        var reportTarget = BuildClosingReportTarget(closedAtUtc);
+        var reportSales = _sales
+            .Concat(generatedSales)
+            .OrderBy(s => s.SoldAt)
+            .ThenBy(s => s.GameId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.Ticket, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        try
+        {
+            WriteClosingReports(
+                reportTarget,
+                intervalStartUtc,
+                closedAtUtc,
+                reportSales,
+                closedBundles,
+                _closingCurrentPlacements,
+                _closingResolvedPlacements,
+                instantTicketSalesCents,
+                onlineSaleCents,
+                onlineCashoutCents,
+                instantCashoutCents,
+                expectedCashCents);
+        }
+        catch (Exception ex)
+        {
+            ClosingStatusText.Text = $"Closing report generation failed: {ex.Message}";
+            StatusText.Text = "Closing report generation failed. Shift was not closed.";
+            return;
+        }
+
         var closingRecord = new StoredClosingRecord(
             closedAtUtc,
+            intervalStartUtc,
+            reportTarget.ShiftLabel,
+            reportTarget.Folder,
             _closingScannedBins.Count,
             ActiveClosingBinCount(),
             _sales.Count + generatedSales.Count,
             _sales.Sum(s => s.Quantity) + generatedSales.Sum(s => s.Quantity),
-            (long)Math.Round(
-                (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
-                MidpointRounding.AwayFromZero),
+            instantTicketSalesCents,
+            onlineSaleCents,
+            onlineCashoutCents,
+            instantCashoutCents,
+            expectedCashCents,
             closedBundles.Count,
             _closingCurrentPlacements.Count,
             _closingResolvedPlacements.Count);
         var auditRecord = NewAuditRecord(
             "closing",
             "Shift closed",
-            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundles.Count.ToString(CultureInfo.InvariantCulture)} closed bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles");
+            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundles.Count.ToString(CultureInfo.InvariantCulture)} closed bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, expected cash {MoneyText(expectedCashCents)}");
         try
         {
             _store.CompleteClosing(
@@ -3578,6 +3755,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            TryDeleteReportFolder(reportTarget.Folder);
             ClosingStatusText.Text = $"Closing finalization failed: {ex.Message}";
             return;
         }
@@ -3589,11 +3767,17 @@ public sealed partial class MainWindow : Window
             ReplaceImportLine(placement);
         foreach (var placement in _closingResolvedPlacements)
             _imports.Add(placement);
+        foreach (var generated in generatedSales)
+            _allSales.Insert(0, generated);
         _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
         ApplyClosingHistoryPage(resetPage: true);
+        ClosingHistoryListView.SelectedItem = _pagedClosingHistoryRows.FirstOrDefault();
         _auditLogRows.Insert(0, AuditLogRow.From(auditRecord));
         ApplyAuditLogPage(resetPage: true);
         _sales.Clear();
+        ClosingOnlineSaleBox.Value = 0;
+        ClosingOnlineCashoutBox.Value = 0;
+        ClosingInstantCashoutBox.Value = 0;
         _closingScannedBins.Clear();
         _closingScannedBundleKeys.Clear();
         _closingCurrentPlacements.Clear();
@@ -3602,8 +3786,8 @@ public sealed partial class MainWindow : Window
         _closingScanRows.Clear();
         _closingScanIssues.Clear();
         _closingScanCaptured = false;
-        StatusText.Text = "Shift closed.";
-        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Closing gap-fill rows were recorded separately.";
+        StatusText.Text = $"Shift closed. Reports saved to {reportTarget.Folder}.";
+        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Reports saved to {reportTarget.ShiftLabel}.";
         _ = SpeakAsync("Shift closed. New sales count toward the next close.");
         RefreshTotals();
         RefreshOperationalPages();
@@ -3620,6 +3804,222 @@ public sealed partial class MainWindow : Window
                 GamePriceCents(bundle.GameId) / 100m,
                 "closing_gap_fill_sold"))
             .ToList();
+
+    private ClosingReportTarget BuildClosingReportTarget(DateTime closedAtUtc)
+    {
+        var closedAtLocal = closedAtUtc.ToLocalTime();
+        var closeDate = closedAtLocal.Date;
+        var shiftNumber = _closingHistoryRows.Count(r => r.ClosedAt.Date == closeDate) + 1;
+        var shiftLabel = $"{closedAtLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)} #{shiftNumber.ToString(CultureInfo.InvariantCulture)}";
+        var folderName = $"{closedAtLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}_shift-{shiftNumber.ToString("000", CultureInfo.InvariantCulture)}";
+        var storeName = SanitizePathSegment(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName);
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SimpleLotto",
+            "reports",
+            storeName);
+        var folder = Path.Combine(root, folderName);
+        if (Directory.Exists(folder))
+            folder = Path.Combine(root, $"{folderName}_{closedAtLocal.ToString("HHmmss", CultureInfo.InvariantCulture)}");
+
+        return new ClosingReportTarget(shiftLabel, folder);
+    }
+
+    private void WriteClosingReports(
+        ClosingReportTarget target,
+        DateTime intervalStartUtc,
+        DateTime closedAtUtc,
+        IReadOnlyList<SaleLine> sales,
+        IReadOnlyList<ImportLine> closedBundles,
+        IReadOnlyList<ImportLine> currentBundles,
+        IReadOnlyList<ImportLine> resolvedBundles,
+        long instantTicketSalesCents,
+        long onlineSaleCents,
+        long onlineCashoutCents,
+        long instantCashoutCents,
+        long expectedCashCents)
+    {
+        Directory.CreateDirectory(target.Folder);
+        var formula = "instant_ticket_sales + online_sale - instant_cashout - online_cashout";
+        var periodStart = intervalStartUtc == DateTime.MinValue
+            ? "first_recorded_interval"
+            : intervalStartUtc.ToLocalTime().ToString("O", CultureInfo.InvariantCulture);
+        var periodEnd = closedAtUtc.ToLocalTime().ToString("O", CultureInfo.InvariantCulture);
+
+        File.WriteAllLines(
+            Path.Combine(target.Folder, "shift_summary.csv"),
+            new[]
+            {
+                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles"),
+                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, _closingScannedBins.Count.ToString(CultureInfo.InvariantCulture), ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture))
+            },
+            Encoding.UTF8);
+
+        WriteSalesCsv(Path.Combine(target.Folder, "sales_detail.csv"), sales);
+        WriteSalesCsv(
+            Path.Combine(target.Folder, "corrections.csv"),
+            sales.Where(s => s.Quantity < 0 || s.Amount < 0 || string.Equals(s.Source, "undo", StringComparison.OrdinalIgnoreCase)).ToList());
+        WriteInventoryCsv(Path.Combine(target.Folder, "inventory.csv"), closedBundles, currentBundles, resolvedBundles);
+        WritePlacementEventsCsv(Path.Combine(target.Folder, "placement_events.csv"), closedBundles, currentBundles, resolvedBundles);
+        WriteBinAssignmentsCsv(Path.Combine(target.Folder, "bin_assignments.csv"), currentBundles, resolvedBundles);
+        WriteAnomaliesCsv(Path.Combine(target.Folder, "anomalies.csv"));
+        File.WriteAllLines(
+            Path.Combine(target.Folder, "initialization.csv"),
+            new[] { CsvLine("event", "detail"), CsvLine("not_applicable", "No initialization rows are generated for this shift closing.") },
+            Encoding.UTF8);
+        File.WriteAllLines(
+            Path.Combine(target.Folder, "closing_audit.csv"),
+            new[]
+            {
+                CsvLine("event", "detail"),
+                CsvLine("closing_finalized", $"shift={target.ShiftLabel}; expected_cash={MoneyCsv(expectedCashCents)}; report_folder={target.Folder}"),
+                CsvLine("cash_formula", formula),
+                CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}")
+            },
+            Encoding.UTF8);
+        File.WriteAllText(
+            Path.Combine(target.Folder, "closing_report.txt"),
+            BuildClosingReportText(target, periodStart, periodEnd, sales, instantTicketSalesCents, onlineSaleCents, onlineCashoutCents, instantCashoutCents, expectedCashCents, closedBundles.Count, currentBundles.Count, resolvedBundles.Count),
+            Encoding.UTF8);
+    }
+
+    private static void WriteSalesCsv(string path, IReadOnlyList<SaleLine> sales)
+    {
+        var lines = new List<string>
+        {
+            CsvLine("sold_at", "source", "game_id", "bin", "ticket", "quantity", "amount")
+        };
+        lines.AddRange(sales.Select(s => CsvLine(
+            s.SoldAt.ToString("O", CultureInfo.InvariantCulture),
+            s.Source,
+            s.GameId,
+            s.Bin,
+            s.Ticket,
+            s.Quantity.ToString(CultureInfo.InvariantCulture),
+            AmountCsv(s.Amount))));
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    private static void WriteInventoryCsv(
+        string path,
+        IReadOnlyList<ImportLine> closedBundles,
+        IReadOnlyList<ImportLine> currentBundles,
+        IReadOnlyList<ImportLine> resolvedBundles)
+    {
+        var lines = new List<string>
+        {
+            CsvLine("category", "game_id", "bundle_id", "ticket", "bin", "source")
+        };
+        lines.AddRange(closedBundles.Select(i => ImportCsvLine("closing_gap_fill_sold", i)));
+        lines.AddRange(currentBundles.Select(i => ImportCsvLine("current_after_close", i)));
+        lines.AddRange(resolvedBundles.Select(i => ImportCsvLine("resolved_during_close", i)));
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    private static void WritePlacementEventsCsv(
+        string path,
+        IReadOnlyList<ImportLine> closedBundles,
+        IReadOnlyList<ImportLine> currentBundles,
+        IReadOnlyList<ImportLine> resolvedBundles)
+    {
+        var lines = new List<string>
+        {
+            CsvLine("event", "game_id", "bundle_id", "ticket", "bin", "source")
+        };
+        lines.AddRange(closedBundles.Select(i => ImportCsvLine("closed_bundle_removed", i)));
+        lines.AddRange(currentBundles.Select(i => ImportCsvLine("current_bundle_kept", i)));
+        lines.AddRange(resolvedBundles.Select(i => ImportCsvLine("closing_reconciliation", i)));
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    private static void WriteBinAssignmentsCsv(
+        string path,
+        IReadOnlyList<ImportLine> currentBundles,
+        IReadOnlyList<ImportLine> resolvedBundles)
+    {
+        var lines = new List<string>
+        {
+            CsvLine("bin", "game_id", "bundle_id", "ticket", "assignment_source")
+        };
+        lines.AddRange(currentBundles.Select(i => CsvLine(i.Bin, i.GameId, i.BundleId, i.Ticket, i.Source)));
+        lines.AddRange(resolvedBundles.Select(i => CsvLine(i.Bin, i.GameId, i.BundleId, i.Ticket, "closing_reconciliation")));
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    private void WriteAnomaliesCsv(string path)
+    {
+        var lines = new List<string>
+        {
+            CsvLine("title", "detail")
+        };
+        lines.AddRange(_closingScanIssues.Select(i => CsvLine(i.Title, i.Detail)));
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    private static string BuildClosingReportText(
+        ClosingReportTarget target,
+        string periodStart,
+        string periodEnd,
+        IReadOnlyList<SaleLine> sales,
+        long instantTicketSalesCents,
+        long onlineSaleCents,
+        long onlineCashoutCents,
+        long instantCashoutCents,
+        long expectedCashCents,
+        int closedBundleCount,
+        int currentBundleCount,
+        int resolvedBundleCount)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Closing report: {target.ShiftLabel}");
+        builder.AppendLine($"Period: {periodStart} - {periodEnd}");
+        builder.AppendLine();
+        builder.AppendLine($"Instant ticket sales: {MoneyText(instantTicketSalesCents)}");
+        builder.AppendLine($"Online sale: {MoneyText(onlineSaleCents)}");
+        builder.AppendLine($"Instant cashout: {MoneyText(instantCashoutCents)}");
+        builder.AppendLine($"Online cashout: {MoneyText(onlineCashoutCents)}");
+        builder.AppendLine($"Expected cash: {MoneyText(expectedCashCents)}");
+        builder.AppendLine();
+        builder.AppendLine($"Sales rows: {sales.Count.ToString(CultureInfo.CurrentCulture)}");
+        builder.AppendLine($"Ticket count: {sales.Sum(s => s.Quantity).ToString(CultureInfo.CurrentCulture)}");
+        builder.AppendLine($"Closed bundles: {closedBundleCount.ToString(CultureInfo.CurrentCulture)}");
+        builder.AppendLine($"Current bundles: {currentBundleCount.ToString(CultureInfo.CurrentCulture)}");
+        builder.AppendLine($"Resolved bundles: {resolvedBundleCount.ToString(CultureInfo.CurrentCulture)}");
+        return builder.ToString();
+    }
+
+    private static string ImportCsvLine(string category, ImportLine line) =>
+        CsvLine(category, line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source);
+
+    private static string CsvLine(params string[] cells) =>
+        string.Join(",", cells.Select(CsvCell));
+
+    private static string CsvCell(string value)
+    {
+        var text = value ?? string.Empty;
+        return text.IndexOfAny(new[] { ',', '"', '\r', '\n' }) < 0
+            ? text
+            : $"\"{text.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+    }
+
+    private static string MoneyCsv(long cents) =>
+        (cents / 100m).ToString("0.00", CultureInfo.InvariantCulture);
+
+    private static string AmountCsv(decimal amount) =>
+        amount.ToString("0.00", CultureInfo.InvariantCulture);
+
+    private static void TryDeleteReportFolder(string folder)
+    {
+        try
+        {
+            if (Directory.Exists(folder))
+                Directory.Delete(folder, recursive: true);
+        }
+        catch
+        {
+            // A failed cleanup should not hide the original closing failure.
+        }
+    }
 
     private void ReplaceImportLine(ImportLine replacement)
     {
@@ -4521,6 +4921,19 @@ public sealed partial class MainWindow : Window
         return dollars * 100L;
     }
 
+    private static bool TryReadMoneyCents(NumberBox box, out long cents)
+    {
+        cents = 0;
+        if (double.IsNaN(box.Value) || double.IsInfinity(box.Value) || box.Value < 0)
+            return false;
+
+        cents = (long)Math.Round((decimal)box.Value * 100m, MidpointRounding.AwayFromZero);
+        return cents >= 0;
+    }
+
+    private static string MoneyText(long cents) =>
+        (cents / 100m).ToString("C", CultureInfo.CurrentCulture);
+
     private static long PriceCentsFromPriceScan(string raw)
     {
         var text = raw.Trim();
@@ -4794,35 +5207,86 @@ public sealed partial class MainWindow : Window
 
     private sealed record ClosingReconciliationRow(string Title, string Detail, bool IsBlocking);
 
+    private sealed record ClosingReportTarget(string ShiftLabel, string Folder);
+
     private sealed record ClosingHistoryRow(
         DateTime ClosedAt,
+        DateTime IntervalStart,
+        string ShiftLabel,
+        string ReportFolder,
         int ScannedBins,
         int ActiveBins,
         int SalesCount,
         int TicketCount,
         decimal SalesAmount,
+        decimal OnlineSaleAmount,
+        decimal OnlineCashoutAmount,
+        decimal InstantCashoutAmount,
+        decimal ExpectedCashAmount,
         int ClosedBundles,
         int CurrentBundles,
         int ResolvedBundles)
     {
+        public string ShiftText => string.IsNullOrWhiteSpace(ShiftLabel)
+            ? ClosedAt.ToString("yyyy-MM-dd", CultureInfo.CurrentCulture)
+            : ShiftLabel;
         public string ClosedText => ClosedAt.ToString("g", CultureInfo.CurrentCulture);
+        public string IntervalStartText => IntervalStart == DateTime.MinValue
+            ? "First recorded interval"
+            : IntervalStart.ToString("g", CultureInfo.CurrentCulture);
         public string SalesText => SalesAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string ExpectedCashText => ExpectedCashAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string ManualTotalsText =>
+            $"online sale {OnlineSaleAmount.ToString("C", CultureInfo.CurrentCulture)}, " +
+            $"online cashout {OnlineCashoutAmount.ToString("C", CultureInfo.CurrentCulture)}, " +
+            $"instant cashout {InstantCashoutAmount.ToString("C", CultureInfo.CurrentCulture)}";
         public string TicketText => TicketCount.ToString(CultureInfo.CurrentCulture);
         public string BinText => $"{ScannedBins.ToString(CultureInfo.CurrentCulture)} / {ActiveBins.ToString(CultureInfo.CurrentCulture)}";
         public string ReconciliationText =>
             $"{ClosedBundles.ToString(CultureInfo.CurrentCulture)} closed, {CurrentBundles.ToString(CultureInfo.CurrentCulture)} updated, {ResolvedBundles.ToString(CultureInfo.CurrentCulture)} resolved";
+        public bool HasReportFolder => !string.IsNullOrWhiteSpace(ReportFolder) && Directory.Exists(ReportFolder);
+        public string ReportFolderText => string.IsNullOrWhiteSpace(ReportFolder)
+            ? "No report folder recorded."
+            : ReportFolder;
 
         public static ClosingHistoryRow From(StoredClosingRecord record) =>
             new(
                 record.ClosedAtUtc.ToLocalTime(),
+                record.IntervalStartUtc == DateTime.MinValue
+                    ? DateTime.MinValue
+                    : record.IntervalStartUtc.ToLocalTime(),
+                record.ShiftLabel,
+                record.ReportFolder,
                 record.ScannedBins,
                 record.ActiveBins,
                 record.SalesCount,
                 record.TicketCount,
                 record.SalesCents / 100m,
+                record.OnlineSaleCents / 100m,
+                record.OnlineCashoutCents / 100m,
+                record.InstantCashoutCents / 100m,
+                record.ExpectedCashCents / 100m,
                 record.ClosedBundles,
                 record.CurrentBundles,
                 record.ResolvedBundles);
+    }
+
+    private sealed record ClosingReportSaleRow(
+        DateTime SoldAt,
+        string Source,
+        string GameId,
+        string Bin,
+        string Ticket,
+        int Quantity,
+        decimal Amount)
+    {
+        public string Title =>
+            $"{SoldAt.ToString("g", CultureInfo.CurrentCulture)} | {SaleSourceLabel(Source)} | {Amount.ToString("C", CultureInfo.CurrentCulture)}";
+        public string Detail =>
+            $"Game {GameId} | Bin {Bin} | Ticket {Ticket} | Qty {Quantity.ToString(CultureInfo.CurrentCulture)}";
+
+        public static ClosingReportSaleRow From(SaleLine sale) =>
+            new(sale.SoldAt, sale.Source, sale.GameId, sale.Bin, sale.Ticket, sale.Quantity, sale.Amount);
     }
 
     private sealed record AuditLogRow(

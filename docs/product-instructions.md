@@ -583,6 +583,8 @@ Close-interval storage rule:
 - Once a close interval is closed, it is closed and should not be edited.
 - Fixes after close happen only in a later/current open interval as corrective actions.
 - Cash summary data comes from sales/payment activity.
+- Each closing record must persist the user-facing shift label and the report folder path created for that close.
+- The shift label sequence resets by local closing date, for example `2026-07-08 #1`, `2026-07-08 #2`, not by lifetime application closing count.
 - Inventory overview data comes from inventory/count activity.
 - Reports may display both, but database summaries must keep them separate.
 
@@ -744,6 +746,22 @@ Expected closing/report artifacts should follow the `../windowsPOS` pattern unle
 - `initialization.csv`
 - `closing_audit.csv`
 - `closing_report.pdf`
+
+Closing report folder rules:
+
+- Closing finalization must create an on-disk report folder for that specific close interval.
+- Report folders must be named by local closing date plus that day's shift sequence, for example `2026-07-08_shift-001`, `2026-07-08_shift-002`.
+- The daily shift sequence is scoped to the local closing date. It is not a lifetime counter from first install.
+- The Closing history row for each close must provide an `Open Reports` action that opens that closing's stored report folder.
+- Existing closes that predate report-folder persistence may appear without an available report folder action.
+- If PDF generation is not yet available in the scaffold, a text closing report may be generated temporarily, but `closing_report.pdf` remains the target artifact.
+
+Manual closing totals:
+
+- Before finalizing a close, the clerk must enter `Online Sale`, `Online Cashout`, and `Instant Cashout`.
+- All three values are dollar amounts and may be zero.
+- Expected cash is calculated as `instant_ticket_sales + online_sale - instant_cashout - online_cashout`.
+- Manual totals and expected cash must be persisted on the closing record and included in the closing report summary.
 
 SimpleLotto may omit or de-emphasize day-level reporting where it conflicts with shift-to-shift accounting. If a day summary is kept for compatibility, it must be clearly secondary to shift closing and must not become the financial boundary.
 

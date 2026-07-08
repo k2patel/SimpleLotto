@@ -1217,6 +1217,29 @@
                                                         Click="StartClosingScanButton_Click"/>
                                                 <TextBlock Text="Scan dialog collects ticket evidence only. Bin scans are ignored during closing collection."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock Text="Manual Totals"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <NumberBox x:Name="ClosingOnlineSaleBox"
+                                                           Header="Online sale"
+                                                           Minimum="0"
+                                                           Value="0"
+                                                           SmallChange="1"
+                                                           LargeChange="10"
+                                                           HorizontalAlignment="Stretch"/>
+                                                <NumberBox x:Name="ClosingOnlineCashoutBox"
+                                                           Header="Online cashout"
+                                                           Minimum="0"
+                                                           Value="0"
+                                                           SmallChange="1"
+                                                           LargeChange="10"
+                                                           HorizontalAlignment="Stretch"/>
+                                                <NumberBox x:Name="ClosingInstantCashoutBox"
+                                                           Header="Instant cashout"
+                                                           Minimum="0"
+                                                           Value="0"
+                                                           SmallChange="1"
+                                                           LargeChange="10"
+                                                           HorizontalAlignment="Stretch"/>
                                                 <TextBlock Text="Selected Bin"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                                 <TextBlock x:Name="ClosingBinDetailText"
@@ -1262,7 +1285,7 @@
                                 </TabViewItem>
 
                                 <TabViewItem x:Name="ClosingHistoryTab"
-                                             Header="Closing History"
+                                             Header="History &amp; Reports"
                                              IsClosable="False">
                                     <Grid Padding="0,16,0,0"
                                           ColumnSpacing="12">
@@ -1316,17 +1339,21 @@
                                                       Background="{ThemeResource SlSurfaceAltBrush}"
                                                       ColumnSpacing="12">
                                                     <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="150"/>
                                                         <ColumnDefinition Width="120"/>
                                                         <ColumnDefinition Width="100"/>
                                                         <ColumnDefinition Width="120"/>
                                                         <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="116"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <TextBlock Text="Closed" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="1" Text="Sales" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="2" Text="Tickets" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="3" Text="Bins" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="4" Text="Reconciliation" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Text="Shift" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="1" Text="Closed" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="2" Text="Sales" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Tickets" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="4" Text="Bins" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="5" Text="Reconciliation" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="6" Text="Reports" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <TextBlock x:Name="ClosingHistoryPageStatusText"
                                                            Grid.Row="2"
@@ -1335,7 +1362,8 @@
                                                 <ListView x:Name="ClosingHistoryListView"
                                                           Grid.Row="3"
                                                           MinHeight="220"
-                                                          SelectionMode="None"
+                                                          SelectionMode="Single"
+                                                          SelectionChanged="ClosingHistoryListView_SelectionChanged"
                                                           SizeChanged="PagedList_SizeChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
@@ -1343,27 +1371,38 @@
                                                                   Padding="12,8"
                                                                   ColumnSpacing="12">
                                                                 <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="110"/>
                                                                     <ColumnDefinition Width="150"/>
                                                                     <ColumnDefinition Width="120"/>
                                                                     <ColumnDefinition Width="100"/>
                                                                     <ColumnDefinition Width="120"/>
                                                                     <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="116"/>
                                                                 </Grid.ColumnDefinitions>
-                                                                <TextBlock Text="{Binding ClosedText}"
+                                                                <TextBlock Text="{Binding ShiftText}"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
                                                                 <TextBlock Grid.Column="1"
-                                                                           Text="{Binding SalesText}"
+                                                                           Text="{Binding ClosedText}"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
                                                                 <TextBlock Grid.Column="2"
-                                                                           Text="{Binding TicketText}"
+                                                                           Text="{Binding SalesText}"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
                                                                 <TextBlock Grid.Column="3"
-                                                                           Text="{Binding BinText}"
+                                                                           Text="{Binding TicketText}"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
                                                                 <TextBlock Grid.Column="4"
+                                                                           Text="{Binding BinText}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                <TextBlock Grid.Column="5"
                                                                            Text="{Binding ReconciliationText}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                                            TextWrapping="Wrap"/>
+                                                                <Button Grid.Column="6"
+                                                                        Content="Open Reports"
+                                                                        MinWidth="104"
+                                                                        Tag="{Binding ReportFolder}"
+                                                                        IsEnabled="{Binding HasReportFolder}"
+                                                                        Click="OpenClosingReportButton_Click"/>
                                                             </Grid>
                                                         </DataTemplate>
                                                     </ListView.ItemTemplate>
@@ -1373,14 +1412,41 @@
                                         <Border Grid.Column="1"
                                                 Style="{StaticResource SlPanelBorderStyle}">
                                             <StackPanel Spacing="12">
-                                                <TextBlock Text="History Rules"
+                                                <TextBlock Text="Selected Closing Report"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <TextBlock Text="Closing history is shift-based and ordered by close time."
-                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                                <TextBlock Text="Rows show sales, ticket count, scanned bins, and closing reconciliation counts."
-                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                                <TextBlock Text="Use search to filter by close date, sales amount, bins, or reconciliation details."
-                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock x:Name="ClosingReportSummaryText"
+                                                           Text="Select a closing to view report details."
+                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock x:Name="ClosingReportSalesText"
+                                                           Text="Sales: 0"
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock x:Name="ClosingReportInventoryText"
+                                                           Text="Inventory: 0 closed"
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                                <ListView x:Name="ClosingReportSalesListView"
+                                                          MaxHeight="360"
+                                                          SelectionMode="None">
+                                                    <ListView.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <StackPanel Spacing="2"
+                                                                        Padding="0,0,0,8">
+                                                                <TextBlock Text="{Binding Title}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           TextWrapping="Wrap"/>
+                                                                <TextBlock Text="{Binding Detail}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                                           TextWrapping="Wrap"/>
+                                                            </StackPanel>
+                                                        </DataTemplate>
+                                                    </ListView.ItemTemplate>
+                                                </ListView>
+                                                <TextBlock x:Name="ClosingReportStatusText"
+                                                           Text="Reports are built from sales ledger rows for the selected close interval."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
                                             </StackPanel>
                                         </Border>
                                     </Grid>

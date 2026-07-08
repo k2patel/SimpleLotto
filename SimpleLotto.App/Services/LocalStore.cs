@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 5;
+    private const int SchemaVersion = 8;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -144,18 +144,27 @@ public sealed class LocalStore
             closingCmd.Transaction = tx;
             closingCmd.CommandText = """
                 INSERT INTO closing_history (
-                    closed_at_utc, scanned_bins, active_bins, sales_count, ticket_count,
-                    sales_cents, closed_bundles, current_bundles, resolved_bundles)
+                    closed_at_utc, interval_start_utc, shift_label, report_folder, scanned_bins, active_bins, sales_count, ticket_count,
+                    sales_cents, online_sale_cents, online_cashout_cents, instant_cashout_cents, expected_cash_cents,
+                    closed_bundles, current_bundles, resolved_bundles)
                 VALUES (
-                    $closed_at_utc, $scanned_bins, $active_bins, $sales_count, $ticket_count,
-                    $sales_cents, $closed_bundles, $current_bundles, $resolved_bundles)
+                    $closed_at_utc, $interval_start_utc, $shift_label, $report_folder, $scanned_bins, $active_bins, $sales_count, $ticket_count,
+                    $sales_cents, $online_sale_cents, $online_cashout_cents, $instant_cashout_cents, $expected_cash_cents,
+                    $closed_bundles, $current_bundles, $resolved_bundles)
                 """;
             closingCmd.Parameters.AddWithValue("$closed_at_utc", closingRecord.ClosedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            closingCmd.Parameters.AddWithValue("$interval_start_utc", closingRecord.IntervalStartUtc.ToString("O", CultureInfo.InvariantCulture));
+            closingCmd.Parameters.AddWithValue("$shift_label", closingRecord.ShiftLabel);
+            closingCmd.Parameters.AddWithValue("$report_folder", closingRecord.ReportFolder);
             closingCmd.Parameters.AddWithValue("$scanned_bins", closingRecord.ScannedBins);
             closingCmd.Parameters.AddWithValue("$active_bins", closingRecord.ActiveBins);
             closingCmd.Parameters.AddWithValue("$sales_count", closingRecord.SalesCount);
             closingCmd.Parameters.AddWithValue("$ticket_count", closingRecord.TicketCount);
             closingCmd.Parameters.AddWithValue("$sales_cents", closingRecord.SalesCents);
+            closingCmd.Parameters.AddWithValue("$online_sale_cents", closingRecord.OnlineSaleCents);
+            closingCmd.Parameters.AddWithValue("$online_cashout_cents", closingRecord.OnlineCashoutCents);
+            closingCmd.Parameters.AddWithValue("$instant_cashout_cents", closingRecord.InstantCashoutCents);
+            closingCmd.Parameters.AddWithValue("$expected_cash_cents", closingRecord.ExpectedCashCents);
             closingCmd.Parameters.AddWithValue("$closed_bundles", closingRecord.ClosedBundles);
             closingCmd.Parameters.AddWithValue("$current_bundles", closingRecord.CurrentBundles);
             closingCmd.Parameters.AddWithValue("$resolved_bundles", closingRecord.ResolvedBundles);
@@ -406,16 +415,30 @@ public sealed class LocalStore
                 CREATE TABLE IF NOT EXISTS closing_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     closed_at_utc TEXT NOT NULL,
+                    interval_start_utc TEXT NOT NULL DEFAULT '',
+                    shift_label TEXT NOT NULL DEFAULT '',
+                    report_folder TEXT NOT NULL DEFAULT '',
                     scanned_bins INTEGER NOT NULL,
                     active_bins INTEGER NOT NULL,
                     sales_count INTEGER NOT NULL,
                     ticket_count INTEGER NOT NULL,
                     sales_cents INTEGER NOT NULL,
+                    online_sale_cents INTEGER NOT NULL DEFAULT 0,
+                    online_cashout_cents INTEGER NOT NULL DEFAULT 0,
+                    instant_cashout_cents INTEGER NOT NULL DEFAULT 0,
+                    expected_cash_cents INTEGER NOT NULL DEFAULT 0,
                     closed_bundles INTEGER NOT NULL,
                     current_bundles INTEGER NOT NULL,
                     resolved_bundles INTEGER NOT NULL
                 )
                 """);
+            EnsureColumn(conn, "closing_history", "interval_start_utc", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(conn, "closing_history", "shift_label", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(conn, "closing_history", "report_folder", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(conn, "closing_history", "online_sale_cents", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(conn, "closing_history", "online_cashout_cents", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(conn, "closing_history", "instant_cashout_cents", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(conn, "closing_history", "expected_cash_cents", "INTEGER NOT NULL DEFAULT 0");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_closed_at ON closing_history(closed_at_utc)");
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -518,24 +541,37 @@ public sealed class LocalStore
         var rows = new List<StoredClosingRecord>();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT closed_at_utc, scanned_bins, active_bins, sales_count, ticket_count,
-                   sales_cents, closed_bundles, current_bundles, resolved_bundles
+            SELECT closed_at_utc, interval_start_utc, shift_label, report_folder,
+                   scanned_bins, active_bins, sales_count, ticket_count,
+                   sales_cents, online_sale_cents, online_cashout_cents, instant_cashout_cents, expected_cash_cents,
+                   closed_bundles, current_bundles, resolved_bundles
             FROM closing_history
             ORDER BY closed_at_utc DESC
             """;
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var closedAt = ReadDateTime(reader.GetString(0));
+            var intervalStart = string.IsNullOrWhiteSpace(reader.GetString(1))
+                ? DateTime.MinValue
+                : ReadDateTime(reader.GetString(1));
             rows.Add(new StoredClosingRecord(
-                ReadDateTime(reader.GetString(0)),
-                reader.GetInt32(1),
-                reader.GetInt32(2),
-                reader.GetInt32(3),
+                closedAt,
+                intervalStart,
+                reader.GetString(2),
+                reader.GetString(3),
                 reader.GetInt32(4),
-                reader.GetInt64(5),
+                reader.GetInt32(5),
                 reader.GetInt32(6),
                 reader.GetInt32(7),
-                reader.GetInt32(8)));
+                reader.GetInt64(8),
+                reader.GetInt64(9),
+                reader.GetInt64(10),
+                reader.GetInt64(11),
+                reader.GetInt64(12),
+                reader.GetInt32(13),
+                reader.GetInt32(14),
+                reader.GetInt32(15)));
         }
 
         return rows;
@@ -576,9 +612,16 @@ public sealed class LocalStore
 
         state.ClosingHistory.Add(new StoredClosingRecord(
             closedAtUtc,
+            DateTime.MinValue,
+            string.Empty,
+            string.Empty,
             0,
             0,
             ReadIntSetting(state.Settings, "last_close_generated_sales"),
+            0,
+            0,
+            0,
+            0,
             0,
             0,
             ReadIntSetting(state.Settings, "last_close_closed_bundles"),
@@ -736,11 +779,18 @@ public sealed record StoredSaleLine(
 
 public sealed record StoredClosingRecord(
     DateTime ClosedAtUtc,
+    DateTime IntervalStartUtc,
+    string ShiftLabel,
+    string ReportFolder,
     int ScannedBins,
     int ActiveBins,
     int SalesCount,
     int TicketCount,
     long SalesCents,
+    long OnlineSaleCents,
+    long OnlineCashoutCents,
+    long InstantCashoutCents,
+    long ExpectedCashCents,
     int ClosedBundles,
     int CurrentBundles,
     int ResolvedBundles);
