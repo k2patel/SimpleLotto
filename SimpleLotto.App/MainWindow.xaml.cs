@@ -2994,7 +2994,6 @@ public sealed partial class MainWindow : Window
             : 320;
         var content = new Grid
         {
-            Width = dialogWidth,
             MinHeight = dialogHeight,
             MaxHeight = availableDialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,

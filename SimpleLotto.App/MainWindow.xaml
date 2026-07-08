@@ -1719,104 +1719,113 @@
                                 <TabViewItem x:Name="EmailSettingsTab"
                                              Header="Email"
                                              IsClosable="False">
-                                    <Border Style="{StaticResource SlPanelBorderStyle}">
-                                        <StackPanel Spacing="10"
-                                                    MaxWidth="620"
-                                                    HorizontalAlignment="Left">
-                                            <TextBlock Text="Email"
-                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                            <TextBox x:Name="SmtpHostBox"
-                                                     Header="SMTP host"/>
-                                            <Grid ColumnSpacing="8">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="120"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                </Grid.ColumnDefinitions>
-                                                <NumberBox x:Name="SmtpPortBox"
-                                                           Header="Port"
-                                                           Value="587"
-                                                           Minimum="1"
-                                                           Maximum="65535"
-                                                           SpinButtonPlacementMode="Compact"/>
-                                                <TextBox x:Name="SmtpUserBox"
-                                                         Grid.Column="1"
-                                                         Header="SMTP user"/>
-                                            </Grid>
-                                            <PasswordBox x:Name="SmtpPasswordBox"
-                                                         Header="Application password"
-                                                         PlaceholderText="Leave blank to keep saved password"/>
-                                            <TextBox x:Name="EmailToBox"
-                                                     Header="Closing email recipient"/>
-                                            <TextBlock Text="Closing email contents"
-                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                            <CheckBox x:Name="SettingsEmailSendCheckBox"
-                                                      Content="Send closing email"
-                                                      Checked="SettingsEmailOptionChanged"
-                                                      Unchecked="SettingsEmailOptionChanged"/>
-                                            <Grid ColumnSpacing="16">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Spacing="4">
-                                                    <CheckBox x:Name="SettingsEmailShiftSummaryCheckBox"
-                                                              Content="Shift summary CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailInventoryCheckBox"
-                                                              Content="Inventory CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailSalesDetailCheckBox"
-                                                              Content="Sales detail CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailCorrectionsCheckBox"
-                                                              Content="Corrections CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailAnomaliesCheckBox"
-                                                              Content="Anomalies CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                </StackPanel>
-                                                <StackPanel Grid.Column="1"
-                                                            Spacing="4">
-                                                    <CheckBox x:Name="SettingsEmailPlacementEventsCheckBox"
-                                                              Content="Placement events CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailBinAssignmentsCheckBox"
-                                                              Content="Bin assignments CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailInitializationCheckBox"
-                                                              Content="Initialization CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailAuditCheckBox"
-                                                              Content="Closing audit CSV"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                    <CheckBox x:Name="SettingsEmailPdfCheckBox"
-                                                              Content="PDF closing report"
-                                                              Checked="SettingsEmailOptionChanged"
-                                                              Unchecked="SettingsEmailOptionChanged"/>
-                                                </StackPanel>
-                                            </Grid>
-                                            <TextBlock x:Name="SettingsEmailChoicesStatusText"
-                                                       Text="Closing email includes all reports."
-                                                       Style="{StaticResource SlCaptionTextStyle}"
-                                                       TextWrapping="Wrap"/>
-                                            <Button Content="Save email settings"
-                                                    HorizontalAlignment="Stretch"
-                                                    Click="SaveEmailSettingsButton_Click"/>
-                                            <TextBlock x:Name="EmailSettingsStatusText"
-                                                       Text="Email settings not saved."
-                                                       Foreground="{ThemeResource SlTextBrush}"
-                                                       TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                    </Border>
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="360"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Style="{StaticResource SlPanelBorderStyle}">
+                                            <StackPanel Spacing="10">
+                                                <TextBlock Text="Email Server"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBox x:Name="SmtpHostBox"
+                                                         Header="SMTP host"/>
+                                                <Grid ColumnSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="120"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <NumberBox x:Name="SmtpPortBox"
+                                                               Header="Port"
+                                                               Value="587"
+                                                               Minimum="1"
+                                                               Maximum="65535"
+                                                               SpinButtonPlacementMode="Compact"/>
+                                                    <TextBox x:Name="SmtpUserBox"
+                                                             Grid.Column="1"
+                                                             Header="SMTP user"/>
+                                                </Grid>
+                                                <PasswordBox x:Name="SmtpPasswordBox"
+                                                             Header="Application password"
+                                                             PlaceholderText="Leave blank to keep saved password"/>
+                                                <TextBox x:Name="EmailToBox"
+                                                         Header="Closing email recipient"/>
+                                                <CheckBox x:Name="SettingsEmailSendCheckBox"
+                                                          Content="Send closing email"
+                                                          Checked="SettingsEmailOptionChanged"
+                                                          Unchecked="SettingsEmailOptionChanged"/>
+                                                <Button Content="Save email settings"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="SaveEmailSettingsButton_Click"/>
+                                                <TextBlock x:Name="EmailSettingsStatusText"
+                                                           Text="Email settings not saved."
+                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Grid.Column="1"
+                                                Style="{StaticResource SlPanelBorderStyle}">
+                                            <StackPanel Spacing="10">
+                                                <TextBlock Text="Closing Attachments"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <Grid ColumnSpacing="16">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Spacing="4">
+                                                        <CheckBox x:Name="SettingsEmailShiftSummaryCheckBox"
+                                                                  Content="Shift summary CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailInventoryCheckBox"
+                                                                  Content="Inventory CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailSalesDetailCheckBox"
+                                                                  Content="Sales detail CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailCorrectionsCheckBox"
+                                                                  Content="Corrections CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailAnomaliesCheckBox"
+                                                                  Content="Anomalies CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1"
+                                                                Spacing="4">
+                                                        <CheckBox x:Name="SettingsEmailPlacementEventsCheckBox"
+                                                                  Content="Placement events CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailBinAssignmentsCheckBox"
+                                                                  Content="Bin assignments CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailInitializationCheckBox"
+                                                                  Content="Initialization CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailAuditCheckBox"
+                                                                  Content="Closing audit CSV"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                        <CheckBox x:Name="SettingsEmailPdfCheckBox"
+                                                                  Content="PDF closing report"
+                                                                  Checked="SettingsEmailOptionChanged"
+                                                                  Unchecked="SettingsEmailOptionChanged"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                                <TextBlock x:Name="SettingsEmailChoicesStatusText"
+                                                           Text="Closing email includes all reports."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
                                 </TabViewItem>
                             </TabView>
                         </Grid>
