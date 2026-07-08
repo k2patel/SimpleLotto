@@ -2823,9 +2823,18 @@ public sealed partial class MainWindow : Window
 
         var scanBox = new TextBox
         {
-            Header = "Scan barcode",
-            PlaceholderText = "Scan current ticket",
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            Width = 1,
+            Height = 1,
+            Opacity = 0,
+            IsTabStop = false,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        var scanPromptText = new TextBlock
+        {
+            Text = "Ready for ticket scans",
+            Style = (Style)Application.Current.Resources["SlSectionTitleTextStyle"],
+            TextWrapping = TextWrapping.Wrap
         };
         var totalText = new TextBlock
         {
@@ -2887,11 +2896,19 @@ public sealed partial class MainWindow : Window
         };
 
         var rootSize = Content.XamlRoot?.Size ?? new Windows.Foundation.Size(0, 0);
+        var dialogWidth = rootSize.Width > 0
+            ? Math.Clamp(rootSize.Width * 0.68, 720, 1180)
+            : 840;
+        var dialogHeight = rootSize.Height > 0
+            ? Math.Clamp(rootSize.Height * 0.68, 460, 820)
+            : 560;
         scanList.MaxHeight = rootSize.Height > 0
-            ? Math.Max(160, rootSize.Height * 0.42)
+            ? Math.Max(220, dialogHeight * 0.58)
             : 320;
         var content = new Grid
         {
+            MinWidth = dialogWidth,
+            MinHeight = dialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             RowSpacing = 12
@@ -2903,6 +2920,8 @@ public sealed partial class MainWindow : Window
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
+        Grid.SetColumnSpan(scanPromptText, 2);
+        content.Children.Add(scanPromptText);
         Grid.SetColumnSpan(scanBox, 2);
         content.Children.Add(scanBox);
 
@@ -3005,9 +3024,14 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
             Title = "Closing Scan",
             Content = content,
+            Width = dialogWidth,
+            MinWidth = dialogWidth,
+            MaxWidth = dialogWidth,
             CloseButtonText = "Close scanning",
             DefaultButton = ContentDialogButton.Close
         };
+        dialog.Resources["ContentDialogMaxWidth"] = dialogWidth;
+        dialog.Resources["ContentDialogMinWidth"] = dialogWidth;
         dialog.Opened += (_, _) => _ = scanBox.Focus(FocusState.Programmatic);
 
         _isWorkflowDialogOpen = true;
