@@ -474,8 +474,7 @@
                                             </GridView.ItemContainerStyle>
                                             <GridView.ItemsPanel>
                                                 <ItemsPanelTemplate>
-                                                    <ItemsWrapGrid Orientation="Horizontal"
-                                                                   MaximumRowsOrColumns="10"/>
+                                                    <ItemsWrapGrid Orientation="Horizontal"/>
                                                 </ItemsPanelTemplate>
                                             </GridView.ItemsPanel>
                                             <GridView.ItemTemplate>
@@ -1187,8 +1186,7 @@
                                             </GridView.ItemContainerStyle>
                                             <GridView.ItemsPanel>
                                                 <ItemsPanelTemplate>
-                                                    <ItemsWrapGrid Orientation="Horizontal"
-                                                                   MaximumRowsOrColumns="10"/>
+                                                    <ItemsWrapGrid Orientation="Horizontal"/>
                                                 </ItemsPanelTemplate>
                                             </GridView.ItemsPanel>
                                             <GridView.ItemTemplate>

@@ -2851,7 +2851,8 @@ public sealed partial class MainWindow : Window
         {
             ItemsSource = _closingScanRows,
             DisplayMemberPath = "ScannedText",
-            MinHeight = 300
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
         };
 
         void RefreshDialogTotals()
@@ -2890,39 +2891,47 @@ public sealed partial class MainWindow : Window
             AcceptDialogScan();
         };
 
+        var rootSize = Content.XamlRoot?.Size ?? new Windows.Foundation.Size(0, 0);
+        var availableDialogWidth = rootSize.Width > 120 ? rootSize.Width - 120 : double.PositiveInfinity;
+        var availableDialogHeight = rootSize.Height > 180 ? rootSize.Height - 180 : double.PositiveInfinity;
         var content = new Grid
         {
-            MinWidth = 760,
-            MinHeight = 420,
+            MaxWidth = availableDialogWidth,
+            MaxHeight = availableDialogHeight,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
             RowSpacing = 12,
             ColumnSpacing = 16
         };
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7, GridUnitType.Star) });
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4, GridUnitType.Star) });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star), MinWidth = 260 });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 170 });
 
         Grid.SetColumn(scanBox, 0);
         Grid.SetColumnSpan(scanBox, 2);
         content.Children.Add(scanBox);
 
+        var leftGrid = new Grid
+        {
+            RowSpacing = 8
+        };
+        leftGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        leftGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        leftGrid.Children.Add(new TextBlock
+        {
+            Text = "Scanned number",
+            Style = (Style)Application.Current.Resources["SlSectionTitleTextStyle"]
+        });
+        Grid.SetRow(scanList, 1);
+        leftGrid.Children.Add(scanList);
+
         var leftPanel = new Border
         {
             Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
-            Child = new StackPanel
-            {
-                Spacing = 8,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = "Scanned number",
-                        Style = (Style)Application.Current.Resources["SlSectionTitleTextStyle"]
-                    },
-                    scanList
-                }
-            }
+            Child = leftGrid
         };
         Grid.SetRow(leftPanel, 1);
         Grid.SetColumn(leftPanel, 0);
@@ -2940,7 +2949,8 @@ public sealed partial class MainWindow : Window
             Text = "total scanned",
             Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
             HorizontalAlignment = HorizontalAlignment.Center,
-            TextAlignment = TextAlignment.Center
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.WrapWholeWords
         };
         Grid.SetRow(totalLabel, 1);
 
@@ -2961,15 +2971,35 @@ public sealed partial class MainWindow : Window
         var rightPanel = new Border
         {
             Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            MinHeight = 110,
             Child = totalGrid
         };
         Grid.SetRow(rightPanel, 1);
         Grid.SetColumn(rightPanel, 1);
         content.Children.Add(rightPanel);
 
-        Grid.SetRow(statusText, 2);
-        Grid.SetColumn(statusText, 0);
-        Grid.SetColumnSpan(statusText, 2);
+        void ApplyResponsiveDialogLayout(double width)
+        {
+            var stacked = width < 680;
+            content.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+            content.ColumnDefinitions[0].MinWidth = stacked ? 0 : 260;
+            content.ColumnDefinitions[1].Width = stacked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+            content.ColumnDefinitions[1].MinWidth = stacked ? 0 : 170;
+
+            Grid.SetColumnSpan(scanBox, stacked ? 1 : 2);
+            Grid.SetRow(leftPanel, 1);
+            Grid.SetColumn(leftPanel, 0);
+            Grid.SetColumnSpan(leftPanel, 1);
+            Grid.SetRow(rightPanel, stacked ? 2 : 1);
+            Grid.SetColumn(rightPanel, stacked ? 0 : 1);
+            Grid.SetColumnSpan(rightPanel, 1);
+            Grid.SetRow(statusText, stacked ? 3 : 2);
+            Grid.SetColumn(statusText, 0);
+            Grid.SetColumnSpan(statusText, stacked ? 1 : 2);
+        }
+
+        ApplyResponsiveDialogLayout(availableDialogWidth);
+        content.SizeChanged += (_, args) => ApplyResponsiveDialogLayout(args.NewSize.Width);
         content.Children.Add(statusText);
 
         var dialog = new ContentDialog
@@ -2977,6 +3007,8 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
             Title = "Closing Scan",
             Content = content,
+            MaxWidth = double.PositiveInfinity,
+            MaxHeight = double.PositiveInfinity,
             CloseButtonText = "Close scanning",
             DefaultButton = ContentDialogButton.Close
         };
