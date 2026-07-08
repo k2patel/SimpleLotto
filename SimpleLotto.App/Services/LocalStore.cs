@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 4;
+    private const int SchemaVersion = 5;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -57,6 +57,8 @@ public sealed class LocalStore
         state.ManualGames.AddRange(QueryManualGames(conn));
         state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
         state.ClosingHistory.AddRange(QueryClosingHistory(conn));
+        state.AuditLog.AddRange(QueryAuditLog(conn));
+        AddLegacyClosingHistoryFallback(state);
         return state;
     }
 
@@ -125,6 +127,7 @@ public sealed class LocalStore
     public void CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,
+        StoredAuditRecord auditRecord,
         IEnumerable<StoredSaleLine> generatedSales,
         IEnumerable<StoredImportLine> closedBundles,
         IEnumerable<StoredImportLine> currentBundles,
@@ -158,6 +161,8 @@ public sealed class LocalStore
             closingCmd.Parameters.AddWithValue("$resolved_bundles", closingRecord.ResolvedBundles);
             closingCmd.ExecuteNonQuery();
         }
+
+        InsertAudit(conn, tx, auditRecord);
 
         foreach (var line in generated)
         {
@@ -233,6 +238,14 @@ public sealed class LocalStore
         UpsertSetting(conn, tx, "last_close_closed_bundles", closed.Count.ToString(CultureInfo.InvariantCulture));
         UpsertSetting(conn, tx, "last_close_current_bundles", current.Count.ToString(CultureInfo.InvariantCulture));
         UpsertSetting(conn, tx, "last_close_resolved_bundles", resolved.Count.ToString(CultureInfo.InvariantCulture));
+        tx.Commit();
+    }
+
+    public void InsertAudit(StoredAuditRecord record)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        InsertAudit(conn, tx, record);
         tx.Commit();
     }
 
@@ -405,6 +418,17 @@ public sealed class LocalStore
                 """);
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_closed_at ON closing_history(closed_at_utc)");
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at_utc TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    detail TEXT NOT NULL
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log(occurred_at_utc)");
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS manual_games (
                     game_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -517,6 +541,62 @@ public sealed class LocalStore
         return rows;
     }
 
+    private static List<StoredAuditRecord> QueryAuditLog(SqliteConnection conn)
+    {
+        var rows = new List<StoredAuditRecord>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT occurred_at_utc, category, action, actor, detail
+            FROM audit_log
+            ORDER BY occurred_at_utc DESC
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new StoredAuditRecord(
+                ReadDateTime(reader.GetString(0)),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4)));
+        }
+
+        return rows;
+    }
+
+    private static void AddLegacyClosingHistoryFallback(PersistedState state)
+    {
+        if (state.ClosingHistory.Count > 0 ||
+            !state.Settings.TryGetValue("last_close_utc", out var lastCloseText) ||
+            !DateTime.TryParse(lastCloseText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var closedAtUtc) ||
+            closedAtUtc == DateTime.MinValue)
+        {
+            return;
+        }
+
+        state.ClosingHistory.Add(new StoredClosingRecord(
+            closedAtUtc,
+            0,
+            0,
+            ReadIntSetting(state.Settings, "last_close_generated_sales"),
+            0,
+            0,
+            ReadIntSetting(state.Settings, "last_close_closed_bundles"),
+            ReadIntSetting(state.Settings, "last_close_current_bundles"),
+            ReadIntSetting(state.Settings, "last_close_resolved_bundles")));
+    }
+
+    private static int ReadIntSetting(IReadOnlyDictionary<string, string> settings, string key)
+    {
+        if (!settings.TryGetValue(key, out var value) ||
+            !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return 0;
+        }
+
+        return parsed;
+    }
+
     private static List<StoredRdisplayDisplay> QueryRdisplayDisplays(SqliteConnection conn)
     {
         var rows = new List<StoredRdisplayDisplay>();
@@ -580,6 +660,22 @@ public sealed class LocalStore
         cmd.ExecuteNonQuery();
     }
 
+    private static void InsertAudit(SqliteConnection conn, SqliteTransaction tx, StoredAuditRecord record)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO audit_log (occurred_at_utc, category, action, actor, detail)
+            VALUES ($occurred_at_utc, $category, $action, $actor, $detail)
+            """;
+        cmd.Parameters.AddWithValue("$occurred_at_utc", record.OccurredAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$category", record.Category);
+        cmd.Parameters.AddWithValue("$action", record.Action);
+        cmd.Parameters.AddWithValue("$actor", record.Actor);
+        cmd.Parameters.AddWithValue("$detail", record.Detail);
+        cmd.ExecuteNonQuery();
+    }
+
     private static void Exec(SqliteConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
@@ -611,6 +707,7 @@ public sealed class PersistedState
     public List<StoredGameRecord> ManualGames { get; } = new();
     public List<StoredRdisplayDisplay> RdisplayDisplays { get; } = new();
     public List<StoredClosingRecord> ClosingHistory { get; } = new();
+    public List<StoredAuditRecord> AuditLog { get; } = new();
 }
 
 public sealed record StoreSetup(
@@ -647,6 +744,13 @@ public sealed record StoredClosingRecord(
     int ClosedBundles,
     int CurrentBundles,
     int ResolvedBundles);
+
+public sealed record StoredAuditRecord(
+    DateTime OccurredAtUtc,
+    string Category,
+    string Action,
+    string Actor,
+    string Detail);
 
 public sealed record StoredGameRecord(
     string GameId,

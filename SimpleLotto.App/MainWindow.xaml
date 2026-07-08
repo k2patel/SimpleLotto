@@ -1827,6 +1827,130 @@
                                         </Border>
                                     </Grid>
                                 </TabViewItem>
+
+                                <TabViewItem x:Name="AuditSettingsTab"
+                                             Header="Audit"
+                                             IsClosable="False">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="280"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Style="{StaticResource SlPanelBorderStyle}">
+                                            <Grid RowSpacing="12">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <Grid ColumnSpacing="12"
+                                                      RowSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="220"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="Audit Log"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="AuditLogCountText"
+                                                                   Text="0 actions"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    </StackPanel>
+                                                    <TextBox x:Name="AuditLogSearchBox"
+                                                             Grid.Column="1"
+                                                             Header="Search Audit"
+                                                             PlaceholderText="Action, user, detail"
+                                                             TextChanged="AuditLogSearchBox_TextChanged"/>
+                                                    <Button x:Name="AuditLogPreviousPageButton"
+                                                            Grid.Column="2"
+                                                            Content="Previous"
+                                                            MinWidth="88"
+                                                            VerticalAlignment="Bottom"
+                                                            Click="AuditLogPreviousPageButton_Click"/>
+                                                    <Button x:Name="AuditLogNextPageButton"
+                                                            Grid.Column="3"
+                                                            Content="Next"
+                                                            MinWidth="72"
+                                                            VerticalAlignment="Bottom"
+                                                            Click="AuditLogNextPageButton_Click"/>
+                                                </Grid>
+                                                <Grid Grid.Row="1"
+                                                      Padding="12,8"
+                                                      Background="{ThemeResource SlSurfaceAltBrush}"
+                                                      ColumnSpacing="12">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="150"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="150"/>
+                                                        <ColumnDefinition Width="140"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="Time" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="1" Text="Category" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="2" Text="Action" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="User" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="4" Text="Detail" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                </Grid>
+                                                <TextBlock x:Name="AuditLogPageStatusText"
+                                                           Grid.Row="2"
+                                                           Text="Page 1 of 1"
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <ListView x:Name="AuditLogListView"
+                                                          Grid.Row="3"
+                                                          MinHeight="220"
+                                                          SelectionMode="None"
+                                                          SizeChanged="PagedList_SizeChanged">
+                                                    <ListView.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid MinHeight="44"
+                                                                  Padding="12,8"
+                                                                  ColumnSpacing="12">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="150"/>
+                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="150"/>
+                                                                    <ColumnDefinition Width="140"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Text="{Binding TimeText}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                <TextBlock Grid.Column="1"
+                                                                           Text="{Binding Category}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                <TextBlock Grid.Column="2"
+                                                                           Text="{Binding Action}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                <TextBlock Grid.Column="3"
+                                                                           Text="{Binding Actor}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                                <TextBlock Grid.Column="4"
+                                                                           Text="{Binding Detail}"
+                                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                                           TextWrapping="Wrap"/>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ListView.ItemTemplate>
+                                                </ListView>
+                                            </Grid>
+                                        </Border>
+                                        <Border Grid.Column="1"
+                                                Style="{StaticResource SlPanelBorderStyle}">
+                                            <StackPanel Spacing="12">
+                                                <TextBlock Text="Audit Rules"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock Text="Audit rows record close finalization and settings changes without storing secrets."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock Text="Search by action, category, user, or detail."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+                                </TabViewItem>
                             </TabView>
                         </Grid>
                     </Grid>

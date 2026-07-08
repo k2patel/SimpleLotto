@@ -55,6 +55,8 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<ClosingReconciliationRow> _closingReconciliationRows = new();
     private readonly ObservableCollection<ClosingHistoryRow> _closingHistoryRows = new();
     private readonly ObservableCollection<ClosingHistoryRow> _pagedClosingHistoryRows = new();
+    private readonly ObservableCollection<AuditLogRow> _auditLogRows = new();
+    private readonly ObservableCollection<AuditLogRow> _pagedAuditLogRows = new();
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private readonly HashSet<int> _closingScannedBins = new();
@@ -109,10 +111,12 @@ public sealed partial class MainWindow : Window
     private int _inventoryPageSize = 8;
     private int _gameCatalogPageSize = 8;
     private int _closingHistoryPageSize = 8;
+    private int _auditLogPageSize = 8;
     private int _receivingPage = 1;
     private int _inventoryPage = 1;
     private int _gameCatalogPage = 1;
     private int _closingHistoryPage = 1;
+    private int _auditLogPage = 1;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
     private string _dashboardPendingBin = string.Empty;
@@ -228,6 +232,7 @@ public sealed partial class MainWindow : Window
         ClosingBinsGridView.ItemsSource = _closingBinCards;
         ClosingReconciliationListView.ItemsSource = _closingReconciliationRows;
         ClosingHistoryListView.ItemsSource = _pagedClosingHistoryRows;
+        AuditLogListView.ItemsSource = _pagedAuditLogRows;
         RegisteredDisplaysListView.ItemsSource = _registeredDisplayCards;
         _rdisplay.DisplaysChanged += Rdisplay_DisplaysChanged;
         OrderInventoryTabs();
@@ -350,6 +355,11 @@ public sealed partial class MainWindow : Window
             _closingHistoryRows.Add(ClosingHistoryRow.From(closing));
         ApplyClosingHistoryPage();
 
+        _auditLogRows.Clear();
+        foreach (var audit in state.AuditLog)
+            _auditLogRows.Add(AuditLogRow.From(audit));
+        ApplyAuditLogPage();
+
         BuildImportBins(clearImports: false);
 
         if (_initialImportComplete)
@@ -386,6 +396,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _store.SaveSetting(key, value);
+            TryRecordAudit("settings", "Setting saved", $"Updated {key}");
             return true;
         }
         catch (Exception ex)
@@ -394,6 +405,29 @@ public sealed partial class MainWindow : Window
             return false;
         }
     }
+
+    private void TryRecordAudit(string category, string action, string detail)
+    {
+        var record = NewAuditRecord(category, action, detail);
+        try
+        {
+            _store.InsertAudit(record);
+            _auditLogRows.Insert(0, AuditLogRow.From(record));
+            ApplyAuditLogPage(resetPage: true);
+        }
+        catch
+        {
+            // Audit failures should not block the operator workflow.
+        }
+    }
+
+    private StoredAuditRecord NewAuditRecord(string category, string action, string detail) =>
+        new(
+            DateTime.UtcNow,
+            category,
+            action,
+            string.IsNullOrWhiteSpace(_activeUserName) ? "system" : _activeUserName,
+            detail);
 
     private void SaveSecretSetting(string key, string value)
     {
@@ -770,10 +804,12 @@ public sealed partial class MainWindow : Window
         DashboardPairingStatusText.Text = "Background capture: not paired";
         ApplyRoleAccess();
         RefreshOperationalPages();
+        TryRecordAudit("auth", "Login", $"{user} logged in as {_activeUserRole}");
     }
 
     private void LogoutButton_Click(object sender, RoutedEventArgs e)
     {
+        TryRecordAudit("auth", "Logout", "User logged out");
         _activeUserRole = UserRole.None;
         _activeUserName = string.Empty;
         LoginPasswordBox.Password = string.Empty;
@@ -2391,6 +2427,29 @@ public sealed partial class MainWindow : Window
         ClosingHistoryNextPageButton.IsEnabled = _closingHistoryPage < totalPages;
     }
 
+    private void ApplyAuditLogPage(bool resetPage = false)
+    {
+        if (resetPage)
+            _auditLogPage = 1;
+
+        var filtered = FilteredAuditLogRows();
+        var totalPages = TotalPages(filtered.Count, _auditLogPageSize);
+        _auditLogPage = Math.Clamp(_auditLogPage, 1, totalPages);
+
+        _pagedAuditLogRows.Clear();
+        foreach (var row in filtered
+                     .Skip((_auditLogPage - 1) * _auditLogPageSize)
+                     .Take(_auditLogPageSize))
+        {
+            _pagedAuditLogRows.Add(row);
+        }
+
+        AuditLogCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} of {_auditLogRows.Count.ToString(CultureInfo.CurrentCulture)} action{(_auditLogRows.Count == 1 ? string.Empty : "s")}";
+        AuditLogPageStatusText.Text = $"Page {_auditLogPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
+        AuditLogPreviousPageButton.IsEnabled = _auditLogPage > 1;
+        AuditLogNextPageButton.IsEnabled = _auditLogPage < totalPages;
+    }
+
     private List<InventoryRecord> FilteredReceivingRecords()
     {
         var search = ReceivingSearchBox.Text.Trim();
@@ -2432,6 +2491,20 @@ public sealed partial class MainWindow : Window
             .ToList();
     }
 
+    private List<AuditLogRow> FilteredAuditLogRows()
+    {
+        var search = AuditLogSearchBox.Text.Trim();
+        return _auditLogRows
+            .Where(r => string.IsNullOrWhiteSpace(search) ||
+                        r.TimeText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Category.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Action.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Actor.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.Detail.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.OccurredAt)
+            .ToList();
+    }
+
     private static int TotalPages(int count, int pageSize) =>
         Math.Max(1, (int)Math.Ceiling(count / (double)Math.Max(1, pageSize)));
 
@@ -2440,7 +2513,8 @@ public sealed partial class MainWindow : Window
         if (ReceivingListView is null ||
             InventoryListView is null ||
             GameCatalogListView is null ||
-            ClosingHistoryListView is null)
+            ClosingHistoryListView is null ||
+            AuditLogListView is null)
         {
             return;
         }
@@ -2449,10 +2523,12 @@ public sealed partial class MainWindow : Window
         var nextInventory = PageSizeForList(InventoryListView, 44, _inventoryPageSize);
         var nextGames = PageSizeForList(GameCatalogListView, 58, _gameCatalogPageSize);
         var nextClosings = PageSizeForList(ClosingHistoryListView, 44, _closingHistoryPageSize);
+        var nextAudit = PageSizeForList(AuditLogListView, 44, _auditLogPageSize);
         if (nextReceiving == _receivingPageSize &&
             nextInventory == _inventoryPageSize &&
             nextGames == _gameCatalogPageSize &&
-            nextClosings == _closingHistoryPageSize)
+            nextClosings == _closingHistoryPageSize &&
+            nextAudit == _auditLogPageSize)
         {
             return;
         }
@@ -2461,10 +2537,12 @@ public sealed partial class MainWindow : Window
         _inventoryPageSize = nextInventory;
         _gameCatalogPageSize = nextGames;
         _closingHistoryPageSize = nextClosings;
+        _auditLogPageSize = nextAudit;
         ApplyReceivingPage();
         ApplyInventoryPage();
         ApplyGameCatalogPage();
         ApplyClosingHistoryPage();
+        ApplyAuditLogPage();
     }
 
     private static int PageSizeForList(ListView listView, double rowHeight, int fallback)
@@ -2493,6 +2571,11 @@ public sealed partial class MainWindow : Window
     private void ClosingHistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyClosingHistoryPage(resetPage: true);
+    }
+
+    private void AuditLogSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyAuditLogPage(resetPage: true);
     }
 
     private void ReceivingPreviousPageButton_Click(object sender, RoutedEventArgs e)
@@ -2553,6 +2636,21 @@ public sealed partial class MainWindow : Window
     {
         _closingHistoryPage++;
         ApplyClosingHistoryPage();
+    }
+
+    private void AuditLogPreviousPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_auditLogPage <= 1)
+            return;
+
+        _auditLogPage--;
+        ApplyAuditLogPage();
+    }
+
+    private void AuditLogNextPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        _auditLogPage++;
+        ApplyAuditLogPage();
     }
 
     private void SyncRdisplayTiles()
@@ -2719,6 +2817,7 @@ public sealed partial class MainWindow : Window
         StoreSettingsTab.Visibility = managerVisibility;
         BackupSettingsTab.Visibility = managerVisibility;
         EmailSettingsTab.Visibility = managerVisibility;
+        AuditSettingsTab.Visibility = managerVisibility;
         GameSettingsTab.Visibility = managerVisibility;
 
         SettingsSubtitleText.Text = IsManager
@@ -3462,11 +3561,16 @@ public sealed partial class MainWindow : Window
             closedBundles.Count,
             _closingCurrentPlacements.Count,
             _closingResolvedPlacements.Count);
+        var auditRecord = NewAuditRecord(
+            "closing",
+            "Shift closed",
+            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundles.Count.ToString(CultureInfo.InvariantCulture)} closed bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles");
         try
         {
             _store.CompleteClosing(
                 closedAtUtc,
                 closingRecord,
+                auditRecord,
                 generatedSales.Select(ToStoredSaleLine),
                 closedBundles.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
                 _closingCurrentPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
@@ -3487,6 +3591,8 @@ public sealed partial class MainWindow : Window
             _imports.Add(placement);
         _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
         ApplyClosingHistoryPage(resetPage: true);
+        _auditLogRows.Insert(0, AuditLogRow.From(auditRecord));
+        ApplyAuditLogPage(resetPage: true);
         _sales.Clear();
         _closingScannedBins.Clear();
         _closingScannedBundleKeys.Clear();
@@ -4240,6 +4346,7 @@ public sealed partial class MainWindow : Window
         }
 
         DisplayStatusText.Text = $"Registered {result.Display.Name} at {result.Display.BaseUrl}.";
+        TryRecordAudit("display", "Rdisplay registered", $"{result.Display.Name} at {result.Display.BaseUrl}");
         RefreshRegisteredDisplayCards();
         SyncRdisplayTiles();
     }
@@ -4266,6 +4373,8 @@ public sealed partial class MainWindow : Window
         DisplayStatusText.Text = result.IsSuccess
             ? $"Refresh sent to {display.Name}."
             : result.ErrorMessage ?? "Display refresh failed.";
+        if (result.IsSuccess)
+            TryRecordAudit("display", "Rdisplay refreshed", display.Name);
     }
 
     private async void DeregisterSelectedDisplayButton_Click(object sender, RoutedEventArgs e)
@@ -4295,6 +4404,8 @@ public sealed partial class MainWindow : Window
         DisplayStatusText.Text = result.IsSuccess
             ? $"{display.Name} deregistered."
             : result.ErrorMessage ?? "Deregister failed.";
+        if (result.IsSuccess)
+            TryRecordAudit("display", "Rdisplay deregistered", display.Name);
         RefreshRegisteredDisplayCards();
     }
 
@@ -4712,6 +4823,24 @@ public sealed partial class MainWindow : Window
                 record.ClosedBundles,
                 record.CurrentBundles,
                 record.ResolvedBundles);
+    }
+
+    private sealed record AuditLogRow(
+        DateTime OccurredAt,
+        string Category,
+        string Action,
+        string Actor,
+        string Detail)
+    {
+        public string TimeText => OccurredAt.ToString("g", CultureInfo.CurrentCulture);
+
+        public static AuditLogRow From(StoredAuditRecord record) =>
+            new(
+                record.OccurredAtUtc.ToLocalTime(),
+                record.Category,
+                record.Action,
+                record.Actor,
+                record.Detail);
     }
 
     private sealed record RegisteredDisplayCard(
