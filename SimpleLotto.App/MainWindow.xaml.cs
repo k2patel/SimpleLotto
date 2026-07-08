@@ -53,6 +53,8 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
     private readonly ObservableCollection<ClosingScanRow> _closingScanRows = new();
     private readonly ObservableCollection<ClosingReconciliationRow> _closingReconciliationRows = new();
+    private readonly ObservableCollection<ClosingHistoryRow> _closingHistoryRows = new();
+    private readonly ObservableCollection<ClosingHistoryRow> _pagedClosingHistoryRows = new();
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private readonly HashSet<int> _closingScannedBins = new();
@@ -106,9 +108,11 @@ public sealed partial class MainWindow : Window
     private int _receivingPageSize = 8;
     private int _inventoryPageSize = 8;
     private int _gameCatalogPageSize = 8;
+    private int _closingHistoryPageSize = 8;
     private int _receivingPage = 1;
     private int _inventoryPage = 1;
     private int _gameCatalogPage = 1;
+    private int _closingHistoryPage = 1;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
     private string _dashboardPendingBin = string.Empty;
@@ -223,6 +227,7 @@ public sealed partial class MainWindow : Window
         GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
         ClosingReconciliationListView.ItemsSource = _closingReconciliationRows;
+        ClosingHistoryListView.ItemsSource = _pagedClosingHistoryRows;
         RegisteredDisplaysListView.ItemsSource = _registeredDisplayCards;
         _rdisplay.DisplaysChanged += Rdisplay_DisplaysChanged;
         OrderInventoryTabs();
@@ -339,6 +344,11 @@ public sealed partial class MainWindow : Window
                 string.IsNullOrWhiteSpace(game.ImageUri) ? "ms-appx:///Assets/SimpleLottoLogo64.png" : game.ImageUri,
                 string.IsNullOrWhiteSpace(game.ImageStatus) ? "Image not cached" : game.ImageStatus));
         }
+
+        _closingHistoryRows.Clear();
+        foreach (var closing in state.ClosingHistory)
+            _closingHistoryRows.Add(ClosingHistoryRow.From(closing));
+        ApplyClosingHistoryPage();
 
         BuildImportBins(clearImports: false);
 
@@ -1979,6 +1989,11 @@ public sealed partial class MainWindow : Window
         RecalculateInventoryPageSizes();
     }
 
+    private void PagedList_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RecalculateInventoryPageSizes();
+    }
+
     private void SetNavCollapsed(bool collapsed)
     {
         _isNavCollapsed = collapsed;
@@ -2353,6 +2368,29 @@ public sealed partial class MainWindow : Window
         OpenBundleNextPageButton.IsEnabled = _inventoryPage < totalPages;
     }
 
+    private void ApplyClosingHistoryPage(bool resetPage = false)
+    {
+        if (resetPage)
+            _closingHistoryPage = 1;
+
+        var filtered = FilteredClosingHistoryRows();
+        var totalPages = TotalPages(filtered.Count, _closingHistoryPageSize);
+        _closingHistoryPage = Math.Clamp(_closingHistoryPage, 1, totalPages);
+
+        _pagedClosingHistoryRows.Clear();
+        foreach (var row in filtered
+                     .Skip((_closingHistoryPage - 1) * _closingHistoryPageSize)
+                     .Take(_closingHistoryPageSize))
+        {
+            _pagedClosingHistoryRows.Add(row);
+        }
+
+        ClosingHistoryCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} of {_closingHistoryRows.Count.ToString(CultureInfo.CurrentCulture)} closing{(_closingHistoryRows.Count == 1 ? string.Empty : "s")}";
+        ClosingHistoryPageStatusText.Text = $"Page {_closingHistoryPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
+        ClosingHistoryPreviousPageButton.IsEnabled = _closingHistoryPage > 1;
+        ClosingHistoryNextPageButton.IsEnabled = _closingHistoryPage < totalPages;
+    }
+
     private List<InventoryRecord> FilteredReceivingRecords()
     {
         var search = ReceivingSearchBox.Text.Trim();
@@ -2380,20 +2418,41 @@ public sealed partial class MainWindow : Window
             .ThenBy(r => r.BundleId, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    private List<ClosingHistoryRow> FilteredClosingHistoryRows()
+    {
+        var search = ClosingHistorySearchBox.Text.Trim();
+        return _closingHistoryRows
+            .Where(r => string.IsNullOrWhiteSpace(search) ||
+                        r.ClosedText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.SalesText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.TicketText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.BinText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        r.ReconciliationText.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.ClosedAt)
+            .ToList();
+    }
+
     private static int TotalPages(int count, int pageSize) =>
         Math.Max(1, (int)Math.Ceiling(count / (double)Math.Max(1, pageSize)));
 
     private void RecalculateInventoryPageSizes()
     {
-        if (ReceivingListView is null || InventoryListView is null || GameCatalogListView is null)
+        if (ReceivingListView is null ||
+            InventoryListView is null ||
+            GameCatalogListView is null ||
+            ClosingHistoryListView is null)
+        {
             return;
+        }
 
         var nextReceiving = PageSizeForList(ReceivingListView, 44, _receivingPageSize);
         var nextInventory = PageSizeForList(InventoryListView, 44, _inventoryPageSize);
         var nextGames = PageSizeForList(GameCatalogListView, 58, _gameCatalogPageSize);
+        var nextClosings = PageSizeForList(ClosingHistoryListView, 44, _closingHistoryPageSize);
         if (nextReceiving == _receivingPageSize &&
             nextInventory == _inventoryPageSize &&
-            nextGames == _gameCatalogPageSize)
+            nextGames == _gameCatalogPageSize &&
+            nextClosings == _closingHistoryPageSize)
         {
             return;
         }
@@ -2401,9 +2460,11 @@ public sealed partial class MainWindow : Window
         _receivingPageSize = nextReceiving;
         _inventoryPageSize = nextInventory;
         _gameCatalogPageSize = nextGames;
+        _closingHistoryPageSize = nextClosings;
         ApplyReceivingPage();
         ApplyInventoryPage();
         ApplyGameCatalogPage();
+        ApplyClosingHistoryPage();
     }
 
     private static int PageSizeForList(ListView listView, double rowHeight, int fallback)
@@ -2427,6 +2488,11 @@ public sealed partial class MainWindow : Window
     private void OpenBundleSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyInventoryPage(resetPage: true);
+    }
+
+    private void ClosingHistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyClosingHistoryPage(resetPage: true);
     }
 
     private void ReceivingPreviousPageButton_Click(object sender, RoutedEventArgs e)
@@ -2472,6 +2538,21 @@ public sealed partial class MainWindow : Window
     {
         _gameCatalogPage++;
         ApplyGameCatalogPage();
+    }
+
+    private void ClosingHistoryPreviousPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_closingHistoryPage <= 1)
+            return;
+
+        _closingHistoryPage--;
+        ApplyClosingHistoryPage();
+    }
+
+    private void ClosingHistoryNextPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        _closingHistoryPage++;
+        ApplyClosingHistoryPage();
     }
 
     private void SyncRdisplayTiles()
@@ -2896,19 +2977,26 @@ public sealed partial class MainWindow : Window
         };
 
         var rootSize = Content.XamlRoot?.Size ?? new Windows.Foundation.Size(0, 0);
+        var availableDialogWidth = rootSize.Width > 0
+            ? Math.Max(360, rootSize.Width - 128)
+            : 1180;
+        var availableDialogHeight = rootSize.Height > 0
+            ? Math.Max(320, rootSize.Height - 180)
+            : 760;
         var dialogWidth = rootSize.Width > 0
-            ? Math.Clamp(rootSize.Width * 0.68, 720, 1180)
+            ? Math.Min(Math.Clamp(rootSize.Width * 0.66, 680, 1180), availableDialogWidth)
             : 840;
         var dialogHeight = rootSize.Height > 0
-            ? Math.Clamp(rootSize.Height * 0.68, 460, 820)
-            : 560;
+            ? Math.Min(Math.Clamp(rootSize.Height * 0.58, 420, 760), availableDialogHeight)
+            : 520;
         scanList.MaxHeight = rootSize.Height > 0
-            ? Math.Max(220, dialogHeight * 0.58)
+            ? Math.Max(180, dialogHeight * 0.5)
             : 320;
         var content = new Grid
         {
-            MinWidth = dialogWidth,
+            Width = dialogWidth,
             MinHeight = dialogHeight,
+            MaxHeight = availableDialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             RowSpacing = 12
@@ -3024,9 +3112,8 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
             Title = "Closing Scan",
             Content = content,
-            Width = dialogWidth,
-            MinWidth = dialogWidth,
-            MaxWidth = dialogWidth,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
             CloseButtonText = "Close scanning",
             DefaultButton = ContentDialogButton.Close
         };
@@ -3364,10 +3451,23 @@ public sealed partial class MainWindow : Window
         }
 
         var closedAtUtc = DateTime.UtcNow;
+        var closingRecord = new StoredClosingRecord(
+            closedAtUtc,
+            _closingScannedBins.Count,
+            ActiveClosingBinCount(),
+            _sales.Count + generatedSales.Count,
+            _sales.Sum(s => s.Quantity) + generatedSales.Sum(s => s.Quantity),
+            (long)Math.Round(
+                (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
+                MidpointRounding.AwayFromZero),
+            closedBundles.Count,
+            _closingCurrentPlacements.Count,
+            _closingResolvedPlacements.Count);
         try
         {
             _store.CompleteClosing(
                 closedAtUtc,
+                closingRecord,
                 generatedSales.Select(ToStoredSaleLine),
                 closedBundles.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
                 _closingCurrentPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
@@ -3386,6 +3486,8 @@ public sealed partial class MainWindow : Window
             ReplaceImportLine(placement);
         foreach (var placement in _closingResolvedPlacements)
             _imports.Add(placement);
+        _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
+        ApplyClosingHistoryPage(resetPage: true);
         _sales.Clear();
         _closingScannedBins.Clear();
         _closingScannedBundleKeys.Clear();
@@ -3399,6 +3501,7 @@ public sealed partial class MainWindow : Window
         ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Closing gap-fill rows were recorded separately.";
         _ = SpeakAsync("Shift closed. New sales count toward the next close.");
         RefreshTotals();
+        RefreshOperationalPages();
     }
 
     private List<SaleLine> BuildClosingGeneratedSales(IEnumerable<ImportLine> closedBundles, DateTime closedAtUtc) =>
@@ -4580,6 +4683,37 @@ public sealed partial class MainWindow : Window
     private sealed record ClosingScanIssue(string Title, string Detail);
 
     private sealed record ClosingReconciliationRow(string Title, string Detail, bool IsBlocking);
+
+    private sealed record ClosingHistoryRow(
+        DateTime ClosedAt,
+        int ScannedBins,
+        int ActiveBins,
+        int SalesCount,
+        int TicketCount,
+        decimal SalesAmount,
+        int ClosedBundles,
+        int CurrentBundles,
+        int ResolvedBundles)
+    {
+        public string ClosedText => ClosedAt.ToString("g", CultureInfo.CurrentCulture);
+        public string SalesText => SalesAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string TicketText => TicketCount.ToString(CultureInfo.CurrentCulture);
+        public string BinText => $"{ScannedBins.ToString(CultureInfo.CurrentCulture)} / {ActiveBins.ToString(CultureInfo.CurrentCulture)}";
+        public string ReconciliationText =>
+            $"{ClosedBundles.ToString(CultureInfo.CurrentCulture)} closed, {CurrentBundles.ToString(CultureInfo.CurrentCulture)} updated, {ResolvedBundles.ToString(CultureInfo.CurrentCulture)} resolved";
+
+        public static ClosingHistoryRow From(StoredClosingRecord record) =>
+            new(
+                record.ClosedAtUtc.ToLocalTime(),
+                record.ScannedBins,
+                record.ActiveBins,
+                record.SalesCount,
+                record.TicketCount,
+                record.SalesCents / 100m,
+                record.ClosedBundles,
+                record.CurrentBundles,
+                record.ResolvedBundles);
+    }
 
     private sealed record RegisteredDisplayCard(
         long Id,

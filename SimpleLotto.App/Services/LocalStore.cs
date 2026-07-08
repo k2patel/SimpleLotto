@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -56,6 +56,7 @@ public sealed class LocalStore
         state.Sales.AddRange(QuerySales(conn));
         state.ManualGames.AddRange(QueryManualGames(conn));
         state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
+        state.ClosingHistory.AddRange(QueryClosingHistory(conn));
         return state;
     }
 
@@ -123,6 +124,7 @@ public sealed class LocalStore
 
     public void CompleteClosing(
         DateTime closedAtUtc,
+        StoredClosingRecord closingRecord,
         IEnumerable<StoredSaleLine> generatedSales,
         IEnumerable<StoredImportLine> closedBundles,
         IEnumerable<StoredImportLine> currentBundles,
@@ -134,6 +136,29 @@ public sealed class LocalStore
         var resolved = new List<StoredImportLine>(resolvedBundles);
         using var conn = Open();
         using var tx = conn.BeginTransaction();
+        using (var closingCmd = conn.CreateCommand())
+        {
+            closingCmd.Transaction = tx;
+            closingCmd.CommandText = """
+                INSERT INTO closing_history (
+                    closed_at_utc, scanned_bins, active_bins, sales_count, ticket_count,
+                    sales_cents, closed_bundles, current_bundles, resolved_bundles)
+                VALUES (
+                    $closed_at_utc, $scanned_bins, $active_bins, $sales_count, $ticket_count,
+                    $sales_cents, $closed_bundles, $current_bundles, $resolved_bundles)
+                """;
+            closingCmd.Parameters.AddWithValue("$closed_at_utc", closingRecord.ClosedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            closingCmd.Parameters.AddWithValue("$scanned_bins", closingRecord.ScannedBins);
+            closingCmd.Parameters.AddWithValue("$active_bins", closingRecord.ActiveBins);
+            closingCmd.Parameters.AddWithValue("$sales_count", closingRecord.SalesCount);
+            closingCmd.Parameters.AddWithValue("$ticket_count", closingRecord.TicketCount);
+            closingCmd.Parameters.AddWithValue("$sales_cents", closingRecord.SalesCents);
+            closingCmd.Parameters.AddWithValue("$closed_bundles", closingRecord.ClosedBundles);
+            closingCmd.Parameters.AddWithValue("$current_bundles", closingRecord.CurrentBundles);
+            closingCmd.Parameters.AddWithValue("$resolved_bundles", closingRecord.ResolvedBundles);
+            closingCmd.ExecuteNonQuery();
+        }
+
         foreach (var line in generated)
         {
             using var saleCmd = conn.CreateCommand();
@@ -365,6 +390,21 @@ public sealed class LocalStore
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_bin ON sales(bin)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_sold_at ON sales(sold_at_utc)");
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS closing_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    closed_at_utc TEXT NOT NULL,
+                    scanned_bins INTEGER NOT NULL,
+                    active_bins INTEGER NOT NULL,
+                    sales_count INTEGER NOT NULL,
+                    ticket_count INTEGER NOT NULL,
+                    sales_cents INTEGER NOT NULL,
+                    closed_bundles INTEGER NOT NULL,
+                    current_bundles INTEGER NOT NULL,
+                    resolved_bundles INTEGER NOT NULL
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_closed_at ON closing_history(closed_at_utc)");
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS manual_games (
                     game_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -446,6 +486,34 @@ public sealed class LocalStore
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             rows.Add(new StoredGameRecord(reader.GetString(0), reader.GetString(1), reader.GetInt64(5), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+        return rows;
+    }
+
+    private static List<StoredClosingRecord> QueryClosingHistory(SqliteConnection conn)
+    {
+        var rows = new List<StoredClosingRecord>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT closed_at_utc, scanned_bins, active_bins, sales_count, ticket_count,
+                   sales_cents, closed_bundles, current_bundles, resolved_bundles
+            FROM closing_history
+            ORDER BY closed_at_utc DESC
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new StoredClosingRecord(
+                ReadDateTime(reader.GetString(0)),
+                reader.GetInt32(1),
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4),
+                reader.GetInt64(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8)));
+        }
+
         return rows;
     }
 
@@ -542,6 +610,7 @@ public sealed class PersistedState
     public List<StoredSaleLine> Sales { get; } = new();
     public List<StoredGameRecord> ManualGames { get; } = new();
     public List<StoredRdisplayDisplay> RdisplayDisplays { get; } = new();
+    public List<StoredClosingRecord> ClosingHistory { get; } = new();
 }
 
 public sealed record StoreSetup(
@@ -567,6 +636,17 @@ public sealed record StoredSaleLine(
     int Quantity,
     long AmountCents,
     string Source = "normal_sale");
+
+public sealed record StoredClosingRecord(
+    DateTime ClosedAtUtc,
+    int ScannedBins,
+    int ActiveBins,
+    int SalesCount,
+    int TicketCount,
+    long SalesCents,
+    int ClosedBundles,
+    int CurrentBundles,
+    int ResolvedBundles);
 
 public sealed record StoredGameRecord(
     string GameId,
