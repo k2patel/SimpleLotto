@@ -2040,43 +2040,7 @@ public sealed partial class MainWindow : Window
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
     {
         ShowSection("Closing");
-        _ = SpeakAsync("Start closing.");
-
-        var saleCount = _sales.Count;
-        var ticketCount = _sales.Sum(s => s.Quantity);
-        var revenue = _sales.Sum(s => s.Amount);
-        var closingEmailSummary = BuildClosingEmailSummaryText(
-            SettingsEmailSendCheckBox.IsChecked == true,
-            SelectedSettingsEmailReportNames());
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = Content.XamlRoot,
-            Title = "Close the current shift?",
-            Content = saleCount == 0
-                ? $"No sales are recorded since the previous close. Close anyway?{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}"
-                : $"Close {saleCount.ToString(CultureInfo.CurrentCulture)} sale entr{(saleCount == 1 ? "y" : "ies")} for {ticketCount.ToString(CultureInfo.CurrentCulture)} ticket{(ticketCount == 1 ? string.Empty : "s")} totaling {revenue.ToString("C", CultureInfo.CurrentCulture)}?{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
-            PrimaryButtonText = "Close Shift",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-
-        var result = await dialog.ShowAsync();
-        if (result != ContentDialogResult.Primary)
-        {
-            _ = SpeakAsync("Close cancelled.");
-            return;
-        }
-
-        _lastCloseUtc = DateTime.UtcNow;
-        if (!SaveSetting("last_close_utc", _lastCloseUtc.ToString("O", CultureInfo.InvariantCulture)))
-            return;
-
-        _sales.Clear();
-        StatusText.Text = "Shift closed.";
-        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. New sales count toward the next close. {closingEmailSummary}";
-        _ = SpeakAsync("Shift closed. New sales count toward the next close.");
-        RefreshTotals();
+        await StartClosingScanWorkflowAsync();
     }
 
     private void SaveImportLine(ImportLine line)
@@ -2825,6 +2789,14 @@ public sealed partial class MainWindow : Window
 
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
     {
+        await StartClosingScanWorkflowAsync();
+    }
+
+    private async Task StartClosingScanWorkflowAsync()
+    {
+        if (_isWorkflowDialogOpen)
+            return;
+
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
         _ = SpeakAsync("Start scanning.");
 
@@ -2892,12 +2864,11 @@ public sealed partial class MainWindow : Window
         };
 
         var rootSize = Content.XamlRoot?.Size ?? new Windows.Foundation.Size(0, 0);
-        var availableDialogWidth = rootSize.Width > 120 ? rootSize.Width - 120 : double.PositiveInfinity;
-        var availableDialogHeight = rootSize.Height > 180 ? rootSize.Height - 180 : double.PositiveInfinity;
+        scanList.MaxHeight = rootSize.Height > 0
+            ? Math.Max(160, rootSize.Height * 0.42)
+            : 320;
         var content = new Grid
         {
-            MaxWidth = availableDialogWidth,
-            MaxHeight = availableDialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             RowSpacing = 12,
@@ -2907,8 +2878,8 @@ public sealed partial class MainWindow : Window
         content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star), MinWidth = 260 });
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 170 });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         Grid.SetColumn(scanBox, 0);
         Grid.SetColumnSpan(scanBox, 2);
@@ -2980,11 +2951,9 @@ public sealed partial class MainWindow : Window
 
         void ApplyResponsiveDialogLayout(double width)
         {
-            var stacked = width < 680;
+            var stacked = width < 500;
             content.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-            content.ColumnDefinitions[0].MinWidth = stacked ? 0 : 260;
             content.ColumnDefinitions[1].Width = stacked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
-            content.ColumnDefinitions[1].MinWidth = stacked ? 0 : 170;
 
             Grid.SetColumnSpan(scanBox, stacked ? 1 : 2);
             Grid.SetRow(leftPanel, 1);
@@ -2998,7 +2967,7 @@ public sealed partial class MainWindow : Window
             Grid.SetColumnSpan(statusText, stacked ? 1 : 2);
         }
 
-        ApplyResponsiveDialogLayout(availableDialogWidth);
+        ApplyResponsiveDialogLayout(0);
         content.SizeChanged += (_, args) => ApplyResponsiveDialogLayout(args.NewSize.Width);
         content.Children.Add(statusText);
 
@@ -3007,8 +2976,6 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
             Title = "Closing Scan",
             Content = content,
-            MaxWidth = double.PositiveInfinity,
-            MaxHeight = double.PositiveInfinity,
             CloseButtonText = "Close scanning",
             DefaultButton = ContentDialogButton.Close
         };
