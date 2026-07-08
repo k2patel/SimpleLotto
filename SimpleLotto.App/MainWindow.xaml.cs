@@ -52,9 +52,16 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<GameCatalogRecord> _pagedGameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
     private readonly ObservableCollection<ClosingScanRow> _closingScanRows = new();
+    private readonly ObservableCollection<ClosingReconciliationRow> _closingReconciliationRows = new();
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private readonly HashSet<int> _closingScannedBins = new();
+    private readonly HashSet<string> _closingScannedBundleKeys = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ImportLine> _closingCurrentPlacements = new();
+    private readonly List<ImportTicket> _closingUnmatchedTickets = new();
+    private readonly List<ImportLine> _closingResolvedPlacements = new();
+    private readonly List<ClosingScanIssue> _closingScanIssues = new();
+    private bool _closingScanCaptured;
     private readonly SpeechSynthesizer _speechSynthesizer = new();
     private readonly MediaPlayer _speechPlayer = new()
     {
@@ -215,6 +222,7 @@ public sealed partial class MainWindow : Window
         InventoryListView.ItemsSource = _pagedInventoryRecords;
         GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
+        ClosingReconciliationListView.ItemsSource = _closingReconciliationRows;
         RegisteredDisplaysListView.ItemsSource = _registeredDisplayCards;
         _rdisplay.DisplaysChanged += Rdisplay_DisplaysChanged;
         OrderInventoryTabs();
@@ -313,7 +321,8 @@ public sealed partial class MainWindow : Window
                 line.Bin,
                 line.Ticket,
                 line.Quantity,
-                line.AmountCents / 100m));
+                line.AmountCents / 100m,
+                line.Source));
         }
 
         _manualGameCatalog.Clear();
@@ -2155,7 +2164,8 @@ public sealed partial class MainWindow : Window
             line.Bin,
             line.Ticket,
             line.Quantity,
-            (long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero));
+            (long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero),
+            line.Source);
 
     private void RefreshTotals()
     {
@@ -2183,6 +2193,7 @@ public sealed partial class MainWindow : Window
         SyncRdisplayTiles();
         RefreshClosingBins();
         RefreshSettingsSummary();
+        RefreshClosingReview();
     }
 
     private void RefreshBinCards()
@@ -2797,6 +2808,16 @@ public sealed partial class MainWindow : Window
         if (_isWorkflowDialogOpen)
             return;
 
+        _closingScannedBins.Clear();
+        _closingScannedBundleKeys.Clear();
+        _closingCurrentPlacements.Clear();
+        _closingUnmatchedTickets.Clear();
+        _closingResolvedPlacements.Clear();
+        _closingScanRows.Clear();
+        _closingScanIssues.Clear();
+        _closingScanCaptured = false;
+        RefreshClosingReview();
+        RefreshClosingBins();
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
         _ = SpeakAsync("Start scanning.");
 
@@ -2808,7 +2829,7 @@ public sealed partial class MainWindow : Window
         };
         var totalText = new TextBlock
         {
-            Text = _closingScannedBins.Count.ToString(CultureInfo.CurrentCulture),
+            Text = _closingScanRows.Count.ToString(CultureInfo.CurrentCulture),
             Style = (Style)Application.Current.Resources["SlMetricTextStyle"],
             HorizontalAlignment = HorizontalAlignment.Center,
             TextAlignment = TextAlignment.Center
@@ -2829,7 +2850,7 @@ public sealed partial class MainWindow : Window
 
         void RefreshDialogTotals()
         {
-            totalText.Text = _closingScannedBins.Count.ToString(CultureInfo.CurrentCulture);
+            totalText.Text = _closingScanRows.Count.ToString(CultureInfo.CurrentCulture);
             ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
         }
 
@@ -2840,6 +2861,7 @@ public sealed partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(raw))
                 return;
 
+            _closingScanCaptured = true;
             var processed = false;
             foreach (var segment in SplitImportScanInput(raw))
             {
@@ -2852,6 +2874,7 @@ public sealed partial class MainWindow : Window
 
             RefreshDialogTotals();
             RefreshClosingBins();
+            RefreshClosingReview();
         }
 
         scanBox.KeyDown += (_, args) =>
@@ -2871,19 +2894,56 @@ public sealed partial class MainWindow : Window
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
-            RowSpacing = 12,
-            ColumnSpacing = 16
+            RowSpacing = 12
         };
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        Grid.SetColumn(scanBox, 0);
         Grid.SetColumnSpan(scanBox, 2);
         content.Children.Add(scanBox);
+
+        var totalView = new Viewbox
+        {
+            Stretch = Stretch.Uniform,
+            MaxHeight = 88,
+            Child = totalText
+        };
+        Grid.SetRow(totalView, 0);
+
+        var totalLabel = new TextBlock
+        {
+            Text = "total scanned",
+            Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.WrapWholeWords
+        };
+        Grid.SetRow(totalLabel, 1);
+
+        var totalGrid = new Grid
+        {
+            RowDefinitions =
+            {
+                new RowDefinition { Height = GridLength.Auto },
+                new RowDefinition { Height = GridLength.Auto }
+            },
+            Children =
+            {
+                totalView,
+                totalLabel
+            }
+        };
+
+        var totalPanel = new Border
+        {
+            Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            Child = totalGrid
+        };
+        content.Children.Add(totalPanel);
 
         var leftGrid = new Grid
         {
@@ -2904,70 +2964,39 @@ public sealed partial class MainWindow : Window
             Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
             Child = leftGrid
         };
-        Grid.SetRow(leftPanel, 1);
-        Grid.SetColumn(leftPanel, 0);
         content.Children.Add(leftPanel);
-
-        var totalView = new Viewbox
-        {
-            Stretch = Stretch.Uniform,
-            Child = totalText
-        };
-        Grid.SetRow(totalView, 0);
-
-        var totalLabel = new TextBlock
-        {
-            Text = "total scanned",
-            Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
-            HorizontalAlignment = HorizontalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
-            TextWrapping = TextWrapping.WrapWholeWords
-        };
-        Grid.SetRow(totalLabel, 1);
-
-        var totalGrid = new Grid
-        {
-            RowDefinitions =
-            {
-                new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
-                new RowDefinition { Height = GridLength.Auto }
-            },
-            Children =
-            {
-                totalView,
-                totalLabel
-            }
-        };
-
-        var rightPanel = new Border
-        {
-            Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
-            MinHeight = 110,
-            Child = totalGrid
-        };
-        Grid.SetRow(rightPanel, 1);
-        Grid.SetColumn(rightPanel, 1);
-        content.Children.Add(rightPanel);
 
         void ApplyResponsiveDialogLayout(double width)
         {
-            var stacked = width < 500;
-            content.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-            content.ColumnDefinitions[1].Width = stacked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+            var stacked = width > 0 && width < 560;
+            content.ColumnDefinitions[0].Width = new GridLength(2, GridUnitType.Star);
+            content.ColumnDefinitions[1].Width = stacked
+                ? new GridLength(0)
+                : new GridLength(1, GridUnitType.Star);
+            content.RowDefinitions[1].Height = stacked
+                ? GridLength.Auto
+                : new GridLength(1, GridUnitType.Star);
+            content.RowDefinitions[2].Height = stacked
+                ? new GridLength(1, GridUnitType.Star)
+                : GridLength.Auto;
+            content.RowDefinitions[3].Height = stacked
+                ? GridLength.Auto
+                : new GridLength(0);
 
-            Grid.SetColumnSpan(scanBox, stacked ? 1 : 2);
-            Grid.SetRow(leftPanel, 1);
+            Grid.SetRow(leftPanel, stacked ? 2 : 1);
             Grid.SetColumn(leftPanel, 0);
-            Grid.SetColumnSpan(leftPanel, 1);
-            Grid.SetRow(rightPanel, stacked ? 2 : 1);
-            Grid.SetColumn(rightPanel, stacked ? 0 : 1);
-            Grid.SetColumnSpan(rightPanel, 1);
+            Grid.SetColumnSpan(leftPanel, stacked ? 2 : 1);
+
+            Grid.SetRow(totalPanel, stacked ? 1 : 1);
+            Grid.SetColumn(totalPanel, stacked ? 0 : 1);
+            Grid.SetColumnSpan(totalPanel, stacked ? 2 : 1);
+
             Grid.SetRow(statusText, stacked ? 3 : 2);
             Grid.SetColumn(statusText, 0);
-            Grid.SetColumnSpan(statusText, stacked ? 1 : 2);
+            Grid.SetColumnSpan(statusText, 2);
         }
 
-        ApplyResponsiveDialogLayout(0);
+        ApplyResponsiveDialogLayout(rootSize.Width);
         content.SizeChanged += (_, args) => ApplyResponsiveDialogLayout(args.NewSize.Width);
         content.Children.Add(statusText);
 
@@ -2989,7 +3018,9 @@ public sealed partial class MainWindow : Window
         finally
         {
             _isWorkflowDialogOpen = false;
+            _closingScanCaptured = true;
             RefreshClosingBins();
+            RefreshClosingReview();
             ClosingStatusText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. Unscanned active bins remain marked.";
         }
     }
@@ -3011,12 +3042,21 @@ public sealed partial class MainWindow : Window
                 !int.TryParse(activeBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
                 !IsConfiguredBin(binNumber))
             {
+                if (!_closingUnmatchedTickets.Any(t =>
+                    string.Equals(t.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(t.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _closingUnmatchedTickets.Add(ticket);
+                }
+
                 _closingScanRows.Insert(0, new ClosingScanRow(raw, "No active bin"));
                 statusText.Text = $"No active bin matched scan {raw}.";
                 return;
             }
 
             _closingScannedBins.Add(binNumber);
+            _closingScannedBundleKeys.Add(BundleKey(activeBundle));
+            ReplaceClosingCurrentPlacement(activeBundle with { Ticket = ticket.Ticket });
             _closingScanRows.Insert(0, new ClosingScanRow(
                 $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
                 "Scanned"));
@@ -3026,26 +3066,354 @@ public sealed partial class MainWindow : Window
 
         if (TryParseBinNumber(raw, out var directBin) && IsConfiguredBin(directBin))
         {
-            var hasActiveBundle = _imports.Any(i =>
-                string.Equals(i.Bin, directBin.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase));
-            if (!hasActiveBundle)
-            {
-                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Empty bin"));
-                statusText.Text = $"Bin {directBin.ToString(CultureInfo.CurrentCulture)} is empty and was not counted.";
-                return;
-            }
-
-            _closingScannedBins.Add(directBin);
-            _closingScanRows.Insert(0, new ClosingScanRow(
-                $"Bin {directBin.ToString(CultureInfo.CurrentCulture)}",
-                "Scanned"));
-            statusText.Text = $"Bin {directBin.ToString(CultureInfo.CurrentCulture)} scanned.";
+            _closingScanRows.Insert(0, new ClosingScanRow(raw, "Ignored bin scan"));
+            statusText.Text = "Closing scan accepts ticket barcodes only. Bin scan ignored.";
             return;
         }
 
         _closingScanRows.Insert(0, new ClosingScanRow(raw, "Unrecognized"));
+        AddClosingScanIssue(
+            "Unrecognized scan",
+            $"Scan {raw} was not recognized as a ticket barcode. Re-scan the ticket or resolve before finalizing.");
         statusText.Text = $"Scan was not recognized: {raw}";
     }
+
+    private void AddClosingScanIssue(string title, string detail) =>
+        _closingScanIssues.Add(new ClosingScanIssue(title, detail));
+
+    private void ReplaceClosingCurrentPlacement(ImportLine placement)
+    {
+        _closingCurrentPlacements.RemoveAll(i =>
+            string.Equals(i.GameId, placement.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(i.BundleId, placement.BundleId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(i.Bin, placement.Bin, StringComparison.OrdinalIgnoreCase));
+        _closingCurrentPlacements.Add(placement);
+    }
+
+    private void RefreshClosingReview()
+    {
+        _closingReconciliationRows.Clear();
+
+        foreach (var issue in _closingScanIssues)
+            _closingReconciliationRows.Add(new ClosingReconciliationRow(issue.Title, issue.Detail, true));
+
+        foreach (var ticket in _closingUnmatchedTickets)
+        {
+            _closingReconciliationRows.Add(new ClosingReconciliationRow(
+                "Manual reconciliation required",
+                $"Game {ticket.GameId} bundle {ticket.BundleId} ticket {ticket.Ticket} is not active in a bin. Choose its closing bin before finalizing.",
+                true));
+        }
+
+        foreach (var placement in _closingResolvedPlacements)
+        {
+            _closingReconciliationRows.Add(new ClosingReconciliationRow(
+                $"Resolved bin {placement.Bin}",
+                $"Game {placement.GameId} bundle {placement.BundleId} ticket {placement.Ticket} will be the closing state for this bin.",
+                false));
+        }
+
+        foreach (var placement in _closingCurrentPlacements.Where(p =>
+            _imports.Any(i =>
+                string.Equals(i.GameId, p.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.BundleId, p.BundleId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.Bin, p.Bin, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(i.Ticket, p.Ticket, StringComparison.OrdinalIgnoreCase))))
+        {
+            _closingReconciliationRows.Add(new ClosingReconciliationRow(
+                $"Update bin {placement.Bin}",
+                $"Game {placement.GameId} bundle {placement.BundleId} current ticket will be set to {placement.Ticket}.",
+                false));
+        }
+
+        foreach (var bundle in ClosingSoldOutBundles())
+        {
+            _closingReconciliationRows.Add(new ClosingReconciliationRow(
+                $"Will close out bin {bundle.Bin}",
+                $"Game {bundle.GameId} bundle {bundle.BundleId} was not scanned and will be recorded as closing gap-fill sold.",
+                false));
+        }
+
+        if (_closingReconciliationRows.Count == 0)
+        {
+            _closingReconciliationRows.Add(_closingScanCaptured
+                ? new ClosingReconciliationRow("Ready to finalize", "All scanned ticket evidence matched active bins.", false)
+                : new ClosingReconciliationRow("Scan required", "Start closing scan before finalizing this shift.", true));
+        }
+
+        ResolveClosingIssuesButton.IsEnabled = _closingUnmatchedTickets.Count > 0;
+        FinalizeClosingButton.IsEnabled = _closingScanCaptured &&
+            _closingScanIssues.Count == 0 &&
+            _closingUnmatchedTickets.Count == 0;
+    }
+
+    private List<ImportLine> ClosingSoldOutBundles() =>
+        _imports
+            .Where(i => !_closingScannedBundleKeys.Contains(BundleKey(i)))
+            .ToList();
+
+    private async void ResolveClosingIssuesButton_Click(object sender, RoutedEventArgs e)
+    {
+        while (_closingUnmatchedTickets.Count > 0)
+        {
+            var ticket = _closingUnmatchedTickets[0];
+            var binBox = new TextBox
+            {
+                Header = "Closing bin",
+                PlaceholderText = "Enter bin number"
+            };
+            var statusText = new TextBlock
+            {
+                Text = "Choose the physical bin where this scanned bundle belongs.",
+                TextWrapping = TextWrapping.Wrap
+            };
+            int? selectedBin = null;
+
+            var content = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket}",
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    binBox,
+                    statusText
+                }
+            };
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Resolve Closing Scan",
+                Content = content,
+                PrimaryButtonText = "Use This Bin",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary
+            };
+
+            bool TryAcceptBin()
+            {
+                if (!TryParseBinNumber(binBox.Text, out var parsedBin))
+                {
+                    statusText.Text = "Enter or scan a valid bin barcode.";
+                    return false;
+                }
+
+                if (!IsConfiguredBin(parsedBin))
+                {
+                    statusText.Text = $"Wrong bin {parsedBin.ToString(CultureInfo.CurrentCulture)}. Enter a configured bin.";
+                    _ = SpeakAsync("Wrong bin.");
+                    return false;
+                }
+
+                var binText = parsedBin.ToString(CultureInfo.InvariantCulture);
+                var alreadyResolved = _closingResolvedPlacements.FirstOrDefault(i =>
+                    string.Equals(i.Bin, binText, StringComparison.OrdinalIgnoreCase));
+                if (alreadyResolved is not null)
+                {
+                    statusText.Text = $"Bin {binText} is already resolved to game {alreadyResolved.GameId}, bundle {alreadyResolved.BundleId}. Choose a different bin.";
+                    return false;
+                }
+
+                var scannedExisting = _imports.FirstOrDefault(i =>
+                    string.Equals(i.Bin, binText, StringComparison.OrdinalIgnoreCase) &&
+                    _closingScannedBundleKeys.Contains(BundleKey(i)));
+                if (scannedExisting is not null)
+                {
+                    statusText.Text = $"Bin {binText} already has scanned evidence for game {scannedExisting.GameId}, bundle {scannedExisting.BundleId}. Choose a different bin.";
+                    return false;
+                }
+
+                var existing = _imports.FirstOrDefault(i =>
+                    string.Equals(i.Bin, binText, StringComparison.OrdinalIgnoreCase) &&
+                    !_closingScannedBundleKeys.Contains(BundleKey(i)));
+                if (existing is not null)
+                {
+                    statusText.Text = $"Bin {binText} currently has game {existing.GameId}, bundle {existing.BundleId}, ticket {existing.Ticket}. If not scanned elsewhere, it will be closed out as closing gap-fill sold.";
+                }
+
+                selectedBin = parsedBin;
+                return true;
+            }
+
+            binBox.KeyDown += (_, args) =>
+            {
+                if (args.Key != VirtualKey.Enter)
+                    return;
+
+                args.Handled = true;
+                if (TryAcceptBin())
+                    dialog.Hide();
+            };
+            dialog.PrimaryButtonClick += (_, args) =>
+            {
+                if (TryAcceptBin())
+                    return;
+
+                args.Cancel = true;
+            };
+            dialog.Opened += (_, _) =>
+            {
+                _ = binBox.Focus(FocusState.Programmatic);
+            };
+
+            _isWorkflowDialogOpen = true;
+            ContentDialogResult result;
+            try
+            {
+                result = await dialog.ShowAsync();
+            }
+            finally
+            {
+                _isWorkflowDialogOpen = false;
+            }
+
+            if (result != ContentDialogResult.Primary && selectedBin is null)
+            {
+                ClosingStatusText.Text = "Reconciliation cancelled.";
+                break;
+            }
+
+            if (selectedBin is null)
+                continue;
+
+            var bin = selectedBin.Value.ToString(CultureInfo.InvariantCulture);
+            var resolved = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin, "closing_reconciliation");
+            _closingResolvedPlacements.RemoveAll(i =>
+                string.Equals(i.GameId, resolved.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.BundleId, resolved.BundleId, StringComparison.OrdinalIgnoreCase));
+            _closingResolvedPlacements.Add(resolved);
+            _closingScannedBins.Add(selectedBin.Value);
+            _closingScannedBundleKeys.Add(BundleKey(ticket));
+            _closingUnmatchedTickets.RemoveAt(0);
+            ClosingStatusText.Text = $"Resolved game {ticket.GameId}, bundle {ticket.BundleId} to bin {bin}.";
+        }
+
+        RefreshClosingBins();
+        RefreshClosingReview();
+    }
+
+    private async void FinalizeClosingButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_closingScanCaptured)
+        {
+            ClosingStatusText.Text = "Run closing scan before finalizing.";
+            return;
+        }
+
+        if (_closingScanIssues.Count > 0)
+        {
+            ClosingStatusText.Text = "Resolve reconciliation issues before finalizing.";
+            return;
+        }
+
+        if (_closingUnmatchedTickets.Count > 0)
+        {
+            ClosingStatusText.Text = "Resolve unmatched scanned tickets before finalizing.";
+            return;
+        }
+
+        var closedBundles = ClosingSoldOutBundles();
+        var generatedSales = BuildClosingGeneratedSales(closedBundles, DateTime.UtcNow);
+        var closingEmailSummary = BuildClosingEmailSummaryText(
+            SettingsEmailSendCheckBox.IsChecked == true,
+            SelectedSettingsEmailReportNames());
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Finalize shift closing?",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {closedBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedBundles.Count == 1 ? string.Empty : "s")} will be closed out as closing gap-fill sold.{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            PrimaryButtonText = "Finalize Closing",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary)
+        {
+            ClosingStatusText.Text = "Closing finalization cancelled.";
+            return;
+        }
+
+        var closedAtUtc = DateTime.UtcNow;
+        try
+        {
+            _store.CompleteClosing(
+                closedAtUtc,
+                generatedSales.Select(ToStoredSaleLine),
+                closedBundles.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
+                _closingCurrentPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
+                _closingResolvedPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)));
+        }
+        catch (Exception ex)
+        {
+            ClosingStatusText.Text = $"Closing finalization failed: {ex.Message}";
+            return;
+        }
+
+        _lastCloseUtc = closedAtUtc;
+        foreach (var bundle in closedBundles)
+            _imports.Remove(bundle);
+        foreach (var placement in _closingCurrentPlacements)
+            ReplaceImportLine(placement);
+        foreach (var placement in _closingResolvedPlacements)
+            _imports.Add(placement);
+        _sales.Clear();
+        _closingScannedBins.Clear();
+        _closingScannedBundleKeys.Clear();
+        _closingCurrentPlacements.Clear();
+        _closingUnmatchedTickets.Clear();
+        _closingResolvedPlacements.Clear();
+        _closingScanRows.Clear();
+        _closingScanIssues.Clear();
+        _closingScanCaptured = false;
+        StatusText.Text = "Shift closed.";
+        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Closing gap-fill rows were recorded separately.";
+        _ = SpeakAsync("Shift closed. New sales count toward the next close.");
+        RefreshTotals();
+    }
+
+    private List<SaleLine> BuildClosingGeneratedSales(IEnumerable<ImportLine> closedBundles, DateTime closedAtUtc) =>
+        closedBundles
+            .Select(bundle => new SaleLine(
+                closedAtUtc.ToLocalTime(),
+                bundle.GameId,
+                bundle.Bin,
+                bundle.Ticket,
+                1,
+                GamePriceCents(bundle.GameId) / 100m,
+                "closing_gap_fill_sold"))
+            .ToList();
+
+    private void ReplaceImportLine(ImportLine replacement)
+    {
+        for (var i = 0; i < _imports.Count; i++)
+        {
+            var line = _imports[i];
+            if (!string.Equals(line.GameId, replacement.GameId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(line.BundleId, replacement.BundleId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(line.Bin, replacement.Bin, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            _imports[i] = replacement;
+            return;
+        }
+    }
+
+    private static string BundleKey(ImportLine line) =>
+        BundleKey(line.GameId, line.BundleId);
+
+    private static string BundleKey(ImportTicket ticket) =>
+        BundleKey(ticket.GameId, ticket.BundleId);
+
+    private static string BundleKey(string gameId, string bundleId) =>
+        $"{gameId.Trim()}|{bundleId.Trim()}";
 
     private async void AddGameButton_Click(object sender, RoutedEventArgs e)
     {
@@ -4163,14 +4531,10 @@ public sealed partial class MainWindow : Window
         public string BinText => Number.ToString(CultureInfo.InvariantCulture);
         public Brush BackgroundBrush => Scanned
             ? MediumTileBrush
-            : HasBundle
-                ? HighTileBrush
-                : EmptyTileBrush;
+            : EmptyTileBrush;
         public Brush BorderBrush => Scanned
             ? MediumTileStackedBrush
-            : HasBundle
-                ? HighTileStackedBrush
-                : EmptyTileBorderBrush;
+            : EmptyTileBorderBrush;
         public Brush ForegroundBrush => DarkTileTextBrush;
 
         public static ClosingBinCard From(int number, ImportLine? current, bool scanned)
@@ -4188,6 +4552,10 @@ public sealed partial class MainWindow : Window
     }
 
     private sealed record ClosingScanRow(string ScannedText, string Status);
+
+    private sealed record ClosingScanIssue(string Title, string Detail);
+
+    private sealed record ClosingReconciliationRow(string Title, string Detail, bool IsBlocking);
 
     private sealed record RegisteredDisplayCard(
         long Id,
@@ -4234,7 +4602,8 @@ public sealed partial class MainWindow : Window
         string Bin,
         string Ticket,
         int Quantity,
-        decimal Amount)
+        decimal Amount,
+        string Source = "normal_sale")
     {
         public string TimeText => SoldAt.ToString("h:mm tt", CultureInfo.CurrentCulture);
         public string AmountText => Amount.ToString("C", CultureInfo.CurrentCulture);

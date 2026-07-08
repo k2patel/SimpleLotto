@@ -1154,19 +1154,10 @@
                                                 <Border Width="14"
                                                         Height="14"
                                                         CornerRadius="3"
-                                                        Background="{ThemeResource SlBinHighBrush}"/>
-                                                <TextBlock Text="Needs scan"
-                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                            </StackPanel>
-                                            <StackPanel Orientation="Horizontal"
-                                                        Spacing="6">
-                                                <Border Width="14"
-                                                        Height="14"
-                                                        CornerRadius="3"
                                                         BorderBrush="{ThemeResource SlBorderBrush}"
                                                         BorderThickness="1"
                                                         Background="{ThemeResource SlBinEmptyBrush}"/>
-                                                <TextBlock Text="Empty"
+                                                <TextBlock Text="Unscanned"
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                             </StackPanel>
                                         </StackPanel>
@@ -1229,6 +1220,35 @@
                                                    Text="No closing scan session started."
                                                    Foreground="{ThemeResource SlTextBrush}"
                                                    TextWrapping="Wrap"/>
+                                        <TextBlock Text="Reconciliation Review"
+                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                        <ListView x:Name="ClosingReconciliationListView"
+                                                  MaxHeight="220"
+                                                  SelectionMode="None">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Spacing="2"
+                                                                Padding="0,0,0,8">
+                                                        <TextBlock Text="{Binding Title}"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Text="{Binding Detail}"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                        <Button x:Name="ResolveClosingIssuesButton"
+                                                Content="Resolve Reconciliation"
+                                                HorizontalAlignment="Stretch"
+                                                IsEnabled="False"
+                                                Click="ResolveClosingIssuesButton_Click"/>
+                                        <Button x:Name="FinalizeClosingButton"
+                                                Content="Finalize Shift Closing"
+                                                HorizontalAlignment="Stretch"
+                                                IsEnabled="False"
+                                                Click="FinalizeClosingButton_Click"/>
                                     </StackPanel>
                                 </Border>
                             </Grid>

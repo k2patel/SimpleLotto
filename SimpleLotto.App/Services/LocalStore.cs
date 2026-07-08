@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -108,8 +108,8 @@ public sealed class LocalStore
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents)
-            VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents)
+            INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
+            VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
             """;
         cmd.Parameters.AddWithValue("$sold_at_utc", line.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$game_id", line.GameId);
@@ -117,7 +117,98 @@ public sealed class LocalStore
         cmd.Parameters.AddWithValue("$ticket", line.Ticket);
         cmd.Parameters.AddWithValue("$quantity", line.Quantity);
         cmd.Parameters.AddWithValue("$amount_cents", line.AmountCents);
+        cmd.Parameters.AddWithValue("$source", line.Source);
         cmd.ExecuteNonQuery();
+    }
+
+    public void CompleteClosing(
+        DateTime closedAtUtc,
+        IEnumerable<StoredSaleLine> generatedSales,
+        IEnumerable<StoredImportLine> closedBundles,
+        IEnumerable<StoredImportLine> currentBundles,
+        IEnumerable<StoredImportLine> resolvedBundles)
+    {
+        var generated = new List<StoredSaleLine>(generatedSales);
+        var closed = new List<StoredImportLine>(closedBundles);
+        var current = new List<StoredImportLine>(currentBundles);
+        var resolved = new List<StoredImportLine>(resolvedBundles);
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        foreach (var line in generated)
+        {
+            using var saleCmd = conn.CreateCommand();
+            saleCmd.Transaction = tx;
+            saleCmd.CommandText = """
+                INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                """;
+            saleCmd.Parameters.AddWithValue("$sold_at_utc", line.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            saleCmd.Parameters.AddWithValue("$game_id", line.GameId);
+            saleCmd.Parameters.AddWithValue("$bin", line.Bin);
+            saleCmd.Parameters.AddWithValue("$ticket", line.Ticket);
+            saleCmd.Parameters.AddWithValue("$quantity", line.Quantity);
+            saleCmd.Parameters.AddWithValue("$amount_cents", line.AmountCents);
+            saleCmd.Parameters.AddWithValue("$source", line.Source);
+            saleCmd.ExecuteNonQuery();
+        }
+
+        foreach (var bundle in closed)
+        {
+            using var importCmd = conn.CreateCommand();
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                DELETE FROM imports
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                  AND bin = $bin
+                """;
+            importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+            importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
+            importCmd.ExecuteNonQuery();
+        }
+
+        foreach (var bundle in current)
+        {
+            using var importCmd = conn.CreateCommand();
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                UPDATE imports
+                SET ticket = $ticket
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                  AND bin = $bin
+                """;
+            importCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+            importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+            importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
+            importCmd.ExecuteNonQuery();
+        }
+
+        foreach (var bundle in resolved)
+        {
+            using var importCmd = conn.CreateCommand();
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, created_at_utc)
+                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $created_at_utc)
+                """;
+            importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+            importCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+            importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
+            importCmd.Parameters.AddWithValue("$source", bundle.Source);
+            importCmd.Parameters.AddWithValue("$created_at_utc", closedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            importCmd.ExecuteNonQuery();
+        }
+
+        UpsertSetting(conn, tx, "last_close_utc", closedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        UpsertSetting(conn, tx, "last_close_generated_sales", generated.Count.ToString(CultureInfo.InvariantCulture));
+        UpsertSetting(conn, tx, "last_close_closed_bundles", closed.Count.ToString(CultureInfo.InvariantCulture));
+        UpsertSetting(conn, tx, "last_close_current_bundles", current.Count.ToString(CultureInfo.InvariantCulture));
+        UpsertSetting(conn, tx, "last_close_resolved_bundles", resolved.Count.ToString(CultureInfo.InvariantCulture));
+        tx.Commit();
     }
 
     public void DeleteSale(StoredSaleLine line)
@@ -265,9 +356,11 @@ public sealed class LocalStore
                     bin TEXT NOT NULL,
                     ticket TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
-                    amount_cents INTEGER NOT NULL
+                    amount_cents INTEGER NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'normal_sale'
                 )
                 """);
+            EnsureColumn(conn, "sales", "source", "TEXT NOT NULL DEFAULT 'normal_sale'");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_game ON sales(game_id)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_bin ON sales(bin)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_sold_at ON sales(sold_at_utc)");
@@ -322,7 +415,7 @@ public sealed class LocalStore
     {
         var rows = new List<StoredSaleLine>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT sold_at_utc, game_id, bin, ticket, quantity, amount_cents FROM sales ORDER BY id DESC";
+        cmd.CommandText = "SELECT sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source FROM sales ORDER BY id DESC";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -339,7 +432,8 @@ public sealed class LocalStore
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetInt32(4),
-                reader.GetInt64(5)));
+                reader.GetInt64(5),
+                reader.GetString(6)));
         }
         return rows;
     }
@@ -471,7 +565,8 @@ public sealed record StoredSaleLine(
     string Bin,
     string Ticket,
     int Quantity,
-    long AmountCents);
+    long AmountCents,
+    string Source = "normal_sale");
 
 public sealed record StoredGameRecord(
     string GameId,
