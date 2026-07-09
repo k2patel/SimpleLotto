@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -40,6 +41,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly RdisplayService _rdisplay;
     private readonly LocalStore _store;
+    private readonly AppUpdateService _updates;
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<SaleLine> _allSales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
@@ -54,7 +56,6 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<GameCatalogRecord> _pagedGameCatalog = new();
     private readonly ObservableCollection<ClosingBinCard> _closingBinCards = new();
     private readonly ObservableCollection<ClosingScanRow> _closingScanRows = new();
-    private readonly ObservableCollection<ClosingReconciliationRow> _closingReconciliationRows = new();
     private readonly ObservableCollection<ClosingHistoryRow> _closingHistoryRows = new();
     private readonly ObservableCollection<ClosingHistoryRow> _pagedClosingHistoryRows = new();
     private readonly ObservableCollection<ClosingReportSaleRow> _closingReportSaleRows = new();
@@ -96,6 +97,7 @@ public sealed partial class MainWindow : Window
     private string _storeName = string.Empty;
     private string _storeStreet = string.Empty;
     private string _storeCity = string.Empty;
+    private string _databaseSchemaVersion = string.Empty;
     private int _configuredBinCount = 90;
     private int _scanPairTimeoutSeconds = 5;
     private bool _displayBurnInEnabled = true;
@@ -217,6 +219,7 @@ public sealed partial class MainWindow : Window
     {
         _rdisplay = rdisplay;
         _store = store;
+        _updates = new AppUpdateService(store);
         _subclassProc = TraySubclassProc;
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
@@ -233,7 +236,6 @@ public sealed partial class MainWindow : Window
         InventoryListView.ItemsSource = _pagedInventoryRecords;
         GameCatalogListView.ItemsSource = _pagedGameCatalog;
         ClosingBinsGridView.ItemsSource = _closingBinCards;
-        ClosingReconciliationListView.ItemsSource = _closingReconciliationRows;
         ClosingHistoryListView.ItemsSource = _pagedClosingHistoryRows;
         ClosingReportSalesListView.ItemsSource = _closingReportSaleRows;
         AuditLogListView.ItemsSource = _pagedAuditLogRows;
@@ -284,6 +286,7 @@ public sealed partial class MainWindow : Window
         _storeName = ReadSetting(state, "store_name");
         _storeStreet = ReadSetting(state, "store_street");
         _storeCity = ReadSetting(state, "store_city");
+        _databaseSchemaVersion = ReadSetting(state, "schema_version");
         _configuredBinCount = Math.Clamp(ReadIntSetting(state, "configured_bin_count", 90), 1, 500);
         _scanPairTimeoutSeconds = Math.Clamp(ReadIntSetting(state, ScanPairTimeoutSettingKey, 5), 1, 30);
         _displayBurnInEnabled = ReadBoolSetting(state, DisplayBurnInEnabledSettingKey, true);
@@ -359,8 +362,8 @@ public sealed partial class MainWindow : Window
         }
 
         _closingHistoryRows.Clear();
-        foreach (var closing in state.ClosingHistory)
-            _closingHistoryRows.Add(ClosingHistoryRow.From(closing));
+        foreach (var row in BuildClosingHistoryRows(state.ClosingHistory))
+            _closingHistoryRows.Add(row);
         ApplyClosingHistoryPage();
 
         _auditLogRows.Clear();
@@ -1909,6 +1912,7 @@ public sealed partial class MainWindow : Window
         _speechPlayer.Dispose();
         _speechSynthesizer.Dispose();
         _speechGate.Dispose();
+        _updates.Dispose();
     }
 
     private void RemoveTrayIcon()
@@ -2274,7 +2278,7 @@ public sealed partial class MainWindow : Window
         SyncRdisplayTiles();
         RefreshClosingBins();
         RefreshSettingsSummary();
-        RefreshClosingReview();
+        RefreshClosingActionState();
     }
 
     private void RefreshBinCards()
@@ -2517,6 +2521,7 @@ public sealed partial class MainWindow : Window
         var search = ClosingHistorySearchBox.Text.Trim();
         return _closingHistoryRows
             .Where(r => string.IsNullOrWhiteSpace(search) ||
+                        r.MatchesSearch(search) ||
                         r.ClosedText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         r.ShiftText.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         r.ReportFolder.Contains(search, StringComparison.OrdinalIgnoreCase) ||
@@ -2690,8 +2695,11 @@ public sealed partial class MainWindow : Window
 
     private async void OpenClosingReportButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: string folder } ||
-            string.IsNullOrWhiteSpace(folder))
+        var folder = sender is Button { Tag: string taggedFolder } && !string.IsNullOrWhiteSpace(taggedFolder)
+            ? taggedFolder
+            : (ClosingHistoryListView.SelectedItem as ClosingHistoryRow)?.ReportFolder;
+
+        if (string.IsNullOrWhiteSpace(folder))
         {
             StatusText.Text = "No report folder is available for this closing.";
             return;
@@ -2743,6 +2751,7 @@ public sealed partial class MainWindow : Window
         ClosingReportStatusText.Text = sales.Count == 0
             ? "No sales ledger rows were found for this closing interval."
             : $"Report folder: {row.ReportFolderText}";
+        OpenSelectedClosingReportButton.IsEnabled = row.HasReportFolder;
     }
 
     private List<SaleLine> SalesForClosing(ClosingHistoryRow row)
@@ -2764,6 +2773,7 @@ public sealed partial class MainWindow : Window
         ClosingReportSalesText.Text = "Sales: 0";
         ClosingReportInventoryText.Text = "Inventory: 0 closed";
         ClosingReportStatusText.Text = "Reports are built from sales ledger rows for the selected close interval.";
+        OpenSelectedClosingReportButton.IsEnabled = false;
     }
 
     private void AuditLogPreviousPageButton_Click(object sender, RoutedEventArgs e)
@@ -2859,6 +2869,7 @@ public sealed partial class MainWindow : Window
             ? "Barcode format: not selected"
             : $"Barcode format: {_storeBarcodeLayout}";
         RefreshLicenseRegistrationStatus();
+        RefreshVersionInformation();
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
@@ -2882,6 +2893,81 @@ public sealed partial class MainWindow : Window
         LicenseLastCheckedText.Text = lastCheckUtc == DateTime.MinValue
             ? "License last checked: never"
             : $"License last checked: {lastCheckUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
+    }
+
+    private async void CheckUpgradeButton_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpgradeButton.IsEnabled = false;
+        SettingsUpgradeStatusText.Text = "Checking for upgrade...";
+        try
+        {
+            var state = await _updates.CheckAndDownloadAsync();
+            RefreshUpgradeStatus(state);
+        }
+        finally
+        {
+            CheckUpgradeButton.IsEnabled = true;
+        }
+    }
+
+    private void ApplyUpgradeButton_Click(object sender, RoutedEventArgs e)
+    {
+        var result = _updates.LaunchDownloadedInstaller();
+        SettingsUpgradeStatusText.Text = result.IsSuccess
+            ? "Upgrade installer launched. The installer will close SimpleLotto when it applies the upgrade."
+            : $"Upgrade could not be launched: {result.ErrorMessage}";
+    }
+
+    private async void TriggerRdisplayUpgradeButton_Click(object sender, RoutedEventArgs e)
+    {
+        TriggerRdisplayUpgradeButton.IsEnabled = false;
+        SettingsRdisplayUpgradeStatusText.Text = "Requesting Rdisplay upgrades...";
+        try
+        {
+            var result = await _rdisplay.TriggerUpgradeForAllRegisteredAsync();
+            SettingsRdisplayUpgradeStatusText.Text =
+                $"Rdisplay upgrade requested for {result.Requested.ToString(CultureInfo.CurrentCulture)} of {result.RegisteredDisplays.ToString(CultureInfo.CurrentCulture)} registered display{(result.RegisteredDisplays == 1 ? string.Empty : "s")}. Failed: {result.Failed.ToString(CultureInfo.CurrentCulture)}.";
+        }
+        finally
+        {
+            TriggerRdisplayUpgradeButton.IsEnabled = true;
+        }
+    }
+
+    private void RefreshVersionInformation()
+    {
+        var appAssembly = typeof(App).Assembly;
+        var windowsAppSdkAssembly = typeof(Application).Assembly;
+
+        SettingsAppVersionText.Text = GetInformationalVersion(appAssembly);
+        SettingsBuildVersionText.Text = appAssembly.GetName().Version?.ToString() ?? "Unavailable";
+        SettingsSchemaVersionText.Text = string.IsNullOrWhiteSpace(_databaseSchemaVersion)
+            ? "Not initialized"
+            : _databaseSchemaVersion;
+        SettingsWindowsAppSdkVersionText.Text = windowsAppSdkAssembly.GetName().Version?.ToString() ?? "Unavailable";
+        SettingsDatabasePathText.Text = LocalStore.DbPath;
+        RefreshUpgradeStatus(_updates.Current);
+    }
+
+    private void RefreshUpgradeStatus(AppUpdateState state)
+    {
+        SettingsUpgradeStatusText.Text = state.Error is { Length: > 0 }
+            ? $"{state.Message} {state.Error}"
+            : state.Package is null
+                ? state.Message
+                : $"{state.Message} Latest: {state.Package.Version}. Installed: {state.InstalledVersion}.";
+        ApplyUpgradeButton.IsEnabled = state.Status == AppUpdateStatus.Downloaded &&
+            !string.IsNullOrWhiteSpace(state.InstallerPath);
+    }
+
+    private static string GetInformationalVersion(Assembly assembly)
+    {
+        var version = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        return string.IsNullOrWhiteSpace(version)
+            ? assembly.GetName().Version?.ToString() ?? "Unavailable"
+            : version;
     }
 
     private void RefreshRegisteredDisplayCards()
@@ -3124,7 +3210,7 @@ public sealed partial class MainWindow : Window
         _closingScanRows.Clear();
         _closingScanIssues.Clear();
         _closingScanCaptured = false;
-        RefreshClosingReview();
+        RefreshClosingActionState();
         RefreshClosingBins();
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
         _ = SpeakAsync("Start scanning.");
@@ -3191,7 +3277,7 @@ public sealed partial class MainWindow : Window
 
             RefreshDialogTotals();
             RefreshClosingBins();
-            RefreshClosingReview();
+            RefreshClosingActionState();
         }
 
         scanBox.KeyDown += (_, args) =>
@@ -3357,7 +3443,7 @@ public sealed partial class MainWindow : Window
             _isWorkflowDialogOpen = false;
             _closingScanCaptured = true;
             RefreshClosingBins();
-            RefreshClosingReview();
+            RefreshClosingActionState();
             ClosingStatusText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. Unscanned active bins remain marked.";
         }
     }
@@ -3427,61 +3513,36 @@ public sealed partial class MainWindow : Window
         _closingCurrentPlacements.Add(placement);
     }
 
-    private void RefreshClosingReview()
+    private void RefreshClosingActionState()
     {
-        _closingReconciliationRows.Clear();
-
-        foreach (var issue in _closingScanIssues)
-            _closingReconciliationRows.Add(new ClosingReconciliationRow(issue.Title, issue.Detail, true));
-
-        foreach (var ticket in _closingUnmatchedTickets)
-        {
-            _closingReconciliationRows.Add(new ClosingReconciliationRow(
-                "Manual reconciliation required",
-                $"Game {ticket.GameId} bundle {ticket.BundleId} ticket {ticket.Ticket} is not active in a bin. Choose its closing bin before finalizing.",
-                true));
-        }
-
-        foreach (var placement in _closingResolvedPlacements)
-        {
-            _closingReconciliationRows.Add(new ClosingReconciliationRow(
-                $"Resolved bin {placement.Bin}",
-                $"Game {placement.GameId} bundle {placement.BundleId} ticket {placement.Ticket} will be the closing state for this bin.",
-                false));
-        }
-
-        foreach (var placement in _closingCurrentPlacements.Where(p =>
-            _imports.Any(i =>
-                string.Equals(i.GameId, p.GameId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(i.BundleId, p.BundleId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(i.Bin, p.Bin, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(i.Ticket, p.Ticket, StringComparison.OrdinalIgnoreCase))))
-        {
-            _closingReconciliationRows.Add(new ClosingReconciliationRow(
-                $"Update bin {placement.Bin}",
-                $"Game {placement.GameId} bundle {placement.BundleId} current ticket will be set to {placement.Ticket}.",
-                false));
-        }
-
-        foreach (var bundle in ClosingSoldOutBundles())
-        {
-            _closingReconciliationRows.Add(new ClosingReconciliationRow(
-                $"Will close out bin {bundle.Bin}",
-                $"Game {bundle.GameId} bundle {bundle.BundleId} was not scanned and will be recorded as closing gap-fill sold.",
-                false));
-        }
-
-        if (_closingReconciliationRows.Count == 0)
-        {
-            _closingReconciliationRows.Add(_closingScanCaptured
-                ? new ClosingReconciliationRow("Ready to finalize", "All scanned ticket evidence matched active bins.", false)
-                : new ClosingReconciliationRow("Scan required", "Start closing scan before finalizing this shift.", true));
-        }
-
         ResolveClosingIssuesButton.IsEnabled = _closingUnmatchedTickets.Count > 0;
         FinalizeClosingButton.IsEnabled = _closingScanCaptured &&
             _closingScanIssues.Count == 0 &&
             _closingUnmatchedTickets.Count == 0;
+
+        if (_closingScanIssues.Count > 0)
+        {
+            ClosingExceptionText.Text = "One or more scans were not recognized. Restart the closing scan and scan ticket barcodes only.";
+            return;
+        }
+
+        if (_closingUnmatchedTickets.Count > 0)
+        {
+            var count = _closingUnmatchedTickets.Count.ToString(CultureInfo.CurrentCulture);
+            ClosingExceptionText.Text = $"{count} scanned ticket{(_closingUnmatchedTickets.Count == 1 ? string.Empty : "s")} did not match an active bin. Assign the unmatched scan before finalizing.";
+            return;
+        }
+
+        if (!_closingScanCaptured)
+        {
+            ClosingExceptionText.Text = "Matched scan evidence auto reconciles. Unscanned active bundles close out when the shift is finalized.";
+            return;
+        }
+
+        var closedOutCount = ClosingSoldOutBundles().Count;
+        ClosingExceptionText.Text = closedOutCount == 0
+            ? "All scanned ticket evidence matched active bins. Closing state is ready to finalize."
+            : $"{closedOutCount.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedOutCount == 1 ? string.Empty : "s")} will be auto closed out as closing gap-fill sold when finalized.";
     }
 
     private List<ImportLine> ClosingSoldOutBundles() =>
@@ -3610,7 +3671,7 @@ public sealed partial class MainWindow : Window
 
             if (result != ContentDialogResult.Primary && selectedBin is null)
             {
-                ClosingStatusText.Text = "Reconciliation cancelled.";
+                ClosingStatusText.Text = "Unmatched scan assignment cancelled.";
                 break;
             }
 
@@ -3630,7 +3691,7 @@ public sealed partial class MainWindow : Window
         }
 
         RefreshClosingBins();
-        RefreshClosingReview();
+        RefreshClosingActionState();
     }
 
     private async void FinalizeClosingButton_Click(object sender, RoutedEventArgs e)
@@ -3643,7 +3704,7 @@ public sealed partial class MainWindow : Window
 
         if (_closingScanIssues.Count > 0)
         {
-            ClosingStatusText.Text = "Resolve reconciliation issues before finalizing.";
+            ClosingStatusText.Text = "Restart the closing scan before finalizing. One or more scans were not recognized.";
             return;
         }
 
@@ -3724,6 +3785,8 @@ public sealed partial class MainWindow : Window
         var closingRecord = new StoredClosingRecord(
             closedAtUtc,
             intervalStartUtc,
+            reportTarget.BusinessDate,
+            reportTarget.ShiftSequence,
             reportTarget.ShiftLabel,
             reportTarget.Folder,
             _closingScannedBins.Count,
@@ -3808,10 +3871,14 @@ public sealed partial class MainWindow : Window
     private ClosingReportTarget BuildClosingReportTarget(DateTime closedAtUtc)
     {
         var closedAtLocal = closedAtUtc.ToLocalTime();
-        var closeDate = closedAtLocal.Date;
-        var shiftNumber = _closingHistoryRows.Count(r => r.ClosedAt.Date == closeDate) + 1;
-        var shiftLabel = $"{closedAtLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)} #{shiftNumber.ToString(CultureInfo.InvariantCulture)}";
-        var folderName = $"{closedAtLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}_shift-{shiftNumber.ToString("000", CultureInfo.InvariantCulture)}";
+        var businessDate = closedAtLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var shiftSequence = _closingHistoryRows
+            .Where(r => string.Equals(r.BusinessDate, businessDate, StringComparison.OrdinalIgnoreCase))
+            .Select(r => r.ShiftSequence)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+        var shiftLabel = $"{businessDate} #{shiftSequence.ToString(CultureInfo.InvariantCulture)}";
+        var folderName = $"{businessDate}_shift-{shiftSequence.ToString("000", CultureInfo.InvariantCulture)}";
         var storeName = SanitizePathSegment(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName);
         var root = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -3822,7 +3889,7 @@ public sealed partial class MainWindow : Window
         if (Directory.Exists(folder))
             folder = Path.Combine(root, $"{folderName}_{closedAtLocal.ToString("HHmmss", CultureInfo.InvariantCulture)}");
 
-        return new ClosingReportTarget(shiftLabel, folder);
+        return new ClosingReportTarget(businessDate, shiftSequence, shiftLabel, folder);
     }
 
     private void WriteClosingReports(
@@ -5205,13 +5272,19 @@ public sealed partial class MainWindow : Window
 
     private sealed record ClosingScanIssue(string Title, string Detail);
 
-    private sealed record ClosingReconciliationRow(string Title, string Detail, bool IsBlocking);
+    private sealed record ClosingReportTarget(string BusinessDate, int ShiftSequence, string ShiftLabel, string Folder);
 
-    private sealed record ClosingReportTarget(string ShiftLabel, string Folder);
+    private static List<ClosingHistoryRow> BuildClosingHistoryRows(IEnumerable<StoredClosingRecord> records) =>
+        records
+            .OrderByDescending(record => record.ClosedAtUtc)
+            .Select(ClosingHistoryRow.From)
+            .ToList();
 
     private sealed record ClosingHistoryRow(
         DateTime ClosedAt,
         DateTime IntervalStart,
+        string BusinessDate,
+        int ShiftSequence,
         string ShiftLabel,
         string ReportFolder,
         int ScannedBins,
@@ -5228,9 +5301,13 @@ public sealed partial class MainWindow : Window
         int ResolvedBundles)
     {
         public string ShiftText => string.IsNullOrWhiteSpace(ShiftLabel)
-            ? ClosedAt.ToString("yyyy-MM-dd", CultureInfo.CurrentCulture)
+            ? $"{BusinessDate} #{ShiftSequence.ToString(CultureInfo.CurrentCulture)}"
             : ShiftLabel;
         public string ClosedText => ClosedAt.ToString("g", CultureInfo.CurrentCulture);
+        public string ClosedDateText => string.IsNullOrWhiteSpace(BusinessDate)
+            ? ClosedAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : BusinessDate;
+        public string LocalClosedDateText => ClosedAt.ToString("d", CultureInfo.CurrentCulture);
         public string IntervalStartText => IntervalStart == DateTime.MinValue
             ? "First recorded interval"
             : IntervalStart.ToString("g", CultureInfo.CurrentCulture);
@@ -5248,6 +5325,16 @@ public sealed partial class MainWindow : Window
         public string ReportFolderText => string.IsNullOrWhiteSpace(ReportFolder)
             ? "No report folder recorded."
             : ReportFolder;
+        public bool MatchesSearch(string search)
+        {
+            if (string.IsNullOrWhiteSpace(search))
+                return true;
+
+            var trimmed = search.Trim();
+            return ClosedDateText.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+                LocalClosedDateText.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+                ShiftDateText().Contains(trimmed, StringComparison.OrdinalIgnoreCase);
+        }
 
         public static ClosingHistoryRow From(StoredClosingRecord record) =>
             new(
@@ -5255,6 +5342,8 @@ public sealed partial class MainWindow : Window
                 record.IntervalStartUtc == DateTime.MinValue
                     ? DateTime.MinValue
                     : record.IntervalStartUtc.ToLocalTime(),
+                record.BusinessDate,
+                record.ShiftSequence,
                 record.ShiftLabel,
                 record.ReportFolder,
                 record.ScannedBins,
@@ -5269,6 +5358,14 @@ public sealed partial class MainWindow : Window
                 record.ClosedBundles,
                 record.CurrentBundles,
                 record.ResolvedBundles);
+
+        private string ShiftDateText()
+        {
+            var marker = ShiftText.IndexOf('#', StringComparison.Ordinal);
+            return marker < 0
+                ? ShiftText
+                : ShiftText[..marker].TrimEnd();
+        }
     }
 
     private sealed record ClosingReportSaleRow(

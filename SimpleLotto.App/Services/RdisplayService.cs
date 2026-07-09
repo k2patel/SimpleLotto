@@ -211,6 +211,56 @@ public sealed class RdisplayService : IDisposable
                 : RdisplayActionResult.Fail("Display did not accept the refresh. If the display was reinstalled, deregister it on the display and register again.");
     }
 
+    public async Task<RdisplayActionResult> TriggerUpgradeAsync(long id, CancellationToken ct = default)
+    {
+        var display = GetDisplay(id);
+        if (display is null)
+            return RdisplayActionResult.Fail("Display not found.");
+        if (!display.IsRegistered)
+            return RdisplayActionResult.Fail("Display is not registered.");
+
+        var payload = new JsonObject { ["mode"] = "apply" };
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"{display.BaseUrl}/api/display/update")
+        {
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        req.Headers.Add("X-Display-Token", display.AuthToken);
+
+        try
+        {
+            using var response = await _http.SendAsync(req, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(ct);
+                return RdisplayActionResult.Fail($"Display rejected upgrade request (HTTP {(int)response.StatusCode}): {Truncate(body, 200)}");
+            }
+
+            TouchLastSeen(display.Id);
+            return RdisplayActionResult.Ok();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return RdisplayActionResult.Fail($"Display upgrade request failed: {ex.Message}");
+        }
+    }
+
+    public async Task<RdisplayFleetUpgradeResult> TriggerUpgradeForAllRegisteredAsync(CancellationToken ct = default)
+    {
+        var displays = Displays.Where(d => d.IsRegistered).ToList();
+        var requested = 0;
+        var failed = 0;
+        foreach (var display in displays)
+        {
+            var result = await TriggerUpgradeAsync(display.Id, ct);
+            if (result.IsSuccess)
+                requested++;
+            else
+                failed++;
+        }
+
+        return new RdisplayFleetUpgradeResult(displays.Count, requested, failed);
+    }
+
     public async Task<RdisplayActionResult> UnregisterAsync(long id, CancellationToken ct = default)
     {
         var display = GetDisplay(id);
@@ -781,6 +831,19 @@ public sealed class RdisplayService : IDisposable
         }
     }
 
+    private void TouchLastSeen(long displayId)
+    {
+        lock (_gate)
+        {
+            var display = _displays.FirstOrDefault(d => d.Id == displayId);
+            if (display is null)
+                return;
+
+            display.LastSeenAt = DateTime.UtcNow;
+            PersistDisplay(display);
+        }
+    }
+
     private JsonObject BuildDisplayConfigJson()
     {
         var config = BuildDisplayConfigDictionary();
@@ -909,6 +972,8 @@ public readonly record struct RdisplayActionResult(
     public static RdisplayActionResult Fail(string message) =>
         new(false, message);
 }
+
+public sealed record RdisplayFleetUpgradeResult(int RegisteredDisplays, int Requested, int Failed);
 
 public readonly record struct HardwareProbeResult(
     bool IsSuccess,

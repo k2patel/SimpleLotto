@@ -1250,27 +1250,12 @@
                                                            Text="No closing scan session started."
                                                            Foreground="{ThemeResource SlTextBrush}"
                                                            TextWrapping="Wrap"/>
-                                                <TextBlock Text="Reconciliation Review"
-                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <ListView x:Name="ClosingReconciliationListView"
-                                                          MaxHeight="220"
-                                                          SelectionMode="None">
-                                                    <ListView.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <StackPanel Spacing="2"
-                                                                        Padding="0,0,0,8">
-                                                                <TextBlock Text="{Binding Title}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"
-                                                                           TextWrapping="Wrap"/>
-                                                                <TextBlock Text="{Binding Detail}"
-                                                                           Style="{StaticResource SlCaptionTextStyle}"
-                                                                           TextWrapping="Wrap"/>
-                                                            </StackPanel>
-                                                        </DataTemplate>
-                                                    </ListView.ItemTemplate>
-                                                </ListView>
+                                                <TextBlock x:Name="ClosingExceptionText"
+                                                           Text="Matched scan evidence auto reconciles. Unscanned active bundles close out when the shift is finalized."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
                                                 <Button x:Name="ResolveClosingIssuesButton"
-                                                        Content="Resolve Reconciliation"
+                                                        Content="Assign Unmatched Scan"
                                                         HorizontalAlignment="Stretch"
                                                         IsEnabled="False"
                                                         Click="ResolveClosingIssuesButton_Click"/>
@@ -1319,7 +1304,7 @@
                                                     <TextBox x:Name="ClosingHistorySearchBox"
                                                              Grid.Column="1"
                                                              Header="Search Closings"
-                                                             PlaceholderText="Date, sales, bins"
+                                                             PlaceholderText="Shift, date, sales, bins"
                                                              TextChanged="ClosingHistorySearchBox_TextChanged"/>
                                                     <Button x:Name="ClosingHistoryPreviousPageButton"
                                                             Grid.Column="2"
@@ -1339,21 +1324,19 @@
                                                       Background="{ThemeResource SlSurfaceAltBrush}"
                                                       ColumnSpacing="12">
                                                     <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="140"/>
                                                         <ColumnDefinition Width="150"/>
-                                                        <ColumnDefinition Width="120"/>
-                                                        <ColumnDefinition Width="100"/>
-                                                        <ColumnDefinition Width="120"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="90"/>
+                                                        <ColumnDefinition Width="90"/>
                                                         <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="116"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Shift" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Closed" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Sales" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="3" Text="Tickets" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="4" Text="Bins" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="5" Text="Reconciliation" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="6" Text="Reports" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="5" Text="Details" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <TextBlock x:Name="ClosingHistoryPageStatusText"
                                                            Grid.Row="2"
@@ -1365,44 +1348,48 @@
                                                           SelectionMode="Single"
                                                           SelectionChanged="ClosingHistoryListView_SelectionChanged"
                                                           SizeChanged="PagedList_SizeChanged">
+                                                    <ListView.ItemContainerStyle>
+                                                        <Style TargetType="ListViewItem">
+                                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                        </Style>
+                                                    </ListView.ItemContainerStyle>
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
                                                             <Grid MinHeight="44"
                                                                   Padding="12,8"
                                                                   ColumnSpacing="12">
                                                                 <Grid.ColumnDefinitions>
-                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="140"/>
                                                                     <ColumnDefinition Width="150"/>
-                                                                    <ColumnDefinition Width="120"/>
-                                                                    <ColumnDefinition Width="100"/>
-                                                                    <ColumnDefinition Width="120"/>
+                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="90"/>
+                                                                    <ColumnDefinition Width="90"/>
                                                                     <ColumnDefinition Width="*"/>
-                                                                    <ColumnDefinition Width="116"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <TextBlock Text="{Binding ShiftText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           HorizontalAlignment="Left"/>
                                                                 <TextBlock Grid.Column="1"
                                                                            Text="{Binding ClosedText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           HorizontalAlignment="Left"/>
                                                                 <TextBlock Grid.Column="2"
                                                                            Text="{Binding SalesText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           HorizontalAlignment="Left"/>
                                                                 <TextBlock Grid.Column="3"
                                                                            Text="{Binding TicketText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           HorizontalAlignment="Left"/>
                                                                 <TextBlock Grid.Column="4"
                                                                            Text="{Binding BinText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           HorizontalAlignment="Left"/>
                                                                 <TextBlock Grid.Column="5"
                                                                            Text="{Binding ReconciliationText}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
-                                                                           TextWrapping="Wrap"/>
-                                                                <Button Grid.Column="6"
-                                                                        Content="Open Reports"
-                                                                        MinWidth="104"
-                                                                        Tag="{Binding ReportFolder}"
-                                                                        IsEnabled="{Binding HasReportFolder}"
-                                                                        Click="OpenClosingReportButton_Click"/>
+                                                                           TextWrapping="Wrap"
+                                                                           HorizontalAlignment="Left"/>
                                                             </Grid>
                                                         </DataTemplate>
                                                     </ListView.ItemTemplate>
@@ -1447,6 +1434,11 @@
                                                            Text="Reports are built from sales ledger rows for the selected close interval."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
+                                                <Button x:Name="OpenSelectedClosingReportButton"
+                                                        Content="Open Reports"
+                                                        HorizontalAlignment="Stretch"
+                                                        IsEnabled="False"
+                                                        Click="OpenClosingReportButton_Click"/>
                                             </StackPanel>
                                         </Border>
                                     </Grid>
@@ -1488,7 +1480,12 @@
                                                        Style="{StaticResource SlCaptionTextStyle}"/>
                                         </StackPanel>
                                         <Grid Grid.Row="1"
-                                              ColumnSpacing="14">
+                                              ColumnSpacing="14"
+                                              RowSpacing="14">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1529,6 +1526,96 @@
                                                                Text="License check uses the WindowsPOS-compatible registration service when available."
                                                                Style="{StaticResource SlCaptionTextStyle}"
                                                                TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Grid.Row="1"
+                                                    Grid.ColumnSpan="2"
+                                                    Style="{StaticResource SlPanelBorderStyle}">
+                                                <StackPanel Spacing="10">
+                                                    <TextBlock Text="Version Information"
+                                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                    <Grid ColumnSpacing="18"
+                                                          RowSpacing="8">
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                        </Grid.RowDefinitions>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="170"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="App version"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsAppVersionText"
+                                                                   Grid.Column="1"
+                                                                   Text="App version: unavailable"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Grid.Row="1"
+                                                                   Text="Build version"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsBuildVersionText"
+                                                                   Grid.Row="1"
+                                                                   Grid.Column="1"
+                                                                   Text="Build version: unavailable"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Grid.Row="2"
+                                                                   Text="Database schema"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsSchemaVersionText"
+                                                                   Grid.Row="2"
+                                                                   Grid.Column="1"
+                                                                   Text="Database schema: unavailable"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Grid.Row="3"
+                                                                   Text="Windows App SDK"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsWindowsAppSdkVersionText"
+                                                                   Grid.Row="3"
+                                                                   Grid.Column="1"
+                                                                   Text="Windows App SDK: unavailable"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Grid.Row="4"
+                                                                   Text="Database"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsDatabasePathText"
+                                                                   Grid.Row="4"
+                                                                   Grid.Column="1"
+                                                                   Text="Database: unavailable"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </Grid>
+                                                    <StackPanel Spacing="6">
+                                                        <TextBlock Text="Upgrades"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsUpgradeStatusText"
+                                                                   Text="No upgrade check has run."
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock x:Name="SettingsRdisplayUpgradeStatusText"
+                                                                   Text="Rdisplay upgrade trigger has not run."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <StackPanel Orientation="Horizontal"
+                                                                    Spacing="8">
+                                                            <Button x:Name="CheckUpgradeButton"
+                                                                    Content="Check for Upgrade"
+                                                                    Click="CheckUpgradeButton_Click"/>
+                                                            <Button x:Name="ApplyUpgradeButton"
+                                                                    Content="Apply Upgrade"
+                                                                    IsEnabled="False"
+                                                                    Click="ApplyUpgradeButton_Click"/>
+                                                            <Button x:Name="TriggerRdisplayUpgradeButton"
+                                                                    Content="Upgrade Rdisplay"
+                                                                    Click="TriggerRdisplayUpgradeButton_Click"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
                                                 </StackPanel>
                                             </Border>
                                         </Grid>

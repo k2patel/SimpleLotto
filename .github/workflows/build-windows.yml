@@ -72,6 +72,7 @@ jobs:
           /p:Platform=x64
           /p:RuntimeIdentifier=$env:RID
           /p:SelfContained=true
+          /p:SatelliteResourceLanguages=en
           /p:DebugType=None
 
       - name: Compute publish path
@@ -309,3 +310,94 @@ jobs:
           "- File: ${{ steps.checksum.outputs.installer_file }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- SHA256: ${{ steps.checksum.outputs.installer_sha256 }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- URL: $response" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload Windows update manifest to Zipline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ZIPLINE_TOKEN: ${{ secrets.ZIPLINE_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ZIPLINE_TOKEN)) { throw "ZIPLINE_TOKEN secret is not configured" }
+
+          $manifestFileName = "SimpleLotto-Windows-Latest.json"
+          $manifestNameOverride = "SimpleLotto-Windows-Latest"
+          $publicManifestUrl = "https://files.k2patel.in/u/$([System.Uri]::EscapeDataString($manifestFileName))"
+          $manifestPath = "dist/$manifestFileName"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          [ordered]@{
+            version = "${{ steps.build_installer.outputs.version }}"
+            sha = "${{ github.sha }}"
+            short_sha = $shortSha
+            file_name = "${{ steps.checksum.outputs.installer_file }}"
+            installer_url = "${{ steps.upload_installer.outputs.installer_url }}"
+            sha256 = "${{ steps.checksum.outputs.installer_sha256 }}"
+            published_at = (Get-Date).ToUniversalTime().ToString("o")
+            source_ref = "${{ github.ref_name }}"
+          } | ConvertTo-Json | Set-Content -Path $manifestPath -Encoding UTF8
+
+          $folderId = "${{ steps.zipline_folder.outputs.folder_id }}"
+          if ([string]::IsNullOrWhiteSpace($folderId)) { throw "Zipline release folder id was not resolved" }
+
+          function Invoke-Zipline {
+            param([string]$Label, [string[]]$Arguments)
+            $responsePath = Join-Path $env:RUNNER_TEMP "$($Label)-response.txt"
+            Remove-Item -Path $responsePath -Force -ErrorAction SilentlyContinue
+            $status = & curl.exe --silent --show-error --location @Arguments --output "$responsePath" --write-out "%{http_code}"
+            $code = 0
+            $parsed = [int]::TryParse($status.Trim(), [ref]$code)
+            return [pscustomobject]@{
+              ExitCode = $LASTEXITCODE
+              Status = $status
+              StatusCode = $code
+              StatusParsed = $parsed
+              Body = if (Test-Path $responsePath) { Get-Content -Path $responsePath -Raw } else { "" }
+            }
+          }
+
+          function Assert-Zipline {
+            param($Result, [int[]]$AllowedStatus = @(200, 201, 204))
+            if ($Result.ExitCode -ne 0 -or -not $Result.StatusParsed -or -not ($AllowedStatus -contains $Result.StatusCode)) {
+              throw "Zipline call failed with exit code $($Result.ExitCode) HTTP $($Result.Status) body: $($Result.Body)"
+            }
+          }
+
+          function Get-ZiplineFileIdByName {
+            param([string]$Name)
+            $encodedName = [System.Uri]::EscapeDataString($Name)
+            $list = Invoke-Zipline "list-manifest" @(
+              "--request", "GET",
+              "--header", "Authorization: $env:ZIPLINE_TOKEN",
+              "https://files.k2patel.in/api/user/files?page=1&searchField=name&searchQuery=$encodedName"
+            )
+            Assert-Zipline $list
+            $payload = $list.Body | ConvertFrom-Json
+            $file = @($payload.page | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+            if ($file.Count -eq 0) { return "" }
+            return [string]$file[0].id
+          }
+
+          $existingId = Get-ZiplineFileIdByName $manifestFileName
+          if (-not [string]::IsNullOrWhiteSpace($existingId)) {
+            $delete = Invoke-Zipline "delete-manifest" @(
+              "--request", "DELETE",
+              "--header", "Authorization: $env:ZIPLINE_TOKEN",
+              "https://files.k2patel.in/api/user/files/$existingId"
+            )
+            Assert-Zipline $delete
+          }
+
+          $upload = Invoke-Zipline "upload-manifest" @(
+            "--request", "POST",
+            "--header", "Authorization: $env:ZIPLINE_TOKEN",
+            "--header", "x-zipline-no-json: true",
+            "--header", "x-zipline-original-name: true",
+            "--header", "x-zipline-filename: $manifestNameOverride",
+            "--header", "x-zipline-folder: $folderId",
+            "--form", "file=@$manifestPath;type=application/octet-stream",
+            "https://files.k2patel.in/api/upload"
+          )
+          Assert-Zipline $upload
+          if ($upload.Body.Trim() -ne $publicManifestUrl) {
+            throw "Zipline manifest URL mismatch. Expected $publicManifestUrl but upload returned $($upload.Body.Trim())"
+          }
+
+          "Manifest: $publicManifestUrl" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

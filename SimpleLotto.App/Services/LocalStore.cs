@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 8;
+    private const int SchemaVersion = 9;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -58,7 +58,6 @@ public sealed class LocalStore
         state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
         state.ClosingHistory.AddRange(QueryClosingHistory(conn));
         state.AuditLog.AddRange(QueryAuditLog(conn));
-        AddLegacyClosingHistoryFallback(state);
         return state;
     }
 
@@ -144,16 +143,18 @@ public sealed class LocalStore
             closingCmd.Transaction = tx;
             closingCmd.CommandText = """
                 INSERT INTO closing_history (
-                    closed_at_utc, interval_start_utc, shift_label, report_folder, scanned_bins, active_bins, sales_count, ticket_count,
+                    closed_at_utc, interval_start_utc, business_date, shift_sequence, shift_label, report_folder, scanned_bins, active_bins, sales_count, ticket_count,
                     sales_cents, online_sale_cents, online_cashout_cents, instant_cashout_cents, expected_cash_cents,
                     closed_bundles, current_bundles, resolved_bundles)
                 VALUES (
-                    $closed_at_utc, $interval_start_utc, $shift_label, $report_folder, $scanned_bins, $active_bins, $sales_count, $ticket_count,
+                    $closed_at_utc, $interval_start_utc, $business_date, $shift_sequence, $shift_label, $report_folder, $scanned_bins, $active_bins, $sales_count, $ticket_count,
                     $sales_cents, $online_sale_cents, $online_cashout_cents, $instant_cashout_cents, $expected_cash_cents,
                     $closed_bundles, $current_bundles, $resolved_bundles)
                 """;
             closingCmd.Parameters.AddWithValue("$closed_at_utc", closingRecord.ClosedAtUtc.ToString("O", CultureInfo.InvariantCulture));
             closingCmd.Parameters.AddWithValue("$interval_start_utc", closingRecord.IntervalStartUtc.ToString("O", CultureInfo.InvariantCulture));
+            closingCmd.Parameters.AddWithValue("$business_date", closingRecord.BusinessDate);
+            closingCmd.Parameters.AddWithValue("$shift_sequence", closingRecord.ShiftSequence);
             closingCmd.Parameters.AddWithValue("$shift_label", closingRecord.ShiftLabel);
             closingCmd.Parameters.AddWithValue("$report_folder", closingRecord.ReportFolder);
             closingCmd.Parameters.AddWithValue("$scanned_bins", closingRecord.ScannedBins);
@@ -382,6 +383,14 @@ public sealed class LocalStore
                 )
                 """);
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_utc TEXT NOT NULL,
+                    description TEXT NOT NULL
+                )
+                """);
+            var previousSchemaVersion = ReadStoredSchemaVersion(conn);
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS imports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     game_id TEXT NOT NULL,
@@ -416,6 +425,8 @@ public sealed class LocalStore
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     closed_at_utc TEXT NOT NULL,
                     interval_start_utc TEXT NOT NULL DEFAULT '',
+                    business_date TEXT NOT NULL DEFAULT '',
+                    shift_sequence INTEGER NOT NULL DEFAULT 0,
                     shift_label TEXT NOT NULL DEFAULT '',
                     report_folder TEXT NOT NULL DEFAULT '',
                     scanned_bins INTEGER NOT NULL,
@@ -433,6 +444,8 @@ public sealed class LocalStore
                 )
                 """);
             EnsureColumn(conn, "closing_history", "interval_start_utc", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(conn, "closing_history", "business_date", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(conn, "closing_history", "shift_sequence", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(conn, "closing_history", "shift_label", "TEXT NOT NULL DEFAULT ''");
             EnsureColumn(conn, "closing_history", "report_folder", "TEXT NOT NULL DEFAULT ''");
             EnsureColumn(conn, "closing_history", "online_sale_cents", "INTEGER NOT NULL DEFAULT 0");
@@ -440,6 +453,8 @@ public sealed class LocalStore
             EnsureColumn(conn, "closing_history", "instant_cashout_cents", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(conn, "closing_history", "expected_cash_cents", "INTEGER NOT NULL DEFAULT 0");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_closed_at ON closing_history(closed_at_utc)");
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_business_date ON closing_history(business_date)");
+            Exec(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_closing_history_business_shift ON closing_history(business_date, shift_sequence) WHERE business_date <> '' AND shift_sequence > 0");
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -482,9 +497,36 @@ public sealed class LocalStore
                 """);
             EnsureColumn(conn, "rdisplay_displays", "last_server_url", "TEXT NOT NULL DEFAULT ''");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_rdisplay_displays_token ON rdisplay_displays(auth_token)");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Add closing business date/shift sequence and upgrade-ready schema ledger");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             _schemaReady = true;
         }
+    }
+
+    private static int ReadStoredSchemaVersion(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM settings WHERE key = 'schema_version'";
+        var value = cmd.ExecuteScalar() as string;
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0;
+    }
+
+    private static void RecordSchemaMigration(SqliteConnection conn, int version, int previousVersion, string description)
+    {
+        if (previousVersion >= version)
+            return;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc, description)
+            VALUES ($version, $applied_at_utc, $description)
+            """;
+        cmd.Parameters.AddWithValue("$version", version);
+        cmd.Parameters.AddWithValue("$applied_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$description", description);
+        cmd.ExecuteNonQuery();
     }
 
     private static List<StoredImportLine> QueryImports(SqliteConnection conn)
@@ -541,7 +583,7 @@ public sealed class LocalStore
         var rows = new List<StoredClosingRecord>();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT closed_at_utc, interval_start_utc, shift_label, report_folder,
+            SELECT closed_at_utc, interval_start_utc, business_date, shift_sequence, shift_label, report_folder,
                    scanned_bins, active_bins, sales_count, ticket_count,
                    sales_cents, online_sale_cents, online_cashout_cents, instant_cashout_cents, expected_cash_cents,
                    closed_bundles, current_bundles, resolved_bundles
@@ -559,19 +601,21 @@ public sealed class LocalStore
                 closedAt,
                 intervalStart,
                 reader.GetString(2),
-                reader.GetString(3),
-                reader.GetInt32(4),
-                reader.GetInt32(5),
+                reader.GetInt32(3),
+                reader.GetString(4),
+                reader.GetString(5),
                 reader.GetInt32(6),
                 reader.GetInt32(7),
-                reader.GetInt64(8),
-                reader.GetInt64(9),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
                 reader.GetInt64(10),
                 reader.GetInt64(11),
                 reader.GetInt64(12),
-                reader.GetInt32(13),
-                reader.GetInt32(14),
-                reader.GetInt32(15)));
+                reader.GetInt64(13),
+                reader.GetInt64(14),
+                reader.GetInt32(15),
+                reader.GetInt32(16),
+                reader.GetInt32(17)));
         }
 
         return rows;
@@ -598,46 +642,6 @@ public sealed class LocalStore
         }
 
         return rows;
-    }
-
-    private static void AddLegacyClosingHistoryFallback(PersistedState state)
-    {
-        if (state.ClosingHistory.Count > 0 ||
-            !state.Settings.TryGetValue("last_close_utc", out var lastCloseText) ||
-            !DateTime.TryParse(lastCloseText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var closedAtUtc) ||
-            closedAtUtc == DateTime.MinValue)
-        {
-            return;
-        }
-
-        state.ClosingHistory.Add(new StoredClosingRecord(
-            closedAtUtc,
-            DateTime.MinValue,
-            string.Empty,
-            string.Empty,
-            0,
-            0,
-            ReadIntSetting(state.Settings, "last_close_generated_sales"),
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            ReadIntSetting(state.Settings, "last_close_closed_bundles"),
-            ReadIntSetting(state.Settings, "last_close_current_bundles"),
-            ReadIntSetting(state.Settings, "last_close_resolved_bundles")));
-    }
-
-    private static int ReadIntSetting(IReadOnlyDictionary<string, string> settings, string key)
-    {
-        if (!settings.TryGetValue(key, out var value) ||
-            !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-        {
-            return 0;
-        }
-
-        return parsed;
     }
 
     private static List<StoredRdisplayDisplay> QueryRdisplayDisplays(SqliteConnection conn)
@@ -780,6 +784,8 @@ public sealed record StoredSaleLine(
 public sealed record StoredClosingRecord(
     DateTime ClosedAtUtc,
     DateTime IntervalStartUtc,
+    string BusinessDate,
+    int ShiftSequence,
     string ShiftLabel,
     string ReportFolder,
     int ScannedBins,
