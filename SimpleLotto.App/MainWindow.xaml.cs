@@ -3259,25 +3259,37 @@ public sealed partial class MainWindow : Window
 
         void AcceptDialogScan()
         {
-            var raw = scanBox.Text.Trim();
-            scanBox.Text = string.Empty;
-            if (string.IsNullOrWhiteSpace(raw))
-                return;
-
-            _closingScanCaptured = true;
-            var processed = false;
-            foreach (var segment in SplitImportScanInput(raw))
+            try
             {
-                processed = true;
-                ProcessClosingScanSegment(segment, statusText);
+                var raw = scanBox.Text.Trim();
+                scanBox.Text = string.Empty;
+                if (string.IsNullOrWhiteSpace(raw))
+                    return;
+
+                _closingScanCaptured = true;
+                var processed = false;
+                foreach (var segment in SplitImportScanInput(raw))
+                {
+                    processed = true;
+                    ProcessClosingScanSegment(segment, statusText);
+                }
+
+                if (!processed)
+                    statusText.Text = "Scan was empty.";
+
+                RefreshDialogTotals();
+                RefreshClosingBins();
+                RefreshClosingActionState();
             }
-
-            if (!processed)
-                statusText.Text = "Scan was empty.";
-
-            RefreshDialogTotals();
-            RefreshClosingBins();
-            RefreshClosingActionState();
+            catch (Exception ex)
+            {
+                statusText.Text = $"Closing scan failed to process the last barcode: {ex.Message}";
+                ClosingStatusText.Text = "Closing scan failed to process the last barcode. Re-scan or close scanning and restart.";
+            }
+            finally
+            {
+                _ = scanBox.Focus(FocusState.Programmatic);
+            }
         }
 
         scanBox.KeyDown += (_, args) =>
@@ -3296,18 +3308,18 @@ public sealed partial class MainWindow : Window
         var availableDialogHeight = rootSize.Height > 0
             ? Math.Max(320, rootSize.Height - 180)
             : 760;
-        var dialogWidth = rootSize.Width > 0
-            ? Math.Min(Math.Clamp(rootSize.Width * 0.66, 680, 1180), availableDialogWidth)
-            : 840;
-        var dialogHeight = rootSize.Height > 0
-            ? Math.Min(Math.Clamp(rootSize.Height * 0.58, 420, 760), availableDialogHeight)
+        var dialogMinWidth = rootSize.Width > 0
+            ? Math.Min(520, availableDialogWidth)
             : 520;
-        scanList.MaxHeight = rootSize.Height > 0
-            ? Math.Max(180, dialogHeight * 0.5)
-            : 320;
+        var dialogMaxWidth = rootSize.Width > 0
+            ? Math.Min(1180, availableDialogWidth)
+            : 1180;
+        var dialogMinHeight = rootSize.Height > 0
+            ? Math.Min(420, availableDialogHeight)
+            : 420;
         var content = new Grid
         {
-            MinHeight = dialogHeight,
+            MinHeight = dialogMinHeight,
             MaxHeight = availableDialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
@@ -3329,6 +3341,7 @@ public sealed partial class MainWindow : Window
         {
             Stretch = Stretch.Uniform,
             MaxHeight = 88,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Child = totalText
         };
         Grid.SetRow(totalView, 0);
@@ -3345,6 +3358,8 @@ public sealed partial class MainWindow : Window
 
         var totalGrid = new Grid
         {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
             RowDefinitions =
             {
                 new RowDefinition { Height = GridLength.Auto },
@@ -3360,12 +3375,16 @@ public sealed partial class MainWindow : Window
         var totalPanel = new Border
         {
             Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
             Child = totalGrid
         };
         content.Children.Add(totalPanel);
 
         var leftGrid = new Grid
         {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
             RowSpacing = 8
         };
         leftGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -3381,6 +3400,8 @@ public sealed partial class MainWindow : Window
         var leftPanel = new Border
         {
             Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
             Child = leftGrid
         };
         content.Children.Add(leftPanel);
@@ -3427,11 +3448,43 @@ public sealed partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             CloseButtonText = "Close scanning",
-            DefaultButton = ContentDialogButton.Close
+            DefaultButton = ContentDialogButton.None
         };
-        dialog.Resources["ContentDialogMaxWidth"] = dialogWidth;
-        dialog.Resources["ContentDialogMinWidth"] = dialogWidth;
+
+        void ApplyDialogSize(Windows.Foundation.Size size)
+        {
+            availableDialogWidth = size.Width > 0
+                ? Math.Max(360, size.Width - 128)
+                : 1180;
+            availableDialogHeight = size.Height > 0
+                ? Math.Max(320, size.Height - 180)
+                : 760;
+            dialogMinWidth = size.Width > 0
+                ? Math.Min(520, availableDialogWidth)
+                : 520;
+            dialogMaxWidth = size.Width > 0
+                ? Math.Min(1180, availableDialogWidth)
+                : 1180;
+            dialogMinHeight = size.Height > 0
+                ? Math.Min(420, availableDialogHeight)
+                : 420;
+
+            dialog.Resources["ContentDialogMinWidth"] = dialogMinWidth;
+            dialog.Resources["ContentDialogMaxWidth"] = dialogMaxWidth;
+            content.Width = dialogMaxWidth;
+            content.Height = availableDialogHeight;
+            content.MinHeight = dialogMinHeight;
+            content.MaxHeight = availableDialogHeight;
+            scanList.MaxHeight = Math.Max(180, availableDialogHeight - 180);
+            ApplyResponsiveDialogLayout(size.Width);
+        }
+
+        ApplyDialogSize(rootSize);
         dialog.Opened += (_, _) => _ = scanBox.Focus(FocusState.Programmatic);
+        void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => ApplyDialogSize(sender.Size);
+
+        if (Content.XamlRoot is { } xamlRoot)
+            xamlRoot.Changed += OnXamlRootChanged;
 
         _isWorkflowDialogOpen = true;
         try
@@ -3440,6 +3493,9 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            if (Content.XamlRoot is { } xamlRoot)
+                xamlRoot.Changed -= OnXamlRootChanged;
+
             _isWorkflowDialogOpen = false;
             _closingScanCaptured = true;
             RefreshClosingBins();
