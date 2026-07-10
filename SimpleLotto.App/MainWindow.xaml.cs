@@ -3214,17 +3214,10 @@ public sealed partial class MainWindow : Window
         RefreshClosingActionState();
         RefreshClosingBins();
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
+        AppLog.Info("Closing scan dialog starting.");
         _ = SpeakAsync("Start scanning.");
 
-        var scanBox = new TextBox
-        {
-            Width = 1,
-            Height = 1,
-            Opacity = 0,
-            IsTabStop = false,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Top
-        };
+        var dialogScanBuffer = new StringBuilder();
         var scanPromptText = new TextBlock
         {
             Text = "Ready for ticket scans",
@@ -3258,20 +3251,21 @@ public sealed partial class MainWindow : Window
             ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
         }
 
-        void AcceptDialogScan()
+        void AcceptDialogScan(string raw)
         {
             try
             {
-                var raw = scanBox.Text.Trim();
-                scanBox.Text = string.Empty;
+                raw = raw.Trim();
                 if (string.IsNullOrWhiteSpace(raw))
                     return;
 
+                AppLog.Info($"Closing scan received: {raw}");
                 _closingScanCaptured = true;
                 var processed = false;
                 foreach (var segment in SplitImportScanInput(raw))
                 {
                     processed = true;
+                    AppLog.Info($"Closing scan segment: {segment}");
                     ProcessClosingScanSegment(segment, statusText);
                 }
 
@@ -3288,20 +3282,7 @@ public sealed partial class MainWindow : Window
                 statusText.Text = $"Closing scan failed to process the last barcode: {ex.Message}";
                 ClosingStatusText.Text = "Closing scan failed to process the last barcode. Re-scan or close scanning and restart.";
             }
-            finally
-            {
-                _ = scanBox.Focus(FocusState.Programmatic);
-            }
         }
-
-        scanBox.KeyDown += (_, args) =>
-        {
-            if (args.Key != VirtualKey.Enter)
-                return;
-
-            args.Handled = true;
-            AcceptDialogScan();
-        };
 
         var rootSize = Content.XamlRoot?.Size ?? new Windows.Foundation.Size(0, 0);
         var availableDialogWidth = rootSize.Width > 0
@@ -3336,8 +3317,11 @@ public sealed partial class MainWindow : Window
 
         Grid.SetColumnSpan(scanPromptText, 2);
         content.Children.Add(scanPromptText);
-        Grid.SetColumnSpan(scanBox, 2);
-        content.Children.Add(scanBox);
+        content.AddHandler(
+            UIElement.KeyDownEvent,
+            new KeyEventHandler((_, args) =>
+                CaptureScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText)),
+            handledEventsToo: true);
 
         var totalView = new Viewbox
         {
@@ -3482,7 +3466,11 @@ public sealed partial class MainWindow : Window
         }
 
         ApplyDialogSize(rootSize);
-        dialog.Opened += (_, _) => _ = scanBox.Focus(FocusState.Programmatic);
+        dialog.Opened += (_, _) =>
+        {
+            AppLog.Info("Closing scan dialog opened.");
+            _ = content.Focus(FocusState.Programmatic);
+        };
         void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => ApplyDialogSize(sender.Size);
 
         var closingScanXamlRoot = Content.XamlRoot;
@@ -3490,15 +3478,17 @@ public sealed partial class MainWindow : Window
             closingScanXamlRoot.Changed += OnXamlRootChanged;
 
         _isWorkflowDialogOpen = true;
+        var result = ContentDialogResult.None;
         try
         {
-            await dialog.ShowAsync();
+            result = await dialog.ShowAsync();
         }
         finally
         {
             if (closingScanXamlRoot is not null)
                 closingScanXamlRoot.Changed -= OnXamlRootChanged;
 
+            AppLog.Info($"Closing scan dialog closed. Result={result}; rows={_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}; scannedBins={_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}; issues={_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}; unmatched={_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}.");
             _isWorkflowDialogOpen = false;
             _closingScanCaptured = true;
             RefreshClosingBins();
