@@ -3483,8 +3483,9 @@ public sealed partial class MainWindow : Window
         dialog.Opened += (_, _) => _ = scanBox.Focus(FocusState.Programmatic);
         void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => ApplyDialogSize(sender.Size);
 
-        if (Content.XamlRoot is { } dialogXamlRoot)
-            dialogXamlRoot.Changed += OnXamlRootChanged;
+        var closingScanXamlRoot = Content.XamlRoot;
+        if (closingScanXamlRoot is not null)
+            closingScanXamlRoot.Changed += OnXamlRootChanged;
 
         _isWorkflowDialogOpen = true;
         try
@@ -3493,8 +3494,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            if (Content.XamlRoot is { } dialogXamlRoot)
-                dialogXamlRoot.Changed -= OnXamlRootChanged;
+            if (closingScanXamlRoot is not null)
+                closingScanXamlRoot.Changed -= OnXamlRootChanged;
 
             _isWorkflowDialogOpen = false;
             _closingScanCaptured = true;
