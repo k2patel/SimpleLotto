@@ -2946,6 +2946,7 @@ public sealed partial class MainWindow : Window
             : _databaseSchemaVersion;
         SettingsWindowsAppSdkVersionText.Text = windowsAppSdkAssembly.GetName().Version?.ToString() ?? "Unavailable";
         SettingsDatabasePathText.Text = LocalStore.DbPath;
+        SettingsLogPathText.Text = AppLog.LogDirectory;
         RefreshUpgradeStatus(_updates.Current);
     }
 
@@ -3283,6 +3284,7 @@ public sealed partial class MainWindow : Window
             }
             catch (Exception ex)
             {
+                AppLog.Error("Closing scan failed to process barcode.", ex);
                 statusText.Text = $"Closing scan failed to process the last barcode: {ex.Message}";
                 ClosingStatusText.Text = "Closing scan failed to process the last barcode. Re-scan or close scanning and restart.";
             }
@@ -3834,6 +3836,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLog.Error("Closing report generation failed.", ex);
             ClosingStatusText.Text = $"Closing report generation failed: {ex.Message}";
             StatusText.Text = "Closing report generation failed. Shift was not closed.";
             return;
@@ -3875,6 +3878,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLog.Error("Closing finalization failed.", ex);
             TryDeleteReportFolder(reportTarget.Folder);
             ClosingStatusText.Text = $"Closing finalization failed: {ex.Message}";
             return;

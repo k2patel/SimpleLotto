@@ -1542,6 +1542,7 @@
                                                             <RowDefinition Height="Auto"/>
                                                             <RowDefinition Height="Auto"/>
                                                             <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="170"/>
@@ -1588,6 +1589,15 @@
                                                                    Grid.Row="4"
                                                                    Grid.Column="1"
                                                                    Text="Database: unavailable"
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Grid.Row="5"
+                                                                   Text="Logs"
+                                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                                        <TextBlock x:Name="SettingsLogPathText"
+                                                                   Grid.Row="5"
+                                                                   Grid.Column="1"
+                                                                   Text="Logs: unavailable"
                                                                    Foreground="{ThemeResource SlTextBrush}"
                                                                    TextWrapping="Wrap"/>
                                                     </Grid>
