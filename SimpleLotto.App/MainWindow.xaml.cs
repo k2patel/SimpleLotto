@@ -3214,7 +3214,7 @@ public sealed partial class MainWindow : Window
         RefreshClosingActionState();
         RefreshClosingBins();
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
-        AppLog.Info("Closing scan dialog starting.");
+        AppLog.Info("Closing scan overlay starting.");
         _ = SpeakAsync("Start scanning.");
 
         var dialogScanBuffer = new StringBuilder();
@@ -3306,6 +3306,7 @@ public sealed partial class MainWindow : Window
             MaxHeight = availableDialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
+            IsTabStop = true,
             RowSpacing = 12
         };
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -3426,17 +3427,6 @@ public sealed partial class MainWindow : Window
         content.SizeChanged += (_, args) => ApplyResponsiveDialogLayout(args.NewSize.Width);
         content.Children.Add(statusText);
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = Content.XamlRoot,
-            Title = "Closing Scan",
-            Content = content,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            CloseButtonText = "Close scanning",
-            DefaultButton = ContentDialogButton.None
-        };
-
         void ApplyDialogSize(Windows.Foundation.Size size)
         {
             availableDialogWidth = size.Width > 0
@@ -3455,40 +3445,56 @@ public sealed partial class MainWindow : Window
                 ? Math.Min(420, availableDialogHeight)
                 : 420;
 
-            dialog.Resources["ContentDialogMinWidth"] = dialogMinWidth;
-            dialog.Resources["ContentDialogMaxWidth"] = dialogMaxWidth;
-            content.Width = dialogMaxWidth;
-            content.Height = availableDialogHeight;
+            var panelWidth = dialogMaxWidth;
+            var panelHeight = availableDialogHeight;
+            ClosingScanOverlayPanel.Width = panelWidth;
+            ClosingScanOverlayPanel.Height = panelHeight;
+            content.Width = Math.Max(160, panelWidth - 32);
+            content.Height = Math.Max(160, panelHeight - 84);
             content.MinHeight = dialogMinHeight;
-            content.MaxHeight = availableDialogHeight;
-            scanList.MaxHeight = Math.Max(180, availableDialogHeight - 180);
+            content.MaxHeight = Math.Max(160, panelHeight - 84);
+            scanList.MaxHeight = Math.Max(180, panelHeight - 220);
             ApplyResponsiveDialogLayout(size.Width);
         }
 
         ApplyDialogSize(rootSize);
-        dialog.Opened += (_, _) =>
+        void ApplyOverlaySizeFromActual()
         {
-            AppLog.Info("Closing scan dialog opened.");
-            _ = content.Focus(FocusState.Programmatic);
-        };
-        void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => ApplyDialogSize(sender.Size);
+            var width = ClosingScanOverlay.ActualWidth > 0
+                ? ClosingScanOverlay.ActualWidth
+                : RootGrid.ActualWidth;
+            var height = ClosingScanOverlay.ActualHeight > 0
+                ? ClosingScanOverlay.ActualHeight
+                : RootGrid.ActualHeight;
+            ApplyDialogSize(new Windows.Foundation.Size(width, height));
+        }
 
-        var closingScanXamlRoot = Content.XamlRoot;
-        if (closingScanXamlRoot is not null)
-            closingScanXamlRoot.Changed += OnXamlRootChanged;
+        SizeChangedEventHandler overlaySizeChanged = (_, _) => ApplyOverlaySizeFromActual();
+        var closed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        RoutedEventHandler closeHandler = (_, _) => closed.TrySetResult(true);
+        ClosingScanOverlayCloseButton.Click += closeHandler;
+        ClosingScanOverlay.SizeChanged += overlaySizeChanged;
 
         _isWorkflowDialogOpen = true;
-        var result = ContentDialogResult.None;
         try
         {
-            result = await dialog.ShowAsync();
+            AppLog.Info("Closing scan overlay opened.");
+            ClosingScanOverlayTitleText.Text = "Closing Scan";
+            ClosingScanOverlayContent.Children.Clear();
+            ClosingScanOverlayContent.Children.Add(content);
+            ClosingScanOverlay.Visibility = Visibility.Visible;
+            ApplyOverlaySizeFromActual();
+            _ = content.Focus(FocusState.Programmatic);
+            await closed.Task;
         }
         finally
         {
-            if (closingScanXamlRoot is not null)
-                closingScanXamlRoot.Changed -= OnXamlRootChanged;
+            ClosingScanOverlayCloseButton.Click -= closeHandler;
+            ClosingScanOverlay.SizeChanged -= overlaySizeChanged;
+            ClosingScanOverlay.Visibility = Visibility.Collapsed;
+            ClosingScanOverlayContent.Children.Clear();
 
-            AppLog.Info($"Closing scan dialog closed. Result={result}; rows={_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}; scannedBins={_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}; issues={_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}; unmatched={_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}.");
+            AppLog.Info($"Closing scan overlay closed. rows={_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}; scannedBins={_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}; issues={_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}; unmatched={_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}.");
             _isWorkflowDialogOpen = false;
             _closingScanCaptured = true;
             RefreshClosingBins();

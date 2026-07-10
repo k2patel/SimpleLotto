@@ -2131,6 +2131,44 @@
                        Style="{StaticResource SlCaptionTextStyle}"/>
         </Border>
 
+        <Grid x:Name="ClosingScanOverlay"
+              Grid.RowSpan="3"
+              Visibility="Collapsed"
+              Background="#80000000"
+              IsTabStop="True">
+            <Border x:Name="ClosingScanOverlayPanel"
+                    MinWidth="320"
+                    MinHeight="360"
+                    Padding="16"
+                    Style="{StaticResource SlPanelBorderStyle}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ClosingScanOverlayTitleText"
+                                   Text="Closing Scan"
+                                   Style="{StaticResource SlPageTitleTextStyle}"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="ClosingScanOverlayCloseButton"
+                                Grid.Column="1"
+                                Content="Close scanning"
+                                MinWidth="120"
+                                IsTabStop="False"/>
+                    </Grid>
+                    <Grid x:Name="ClosingScanOverlayContent"
+                          Grid.Row="1"/>
+                </Grid>
+            </Border>
+        </Grid>
+
         <Grid x:Name="StartupOverlay"
               Grid.RowSpan="3"
               IsTabStop="True"
