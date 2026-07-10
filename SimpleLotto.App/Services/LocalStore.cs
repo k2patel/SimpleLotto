@@ -123,6 +123,50 @@ public sealed class LocalStore
         cmd.ExecuteNonQuery();
     }
 
+    public void InsertSaleAndUpdateImportTicket(StoredSaleLine sale, StoredImportLine bundle)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var saleCmd = conn.CreateCommand())
+        {
+            saleCmd.Transaction = tx;
+            saleCmd.CommandText = """
+                INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                """;
+            saleCmd.Parameters.AddWithValue("$sold_at_utc", sale.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            saleCmd.Parameters.AddWithValue("$game_id", sale.GameId);
+            saleCmd.Parameters.AddWithValue("$bin", sale.Bin);
+            saleCmd.Parameters.AddWithValue("$ticket", sale.Ticket);
+            saleCmd.Parameters.AddWithValue("$quantity", sale.Quantity);
+            saleCmd.Parameters.AddWithValue("$amount_cents", sale.AmountCents);
+            saleCmd.Parameters.AddWithValue("$source", sale.Source);
+            saleCmd.ExecuteNonQuery();
+        }
+
+        using (var importCmd = conn.CreateCommand())
+        {
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                UPDATE imports
+                SET ticket = $ticket
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                  AND bin = $bin
+                """;
+            importCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+            importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+            importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
+            var updated = importCmd.ExecuteNonQuery();
+            if (updated == 0)
+                throw new InvalidOperationException("Active bundle ticket state was not found.");
+        }
+
+        tx.Commit();
+    }
+
     public void CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,

@@ -68,6 +68,7 @@ public sealed partial class MainWindow : Window
     private readonly List<ImportTicket> _closingUnmatchedTickets = new();
     private readonly List<ImportLine> _closingResolvedPlacements = new();
     private readonly List<ClosingScanIssue> _closingScanIssues = new();
+    private readonly List<ClosingScanSale> _closingScanSales = new();
     private bool _closingScanCaptured;
     private readonly SpeechSynthesizer _speechSynthesizer = new();
     private readonly MediaPlayer _speechPlayer = new()
@@ -1067,21 +1068,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var line = new SaleLine(
-            DateTime.Now,
-            ticket.GameId,
-            activeBundle.Bin,
-            ticket.Ticket,
-            1,
-            GamePriceCents(ticket.GameId) / 100m);
-
+        var backfill = BuildTicketBackfillSale(DateTime.Now, activeBundle, ticket.Ticket, "normal_sale");
+        var line = backfill.Sale;
+        var updatedBundle = activeBundle with { Ticket = backfill.NextTicket };
         _sales.Insert(0, line);
-        SaveSaleLine(line);
+        SaveSaleLineAndUpdateImportTicket(line, updatedBundle);
+        ReplaceImportLine(updatedBundle);
         SalesListView.SelectedItem = line;
         DashboardScannerStatusText.Text = $"Ticket captured for game {ticket.GameId}.";
-        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {activeBundle.Bin}";
-        StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, ticket {ticket.Ticket}.";
+        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {line.Ticket} | Next {backfill.NextTicket} | Bin {activeBundle.Bin}";
+        StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, {line.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(line.Quantity == 1 ? string.Empty : "s")}.";
         RefreshTotals();
+        RefreshOperationalPages();
     }
 
     private async Task PromptForActivationBinAsync(ImportTicket ticket)
@@ -2117,6 +2115,7 @@ public sealed partial class MainWindow : Window
         TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
         StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
         RefreshTotals();
+        RefreshBinCards();
     }
 
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
@@ -2147,6 +2146,26 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save sale to SQLite: {ex.Message}";
+        }
+    }
+
+    private void SaveSaleLineAndUpdateImportTicket(SaleLine line, ImportLine updatedBundle)
+    {
+        try
+        {
+            _store.InsertSaleAndUpdateImportTicket(
+                ToStoredSaleLine(line),
+                new StoredImportLine(
+                    updatedBundle.GameId,
+                    updatedBundle.BundleId,
+                    updatedBundle.Ticket,
+                    updatedBundle.Bin,
+                    updatedBundle.Source));
+            _allSales.Insert(0, line);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save sale and ticket state to SQLite: {ex.Message}";
         }
     }
 
@@ -2257,7 +2276,7 @@ public sealed partial class MainWindow : Window
     {
         var salesCount = _sales.Count;
         var ticketCount = _sales.Sum(s => s.Quantity);
-        var revenue = _sales.Sum(s => s.Amount);
+        var revenue = CurrentShiftSalesAmount();
         var average = ticketCount == 0 ? 0 : revenue / ticketCount;
 
         SalesSubtitleText.Text = salesCount == 0
@@ -2267,8 +2286,16 @@ public sealed partial class MainWindow : Window
         TicketsText.Text = ticketCount.ToString(CultureInfo.CurrentCulture);
         AverageText.Text = average.ToString("C", CultureInfo.CurrentCulture);
         GameMixText.Text = BuildGameMixText();
-        BinsShiftSalesText.Text = revenue.ToString("C", CultureInfo.CurrentCulture);
+        RefreshBinsShiftSalesMetric(revenue);
         RefreshClosingMetricCards();
+    }
+
+    private decimal CurrentShiftSalesAmount() =>
+        _sales.Sum(s => s.Amount);
+
+    private void RefreshBinsShiftSalesMetric(decimal? revenue = null)
+    {
+        BinsShiftSalesText.Text = (revenue ?? CurrentShiftSalesAmount()).ToString("C", CultureInfo.CurrentCulture);
     }
 
     private void RefreshClosingMetricCards()
@@ -2290,6 +2317,8 @@ public sealed partial class MainWindow : Window
     private long CurrentClosingExpectedCashCents()
     {
         var instantTicketSalesCents = (long)Math.Round(_sales.Sum(s => s.Amount) * 100m, MidpointRounding.AwayFromZero);
+        instantTicketSalesCents += _closingScanSales.Sum(s =>
+            (long)Math.Round(s.Sale.Amount * 100m, MidpointRounding.AwayFromZero));
         if (_closingScanCaptured && _closingScanIssues.Count == 0 && _closingUnmatchedTickets.Count == 0)
             instantTicketSalesCents += ClosingSoldOutBundles().Sum(bundle => GamePriceCents(bundle.GameId));
 
@@ -2343,6 +2372,7 @@ public sealed partial class MainWindow : Window
         BinsTotalText.Text = _configuredBinCount.ToString(CultureInfo.CurrentCulture);
         BinsActiveText.Text = activeBins.ToString(CultureInfo.CurrentCulture);
         BinsBundleText.Text = _imports.Count.ToString(CultureInfo.CurrentCulture);
+        RefreshBinsShiftSalesMetric();
 
         if (_selectedBinBundles.Count == 0)
             BinDetailText.Text = "Bin Details (0 bundles)";
@@ -2363,6 +2393,12 @@ public sealed partial class MainWindow : Window
 
         ApplyReceivingPage();
         ApplyInventoryPage();
+        RefreshInventoryMetricCards();
+    }
+
+    private void RefreshInventoryMetricCards()
+    {
+        InventoryReceivingCountText.Text = _receivingRecords.Count.ToString(CultureInfo.CurrentCulture);
         InventoryBundleCountText.Text = _inventoryRecords.Count.ToString(CultureInfo.CurrentCulture);
     }
 
@@ -2724,6 +2760,26 @@ public sealed partial class MainWindow : Window
         if (ClosingHistoryListView.SelectedItem is ClosingHistoryRow row)
         {
             ShowClosingReport(row);
+            return;
+        }
+
+        ClearClosingReport();
+    }
+
+    private void ClosingTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_isWindowInitialized)
+            return;
+
+        if (ClosingTabs.SelectedItem == ClosingScanEvidenceTab)
+            ExitClosingReportContext();
+    }
+
+    private void ExitClosingReportContext()
+    {
+        if (ClosingHistoryListView.SelectedItem is not null)
+        {
+            ClosingHistoryListView.SelectedItem = null;
             return;
         }
 
@@ -3219,6 +3275,8 @@ public sealed partial class MainWindow : Window
         if (_isWorkflowDialogOpen)
             return;
 
+        ExitClosingReportContext();
+        ClosingTabs.SelectedItem = ClosingScanEvidenceTab;
         _closingScannedBins.Clear();
         _closingScannedBundleKeys.Clear();
         _closingCurrentPlacements.Clear();
@@ -3226,6 +3284,7 @@ public sealed partial class MainWindow : Window
         _closingResolvedPlacements.Clear();
         _closingScanRows.Clear();
         _closingScanIssues.Clear();
+        _closingScanSales.Clear();
         _closingScanCaptured = false;
         RefreshClosingActionState();
         RefreshClosingBins();
@@ -3551,11 +3610,13 @@ public sealed partial class MainWindow : Window
 
             _closingScannedBins.Add(binNumber);
             _closingScannedBundleKeys.Add(BundleKey(activeBundle));
-            ReplaceClosingCurrentPlacement(activeBundle with { Ticket = ticket.Ticket });
+            var backfill = BuildTicketBackfillSale(DateTime.Now, activeBundle, ticket.Ticket, "closing_gap_fill_sold");
+            UpsertClosingScanSale(BundleKey(activeBundle), backfill.Sale);
+            ReplaceClosingCurrentPlacement(activeBundle with { Ticket = backfill.NextTicket });
             _closingScanRows.Insert(0, new ClosingScanRow(
-                $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
+                $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {backfill.Sale.Ticket}",
                 "Scanned"));
-            statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned.";
+            statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. {backfill.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(backfill.Sale.Quantity == 1 ? string.Empty : "s")} captured.";
             return;
         }
 
@@ -3575,6 +3636,12 @@ public sealed partial class MainWindow : Window
 
     private void AddClosingScanIssue(string title, string detail) =>
         _closingScanIssues.Add(new ClosingScanIssue(title, detail));
+
+    private void UpsertClosingScanSale(string bundleKey, SaleLine sale)
+    {
+        _closingScanSales.RemoveAll(s => string.Equals(s.BundleKey, bundleKey, StringComparison.OrdinalIgnoreCase));
+        _closingScanSales.Add(new ClosingScanSale(bundleKey, sale));
+    }
 
     private void ReplaceClosingCurrentPlacement(ImportLine placement)
     {
@@ -3797,7 +3864,11 @@ public sealed partial class MainWindow : Window
         }
 
         var closedBundles = ClosingSoldOutBundles();
-        var generatedSales = BuildClosingGeneratedSales(closedBundles, DateTime.UtcNow);
+        var closedAtUtc = DateTime.UtcNow;
+        var generatedSales = _closingScanSales
+            .Select(s => s.Sale)
+            .Concat(BuildClosingGeneratedSales(closedBundles, closedAtUtc))
+            .ToList();
         var instantTicketSalesCents = (long)Math.Round(
             (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
             MidpointRounding.AwayFromZero);
@@ -3825,7 +3896,6 @@ public sealed partial class MainWindow : Window
         }
 
         var intervalStartUtc = _lastCloseUtc;
-        var closedAtUtc = DateTime.UtcNow;
         var reportTarget = BuildClosingReportTarget(closedAtUtc);
         var reportSales = _sales
             .Concat(generatedSales)
@@ -3925,6 +3995,7 @@ public sealed partial class MainWindow : Window
         _closingResolvedPlacements.Clear();
         _closingScanRows.Clear();
         _closingScanIssues.Clear();
+        _closingScanSales.Clear();
         _closingScanCaptured = false;
         StatusText.Text = $"Shift closed. Reports saved to {reportTarget.Folder}.";
         ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Reports saved to {reportTarget.ShiftLabel}.";
@@ -4134,16 +4205,6 @@ public sealed partial class MainWindow : Window
         PdfInventoryStat(builder, 58, 296, "Sales rows", saleCount.ToString(CultureInfo.InvariantCulture));
         PdfInventoryStat(builder, 58, 270, "Tickets", ticketCount.ToString(CultureInfo.InvariantCulture));
         PdfInventoryStat(builder, 58, 250, "Instant sales", PdfMoney(instantTicketSalesCents));
-
-        PdfSectionTitle(builder, 326, 414, "Report Files");
-        PdfRect(builder, 326, 242, 226, 156, 0.98, 0.99, 1.0, fill: true);
-        PdfRect(builder, 326, 242, 226, 156, 0.72, 0.78, 0.86, fill: false);
-        PdfText(builder, 342, 374, "Detailed CSV files are saved with this PDF:", "F1", 8.2, 0.20, 0.26, 0.34);
-        PdfText(builder, 342, 352, "shift_summary.csv", "F2", 8.6, 0.08, 0.16, 0.27);
-        PdfText(builder, 342, 332, "sales_detail.csv", "F2", 8.6, 0.08, 0.16, 0.27);
-        PdfText(builder, 342, 312, "inventory.csv", "F2", 8.6, 0.08, 0.16, 0.27);
-        PdfText(builder, 342, 292, "bin_assignments.csv", "F2", 8.6, 0.08, 0.16, 0.27);
-        PdfText(builder, 342, 262, "PDF is a one-page manager summary.", "F1", 7.8, 0.28, 0.34, 0.42);
 
         PdfSectionTitle(builder, 42, 204, "Largest Sales Rows");
         PdfSalesTable(builder, 42, 64, 510, 124, sales);
@@ -4488,6 +4549,61 @@ public sealed partial class MainWindow : Window
             return;
         }
     }
+
+    private TicketBackfillSale BuildTicketBackfillSale(DateTime soldAt, ImportLine activeBundle, string scannedTicket, string source)
+    {
+        var range = BuildTicketBackfillRange(activeBundle.Ticket, scannedTicket);
+        var price = GamePriceCents(activeBundle.GameId) / 100m;
+        return new TicketBackfillSale(
+            new SaleLine(
+                soldAt,
+                activeBundle.GameId,
+                activeBundle.Bin,
+                range.SoldTicketText,
+                range.Quantity,
+                range.Quantity * price,
+                source),
+            range.NextTicket);
+    }
+
+    private static TicketBackfillRange BuildTicketBackfillRange(string currentTicket, string scannedTicket)
+    {
+        var currentText = string.IsNullOrWhiteSpace(currentTicket) ? scannedTicket : currentTicket.Trim();
+        var scannedText = string.IsNullOrWhiteSpace(scannedTicket) ? currentText : scannedTicket.Trim();
+        var width = Math.Max(TicketSerialWidth(currentText), TicketSerialWidth(scannedText));
+
+        if (TryParseTicketSerial(currentText, out var currentSerial) &&
+            TryParseTicketSerial(scannedText, out var scannedSerial))
+        {
+            if (scannedSerial >= currentSerial)
+            {
+                var quantity = scannedSerial - currentSerial + 1;
+                var startText = FormatTicketSerial(currentSerial, width);
+                var endText = FormatTicketSerial(scannedSerial, width);
+                var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
+                return new TicketBackfillRange(soldText, quantity, FormatTicketSerial(scannedSerial + 1, width));
+            }
+
+            return new TicketBackfillRange(scannedText, 1, FormatTicketSerial(currentSerial, width));
+        }
+
+        if (TryParseTicketSerial(scannedText, out var fallbackScannedSerial))
+            return new TicketBackfillRange(scannedText, 1, FormatTicketSerial(fallbackScannedSerial + 1, width));
+
+        return new TicketBackfillRange(scannedText, 1, currentText);
+    }
+
+    private static bool TryParseTicketSerial(string ticket, out int serial)
+    {
+        var digits = DigitsOnly(ticket);
+        return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out serial);
+    }
+
+    private static int TicketSerialWidth(string ticket) =>
+        DigitsOnly(ticket).Length;
+
+    private static string FormatTicketSerial(int serial, int width) =>
+        serial.ToString("D" + Math.Max(1, width).ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
 
     private static string BundleKey(ImportLine line) =>
         BundleKey(line.GameId, line.BundleId);
@@ -5661,6 +5777,12 @@ public sealed partial class MainWindow : Window
     private sealed record ClosingScanRow(string ScannedText, string Status);
 
     private sealed record ClosingScanIssue(string Title, string Detail);
+
+    private sealed record ClosingScanSale(string BundleKey, SaleLine Sale);
+
+    private sealed record TicketBackfillSale(SaleLine Sale, string NextTicket);
+
+    private sealed record TicketBackfillRange(string SoldTicketText, int Quantity, string NextTicket);
 
     private sealed record ClosingReportTarget(string BusinessDate, int ShiftSequence, string ShiftLabel, string Folder);
 

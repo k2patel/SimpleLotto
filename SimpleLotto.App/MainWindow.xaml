@@ -638,6 +638,7 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="180"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Inventory"
@@ -646,6 +647,16 @@
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
                                 <Border Grid.Column="1"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="InventoryReceivingCountText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Unopened bundles"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2"
                                         Style="{StaticResource SlPanelBorderStyle}">
                                     <StackPanel Spacing="2">
                                         <TextBlock x:Name="InventoryBundleCountText"
@@ -1147,7 +1158,8 @@
                             <TabView x:Name="ClosingTabs"
                                      Grid.Row="1"
                                      IsAddTabButtonVisible="False"
-                                     CanDragTabs="False">
+                                     CanDragTabs="False"
+                                     SelectionChanged="ClosingTabs_SelectionChanged">
                                 <TabViewItem x:Name="ClosingScanEvidenceTab"
                                              Header="Scan Evidence"
                                              IsClosable="False">

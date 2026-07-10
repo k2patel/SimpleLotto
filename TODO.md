@@ -1,27 +1,17 @@
 # SimpleLotto TODO
 
-## Closing, Sales, Bins, Inventory
+## Windows Verification
 
-1. Bins page current-shift sales metric does not update after ticket scans.
-   - Recheck the wiring between regular ticket sale recording, `RefreshTotals`, `RefreshBinCards`, and the `BinsShiftSalesText` metric.
-   - The card should show sales from the current shift interval since the last successful close.
+The latest fixes need verification in the intended Windows WinUI environment because this macOS host cannot execute the Windows XAML compiler.
 
-2. Inventory page needs an unopened bundle total card.
-   - Add a top metric card for total unopened/receiving bundles next to the active bin bundle card.
-   - Keep unopened inventory separate from active bin bundles.
-
-3. Closing page top metric cards should reset/live-update correctly.
-   - On Scan Evidence, top cards should show the current closing scan state, starting from zero where appropriate.
-   - Selecting a closing history row may show that selected report's sales, total tickets, bins scanned, and expected cash.
-   - Leaving the selected report context should restore live current-closing values.
-   - Do not let the last selected closing report keep populating the top cards while doing a new scan.
-
-4. Closing PDF should not list report files.
-   - Remove the Report Files section from `closing_report.pdf`.
-   - Keep the PDF focused on shift/cash/sales/inventory summary.
-
-5. Ticket sale backfill is incomplete.
-   - Applies to regular sales and closing scans.
-   - If current ticket is `003` and scanned ticket is `007`, record tickets `003` through `007` as sold and advance next available ticket to `008`.
-   - The sale should represent 5 tickets, not only the scanned ticket `007`.
-   - Preserve source labels so normal sales and closing-generated sales remain distinguishable in reports/audit.
+1. Run `..\BuildAndRun.ps1 -SkipRun` from `SimpleLotto.App`.
+2. Verify Bins current-shift sales updates after ticket scans.
+3. Verify Inventory shows separate unopened receiving and active bin bundle cards.
+4. Verify Closing top metric cards switch between history context and live scan context correctly.
+5. Generate `closing_report.pdf` and confirm it no longer lists report files.
+6. Verify ticket backfill:
+   - With current ticket `003`, scanning `007` records sale range `003-007`.
+   - Quantity is `5`.
+   - Amount is `5 * game price`.
+   - Next available ticket advances to `008`.
+   - Regular sale rows keep `normal_sale`; closing-generated rows keep `closing_gap_fill_sold`.
