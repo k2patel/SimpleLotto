@@ -389,6 +389,16 @@
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
                                     </StackPanel>
                                 </Border>
+                                <Border Grid.Column="4"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="BinsShiftSalesText"
+                                                   Text="$0.00"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Sales"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
                             </Grid>
 
                             <Grid Grid.Row="1"
@@ -1108,7 +1118,7 @@
                                         <TextBlock x:Name="ClosingTicketsText"
                                                    Text="0"
                                                    Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Tickets"
+                                        <TextBlock Text="Total tickets"
                                                    Style="{StaticResource SlCaptionTextStyle}"/>
                                     </StackPanel>
                                 </Border>
@@ -1438,7 +1448,7 @@
                                                             BorderThickness="1"
                                                             Background="{ThemeResource SlSurfaceAltBrush}">
                                                         <StackPanel Spacing="8">
-                                                            <TextBlock Text="Shift"
+                                                            <TextBlock Text="Shift Information"
                                                                        Style="{StaticResource SlCaptionTextStyle}"/>
                                                             <TextBlock x:Name="ClosingReportSummaryText"
                                                                        Text="Select a closing to view report details."
@@ -1452,67 +1462,11 @@
                                                             BorderBrush="{ThemeResource SlBorderBrush}"
                                                             BorderThickness="1"
                                                             Background="{ThemeResource SlSurfaceAltBrush}">
-                                                        <Grid RowSpacing="10"
-                                                              ColumnSpacing="12">
-                                                            <Grid.RowDefinitions>
-                                                                <RowDefinition Height="Auto"/>
-                                                                <RowDefinition Height="Auto"/>
-                                                                <RowDefinition Height="Auto"/>
-                                                            </Grid.RowDefinitions>
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="*"/>
-                                                                <ColumnDefinition Width="*"/>
-                                                            </Grid.ColumnDefinitions>
-                                                            <TextBlock Text="Report Totals"
-                                                                       Grid.ColumnSpan="2"
-                                                                       Style="{StaticResource SlCaptionTextStyle}"/>
-                                                            <StackPanel Grid.Row="1"
-                                                                        Spacing="2">
-                                                                <TextBlock Text="Sales"
-                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                                                <TextBlock x:Name="ClosingReportSalesText"
-                                                                           Text="$0.00"
-                                                                           Style="{StaticResource SlMetricTextStyle}"/>
-                                                            </StackPanel>
-                                                            <StackPanel Grid.Row="1"
-                                                                        Grid.Column="1"
-                                                                        Spacing="2">
-                                                                <TextBlock Text="Tickets"
-                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                                                <TextBlock x:Name="ClosingReportTicketsText"
-                                                                           Text="0"
-                                                                           Style="{StaticResource SlMetricTextStyle}"/>
-                                                            </StackPanel>
-                                                            <StackPanel Grid.Row="2"
-                                                                        Spacing="2">
-                                                                <TextBlock Text="Bins scanned"
-                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                                                <TextBlock x:Name="ClosingReportBinsText"
-                                                                           Text="0 / 0"
-                                                                           Style="{StaticResource SlMetricTextStyle}"/>
-                                                            </StackPanel>
-                                                            <StackPanel Grid.Row="2"
-                                                                        Grid.Column="1"
-                                                                        Spacing="2">
-                                                                <TextBlock Text="Sales rows"
-                                                                           Style="{StaticResource SlCaptionTextStyle}"/>
-                                                                <TextBlock x:Name="ClosingReportRowsText"
-                                                                           Text="0"
-                                                                           Style="{StaticResource SlMetricTextStyle}"/>
-                                                            </StackPanel>
-                                                        </Grid>
-                                                    </Border>
-
-                                                    <Border Padding="12"
-                                                            CornerRadius="6"
-                                                            BorderBrush="{ThemeResource SlBorderBrush}"
-                                                            BorderThickness="1"
-                                                            Background="{ThemeResource SlSurfaceAltBrush}">
                                                         <StackPanel Spacing="8">
-                                                            <TextBlock Text="Cash"
+                                                            <TextBlock Text="Cash Inputs"
                                                                        Style="{StaticResource SlCaptionTextStyle}"/>
                                                             <TextBlock x:Name="ClosingReportCashText"
-                                                                       Text="Expected cash: $0.00"
+                                                                       Text="Online sale: $0.00"
                                                                        Foreground="{ThemeResource SlTextBrush}"
                                                                        TextWrapping="Wrap"/>
                                                         </StackPanel>

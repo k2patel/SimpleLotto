@@ -97,6 +97,7 @@ public sealed partial class MainWindow : Window
     private string _storeStreet = string.Empty;
     private string _storeCity = string.Empty;
     private string _databaseSchemaVersion = string.Empty;
+    private ClosingHistoryRow? _selectedClosingReport;
     private int _configuredBinCount = 90;
     private int _scanPairTimeoutSeconds = 5;
     private bool _displayBurnInEnabled = true;
@@ -2266,8 +2267,23 @@ public sealed partial class MainWindow : Window
         TicketsText.Text = ticketCount.ToString(CultureInfo.CurrentCulture);
         AverageText.Text = average.ToString("C", CultureInfo.CurrentCulture);
         GameMixText.Text = BuildGameMixText();
-        ClosingSalesText.Text = revenue.ToString("C", CultureInfo.CurrentCulture);
-        ClosingTicketsText.Text = ticketCount.ToString(CultureInfo.CurrentCulture);
+        BinsShiftSalesText.Text = revenue.ToString("C", CultureInfo.CurrentCulture);
+        RefreshClosingMetricCards();
+    }
+
+    private void RefreshClosingMetricCards()
+    {
+        if (_selectedClosingReport is { } selected)
+        {
+            ClosingSalesText.Text = selected.SalesText;
+            ClosingTicketsText.Text = selected.TicketText;
+            ClosingEvidenceText.Text = selected.BinText;
+            ClosingExpectedCashText.Text = selected.ExpectedCashText;
+            return;
+        }
+
+        ClosingSalesText.Text = _sales.Sum(s => s.Amount).ToString("C", CultureInfo.CurrentCulture);
+        ClosingTicketsText.Text = _sales.Sum(s => s.Quantity).ToString(CultureInfo.CurrentCulture);
         ClosingExpectedCashText.Text = MoneyText(CurrentClosingExpectedCashCents());
     }
 
@@ -2748,17 +2764,15 @@ public sealed partial class MainWindow : Window
 
     private void ShowClosingReport(ClosingHistoryRow row)
     {
+        _selectedClosingReport = row;
+        RefreshClosingMetricCards();
         ClosingReportSummaryText.Text =
-            $"Shift {row.ShiftText}{Environment.NewLine}" +
-            $"Closed {row.ClosedText}{Environment.NewLine}" +
-            $"Interval start: {row.IntervalStartText}";
-        ClosingReportSalesText.Text = row.SalesText;
-        ClosingReportTicketsText.Text = row.TicketText;
-        ClosingReportBinsText.Text = row.BinText;
-        ClosingReportRowsText.Text = row.SalesCount.ToString(CultureInfo.CurrentCulture);
+            $"Start: {row.IntervalStartText}{Environment.NewLine}" +
+            $"End: {row.ClosedText}";
         ClosingReportCashText.Text =
-            $"Expected cash: {row.ExpectedCashText}{Environment.NewLine}" +
-            $"Manual totals: {row.ManualTotalsText}";
+            $"Online sale: {row.OnlineSaleText}{Environment.NewLine}" +
+            $"Online cashout: {row.OnlineCashoutText}{Environment.NewLine}" +
+            $"Instant cashout: {row.InstantCashoutText}";
         ClosingReportInventoryText.Text =
             $"{row.ReconciliationText}{Environment.NewLine}" +
             $"Scanned bins: {row.ScannedBins.ToString(CultureInfo.CurrentCulture)} of {row.ActiveBins.ToString(CultureInfo.CurrentCulture)} active";
@@ -2768,12 +2782,10 @@ public sealed partial class MainWindow : Window
 
     private void ClearClosingReport()
     {
+        _selectedClosingReport = null;
+        RefreshClosingMetricCards();
         ClosingReportSummaryText.Text = "Select a closing to view report details.";
-        ClosingReportSalesText.Text = "$0.00";
-        ClosingReportTicketsText.Text = "0";
-        ClosingReportBinsText.Text = "0 / 0";
-        ClosingReportRowsText.Text = "0";
-        ClosingReportCashText.Text = "Expected cash: $0.00";
+        ClosingReportCashText.Text = "Online sale: $0.00";
         ClosingReportInventoryText.Text = "0 closed, 0 updated, 0 resolved";
         ClosingReportStatusText.Text = "Select a closing to see its report folder.";
         OpenSelectedClosingReportButton.IsEnabled = false;
@@ -2847,7 +2859,8 @@ public sealed partial class MainWindow : Window
                 scanned: _closingScannedBins.Contains(i)));
         }
 
-        ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {activeBinCount.ToString(CultureInfo.CurrentCulture)}";
+        if (_selectedClosingReport is null)
+            ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {activeBinCount.ToString(CultureInfo.CurrentCulture)}";
         ClosingBinDetailText.Text = "Select a bin to view expected game, bundle, and ticket.";
     }
 
@@ -3251,7 +3264,8 @@ public sealed partial class MainWindow : Window
         void RefreshDialogTotals()
         {
             totalText.Text = _closingScanRows.Count.ToString(CultureInfo.CurrentCulture);
-            ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
+            if (_selectedClosingReport is null)
+                ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
         }
 
         void AcceptDialogScan(string raw)
@@ -5689,6 +5703,9 @@ public sealed partial class MainWindow : Window
             : IntervalStart.ToString("g", CultureInfo.CurrentCulture);
         public string SalesText => SalesAmount.ToString("C", CultureInfo.CurrentCulture);
         public string ExpectedCashText => ExpectedCashAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string OnlineSaleText => OnlineSaleAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string OnlineCashoutText => OnlineCashoutAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string InstantCashoutText => InstantCashoutAmount.ToString("C", CultureInfo.CurrentCulture);
         public string ManualTotalsText =>
             $"online sale {OnlineSaleAmount.ToString("C", CultureInfo.CurrentCulture)}, " +
             $"online cashout {OnlineCashoutAmount.ToString("C", CultureInfo.CurrentCulture)}, " +
