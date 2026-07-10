@@ -547,16 +547,16 @@ public sealed partial class MainWindow : Window
         CheckBox pdf)
     {
         var names = new List<string>();
-        AddSelected(names, shiftSummary, "shift summary");
-        AddSelected(names, inventory, "inventory");
-        AddSelected(names, salesDetail, "sales detail");
-        AddSelected(names, corrections, "corrections");
-        AddSelected(names, anomalies, "anomalies");
-        AddSelected(names, placementEvents, "placement events");
-        AddSelected(names, binAssignments, "bin assignments");
-        AddSelected(names, initialization, "initialization");
-        AddSelected(names, closingAudit, "closing audit");
-        AddSelected(names, pdf, "PDF report");
+        AddSelected(names, shiftSummary, "shift_summary.csv");
+        AddSelected(names, inventory, "inventory.csv");
+        AddSelected(names, salesDetail, "sales_detail.csv");
+        AddSelected(names, corrections, "corrections.csv");
+        AddSelected(names, anomalies, "anomalies.csv");
+        AddSelected(names, placementEvents, "placement_events.csv");
+        AddSelected(names, binAssignments, "bin_assignments.csv");
+        AddSelected(names, initialization, "initialization.csv");
+        AddSelected(names, closingAudit, "closing_audit.csv");
+        AddSelected(names, pdf, "closing_report.pdf");
         return names;
     }
 
@@ -3784,9 +3784,10 @@ public sealed partial class MainWindow : Window
             (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
             MidpointRounding.AwayFromZero);
         var expectedCashCents = instantTicketSalesCents + onlineSaleCents - instantCashoutCents - onlineCashoutCents;
+        var selectedEmailAttachments = SelectedSettingsEmailReportNames();
         var closingEmailSummary = BuildClosingEmailSummaryText(
             SettingsEmailSendCheckBox.IsChecked == true,
-            SelectedSettingsEmailReportNames());
+            selectedEmailAttachments);
 
         var dialog = new ContentDialog
         {
@@ -3828,7 +3829,8 @@ public sealed partial class MainWindow : Window
                 onlineSaleCents,
                 onlineCashoutCents,
                 instantCashoutCents,
-                expectedCashCents);
+                expectedCashCents,
+                selectedEmailAttachments);
         }
         catch (Exception ex)
         {
@@ -3961,7 +3963,8 @@ public sealed partial class MainWindow : Window
         long onlineSaleCents,
         long onlineCashoutCents,
         long instantCashoutCents,
-        long expectedCashCents)
+        long expectedCashCents,
+        IReadOnlyList<string> selectedEmailAttachments)
     {
         Directory.CreateDirectory(target.Folder);
         var formula = "instant_ticket_sales + online_sale - instant_cashout - online_cashout";
@@ -3987,6 +3990,7 @@ public sealed partial class MainWindow : Window
         WritePlacementEventsCsv(Path.Combine(target.Folder, "placement_events.csv"), closedBundles, currentBundles, resolvedBundles);
         WriteBinAssignmentsCsv(Path.Combine(target.Folder, "bin_assignments.csv"), currentBundles, resolvedBundles);
         WriteAnomaliesCsv(Path.Combine(target.Folder, "anomalies.csv"));
+        WriteEmailAttachmentsCsv(Path.Combine(target.Folder, "email_attachments.csv"), selectedEmailAttachments);
         File.WriteAllLines(
             Path.Combine(target.Folder, "initialization.csv"),
             new[] { CsvLine("event", "detail"), CsvLine("not_applicable", "No initialization rows are generated for this shift closing.") },
@@ -3998,14 +4002,292 @@ public sealed partial class MainWindow : Window
                 CsvLine("event", "detail"),
                 CsvLine("closing_finalized", $"shift={target.ShiftLabel}; expected_cash={MoneyCsv(expectedCashCents)}; report_folder={target.Folder}"),
                 CsvLine("cash_formula", formula),
-                CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}")
+                CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}"),
+                CsvLine("email_attachments", string.Join(";", selectedEmailAttachments)),
+                CsvLine("pdf_report", Path.Combine(target.Folder, "closing_report.pdf"))
             },
             Encoding.UTF8);
         File.WriteAllText(
             Path.Combine(target.Folder, "closing_report.txt"),
             BuildClosingReportText(target, periodStart, periodEnd, sales, instantTicketSalesCents, onlineSaleCents, onlineCashoutCents, instantCashoutCents, expectedCashCents, closedBundles.Count, currentBundles.Count, resolvedBundles.Count),
             Encoding.UTF8);
+        WriteClosingPdfReport(
+            Path.Combine(target.Folder, "closing_report.pdf"),
+            target,
+            periodStart,
+            periodEnd,
+            sales,
+            instantTicketSalesCents,
+            onlineSaleCents,
+            onlineCashoutCents,
+            instantCashoutCents,
+            expectedCashCents,
+            closedBundles.Count,
+            currentBundles.Count,
+            resolvedBundles.Count);
     }
+
+    private static void WriteClosingPdfReport(
+        string path,
+        ClosingReportTarget target,
+        string periodStart,
+        string periodEnd,
+        IReadOnlyList<SaleLine> sales,
+        long instantTicketSalesCents,
+        long onlineSaleCents,
+        long onlineCashoutCents,
+        long instantCashoutCents,
+        long expectedCashCents,
+        int closedBundleCount,
+        int currentBundleCount,
+        int resolvedBundleCount)
+    {
+        var pdf = new SimplePdfDocument();
+        pdf.AddPage(BuildClosingPdfPage(
+            target,
+            periodStart,
+            periodEnd,
+            sales,
+            instantTicketSalesCents,
+            onlineSaleCents,
+            onlineCashoutCents,
+            instantCashoutCents,
+            expectedCashCents,
+            closedBundleCount,
+            currentBundleCount,
+            resolvedBundleCount));
+        pdf.Save(path);
+    }
+
+    private static string BuildClosingPdfPage(
+        ClosingReportTarget target,
+        string periodStart,
+        string periodEnd,
+        IReadOnlyList<SaleLine> sales,
+        long instantTicketSalesCents,
+        long onlineSaleCents,
+        long onlineCashoutCents,
+        long instantCashoutCents,
+        long expectedCashCents,
+        int closedBundleCount,
+        int currentBundleCount,
+        int resolvedBundleCount)
+    {
+        var builder = new StringBuilder();
+        var totalSalesCents = instantTicketSalesCents + onlineSaleCents;
+        var totalCashoutCents = instantCashoutCents + onlineCashoutCents;
+        var ticketCount = sales.Sum(s => s.Quantity);
+        var saleCount = sales.Count;
+        var denominations = PdfDenominations(sales);
+
+        PdfRect(builder, 0, 744, 612, 48, 0.08, 0.16, 0.27, fill: true);
+        PdfText(builder, 42, 766, "Shift Report", "F2", 19, 1, 1, 1);
+        PdfText(builder, 42, 750, target.ShiftLabel, "F1", 9, 0.82, 0.9, 1);
+        PdfText(builder, 380, 766, periodEnd, "F2", 9, 1, 1, 1);
+        PdfText(builder, 380, 750, "SimpleLotto closing report", "F1", 9, 0.82, 0.9, 1);
+
+        PdfText(builder, 42, 724, $"Period: {periodStart} to {periodEnd}", "F1", 9, 0.18, 0.24, 0.32);
+
+        PdfMetricCard(builder, 42, 664, 118, "Instant sales", PdfMoney(instantTicketSalesCents), 0.90, 0.96, 0.90);
+        PdfMetricCard(builder, 166, 664, 118, "Online sale", PdfMoney(onlineSaleCents), 0.90, 0.94, 1.0);
+        PdfMetricCard(builder, 290, 664, 118, "Total sales", PdfMoney(totalSalesCents), 0.95, 0.94, 1.0);
+        PdfMetricCard(builder, 414, 664, 118, "Expected cash", PdfMoney(expectedCashCents), 1.0, 0.95, 0.86);
+
+        PdfSectionTitle(builder, 42, 626, "Sales By Ticket Amount");
+        PdfDenominationChart(builder, 42, 452, 256, 158, denominations);
+
+        PdfSectionTitle(builder, 326, 626, "Cash Reconciliation");
+        PdfRect(builder, 326, 452, 226, 158, 0.98, 0.99, 1.0, fill: true);
+        PdfRect(builder, 326, 452, 226, 158, 0.72, 0.78, 0.86, fill: false);
+        PdfSummaryLine(builder, 342, 588, "Instant ticket sales", PdfMoney(instantTicketSalesCents));
+        PdfSummaryLine(builder, 342, 566, "Online sale", PdfMoney(onlineSaleCents));
+        PdfSummaryLine(builder, 342, 544, "Instant cashout", "-" + PdfMoney(instantCashoutCents));
+        PdfSummaryLine(builder, 342, 522, "Online cashout", "-" + PdfMoney(onlineCashoutCents));
+        PdfRect(builder, 342, 504, 194, 1, 0.55, 0.62, 0.72, fill: true);
+        PdfSummaryLine(builder, 342, 484, "Total cashouts", PdfMoney(totalCashoutCents));
+        PdfSummaryLine(builder, 342, 462, "Expected cash", PdfMoney(expectedCashCents), bold: true);
+
+        PdfSectionTitle(builder, 42, 414, "Closing Inventory");
+        PdfRect(builder, 42, 242, 256, 156, 0.98, 0.99, 1.0, fill: true);
+        PdfRect(builder, 42, 242, 256, 156, 0.72, 0.78, 0.86, fill: false);
+        PdfInventoryStat(builder, 58, 374, "Current bundles", currentBundleCount.ToString(CultureInfo.InvariantCulture));
+        PdfInventoryStat(builder, 58, 348, "Closed out bundles", closedBundleCount.ToString(CultureInfo.InvariantCulture));
+        PdfInventoryStat(builder, 58, 322, "Resolved bundles", resolvedBundleCount.ToString(CultureInfo.InvariantCulture));
+        PdfInventoryStat(builder, 58, 296, "Sales rows", saleCount.ToString(CultureInfo.InvariantCulture));
+        PdfInventoryStat(builder, 58, 270, "Tickets", ticketCount.ToString(CultureInfo.InvariantCulture));
+        PdfInventoryStat(builder, 58, 250, "Instant sales", PdfMoney(instantTicketSalesCents));
+
+        PdfSectionTitle(builder, 326, 414, "Report Files");
+        PdfRect(builder, 326, 242, 226, 156, 0.98, 0.99, 1.0, fill: true);
+        PdfRect(builder, 326, 242, 226, 156, 0.72, 0.78, 0.86, fill: false);
+        PdfText(builder, 342, 374, "Detailed CSV files are saved with this PDF:", "F1", 8.2, 0.20, 0.26, 0.34);
+        PdfText(builder, 342, 352, "shift_summary.csv", "F2", 8.6, 0.08, 0.16, 0.27);
+        PdfText(builder, 342, 332, "sales_detail.csv", "F2", 8.6, 0.08, 0.16, 0.27);
+        PdfText(builder, 342, 312, "inventory.csv", "F2", 8.6, 0.08, 0.16, 0.27);
+        PdfText(builder, 342, 292, "bin_assignments.csv", "F2", 8.6, 0.08, 0.16, 0.27);
+        PdfText(builder, 342, 262, "PDF is a one-page manager summary.", "F1", 7.8, 0.28, 0.34, 0.42);
+
+        PdfSectionTitle(builder, 42, 204, "Largest Sales Rows");
+        PdfSalesTable(builder, 42, 64, 510, 124, sales);
+        PdfText(builder, 42, 34, "Formula: expected cash = instant ticket sales + online sale - instant cashout - online cashout.", "F1", 7.8, 0.32, 0.38, 0.46);
+        return builder.ToString();
+    }
+
+    private static IReadOnlyList<PdfDenominationRow> PdfDenominations(IReadOnlyList<SaleLine> sales) =>
+        sales
+            .Where(s => s.Quantity > 0 && s.Amount > 0)
+            .GroupBy(s => Math.Max(1, (int)Math.Round(s.Amount / Math.Max(1, s.Quantity), MidpointRounding.AwayFromZero)))
+            .Select(g => new PdfDenominationRow(
+                g.Key,
+                g.Sum(s => s.Quantity),
+                (long)Math.Round(g.Sum(s => s.Amount) * 100m, MidpointRounding.AwayFromZero)))
+            .OrderBy(r => r.Price)
+            .ToList();
+
+    private static void PdfMetricCard(StringBuilder builder, double x, double y, double width, string label, string value, double r, double g, double b)
+    {
+        PdfRect(builder, x, y, width, 48, r, g, b, fill: true);
+        PdfRect(builder, x, y, width, 48, 0.68, 0.74, 0.82, fill: false);
+        PdfText(builder, x + 10, y + 31, label, "F1", 7.8, 0.29, 0.35, 0.43);
+        PdfText(builder, x + 10, y + 12, value, "F2", 14, 0.08, 0.16, 0.27);
+    }
+
+    private static void PdfSectionTitle(StringBuilder builder, double x, double y, string title)
+    {
+        PdfText(builder, x, y, title, "F2", 11, 0.08, 0.16, 0.27);
+        PdfRect(builder, x, y - 8, 48, 2, 0.16, 0.42, 0.74, fill: true);
+    }
+
+    private static void PdfDenominationChart(StringBuilder builder, double x, double y, double width, double height, IReadOnlyList<PdfDenominationRow> rows)
+    {
+        PdfRect(builder, x, y, width, height, 0.98, 0.99, 1.0, fill: true);
+        PdfRect(builder, x, y, width, height, 0.72, 0.78, 0.86, fill: false);
+        var expectedPrices = new[] { 1, 2, 5, 10, 20, 25, 30, 40, 50 };
+        var byPrice = rows.ToDictionary(r => r.Price);
+        var max = Math.Max(1, rows.Select(r => (long?)r.AmountCents).Max() ?? 1);
+
+        PdfText(builder, x + width - 66, y + height - 12, "Sales", "F2", 6.8, 0.28, 0.34, 0.42);
+        PdfText(builder, x + width - 24, y + height - 12, "Tickets", "F2", 6.8, 0.28, 0.34, 0.42);
+        var rowY = y + height - 24;
+        foreach (var price in expectedPrices)
+        {
+            byPrice.TryGetValue(price, out var row);
+            var amount = row?.AmountCents ?? 0;
+            var tickets = row?.TicketCount ?? 0;
+            PdfText(builder, x + 12, rowY + 2, "$" + price.ToString(CultureInfo.InvariantCulture), "F2", 7.7, 0.20, 0.26, 0.34);
+            var barWidth = amount <= 0 ? 1 : Math.Max(4, (double)amount / max * (width - 120));
+            PdfRect(builder, x + 42, rowY, barWidth, 9, 0.24, 0.62, 0.44, fill: true);
+            PdfText(builder, x + width - 66, rowY + 2, PdfMoney(amount), "F1", 7.2, 0.20, 0.26, 0.34);
+            PdfText(builder, x + width - 24, rowY + 2, tickets.ToString(CultureInfo.InvariantCulture), "F1", 7.2, 0.20, 0.26, 0.34);
+            rowY -= 14;
+        }
+
+        PdfRect(builder, x + 12, y + 17, width - 24, 1, 0.72, 0.78, 0.86, fill: true);
+        PdfText(builder, x + 12, y + 6, "Total", "F2", 7.4, 0.08, 0.16, 0.27);
+        PdfText(builder, x + width - 66, y + 6, PdfMoney(rows.Sum(r => r.AmountCents)), "F2", 7.2, 0.08, 0.16, 0.27);
+        PdfText(builder, x + width - 24, y + 6, rows.Sum(r => r.TicketCount).ToString(CultureInfo.InvariantCulture), "F2", 7.2, 0.08, 0.16, 0.27);
+    }
+
+    private static void PdfSummaryLine(StringBuilder builder, double x, double y, string label, string value, bool bold = false)
+    {
+        PdfText(builder, x, y, label, bold ? "F2" : "F1", 8.4, 0.20, 0.26, 0.34);
+        PdfText(builder, x + 132, y, value, bold ? "F2" : "F1", 8.4, 0.08, 0.16, 0.27);
+    }
+
+    private static void PdfInventoryStat(StringBuilder builder, double x, double y, string label, string value)
+    {
+        PdfText(builder, x, y, label, "F1", 8.4, 0.20, 0.26, 0.34);
+        PdfText(builder, x + 140, y, value, "F2", 9.2, 0.08, 0.16, 0.27);
+    }
+
+    private static void PdfSalesTable(StringBuilder builder, double x, double y, double width, double height, IReadOnlyList<SaleLine> sales)
+    {
+        PdfRect(builder, x, y, width, height, 0.98, 0.99, 1.0, fill: true);
+        PdfRect(builder, x, y, width, height, 0.72, 0.78, 0.86, fill: false);
+        var widths = new[] { 112d, 70d, 70d, 54d, 56d, 70d, 78d };
+        PdfTableHeader(builder, x, y + height - 18, widths, new[] { "Time", "Game", "Bin", "Ticket", "Qty", "Amount", "Source" });
+        var rowY = y + height - 34;
+        foreach (var sale in sales
+                     .OrderByDescending(s => Math.Abs(s.Amount))
+                     .ThenByDescending(s => s.SoldAt)
+                     .Take(7))
+        {
+            PdfRow(builder, x, rowY, 14, widths, new[]
+            {
+                sale.SoldAt.ToString("MM/dd h:mm tt", CultureInfo.InvariantCulture),
+                sale.GameId,
+                sale.Bin,
+                sale.Ticket,
+                sale.Quantity.ToString(CultureInfo.InvariantCulture),
+                sale.Amount.ToString("0.00", CultureInfo.InvariantCulture),
+                PdfTrim(SaleSourceLabel(sale.Source), 16)
+            });
+            rowY -= 14;
+        }
+
+        if (sales.Count == 0)
+            PdfText(builder, x + 12, y + height - 46, "No sales rows for this shift.", "F1", 8, 0.28, 0.34, 0.42);
+    }
+
+    private static void PdfTableHeader(StringBuilder builder, double x, double y, IReadOnlyList<double> widths, IReadOnlyList<string> headers)
+    {
+        PdfRect(builder, x, y, widths.Sum(), 16, 0.82, 0.84, 0.86, fill: true);
+        var cx = x;
+        for (var i = 0; i < headers.Count; i++)
+        {
+            PdfRect(builder, cx, y, widths[i], 16, 0.25, 0.25, 0.25, fill: false);
+            PdfText(builder, cx + 4, y + 5, headers[i], "F2", 8);
+            cx += widths[i];
+        }
+    }
+
+    private static void PdfRow(StringBuilder builder, double x, double y, double rowHeight, IReadOnlyList<double> widths, IReadOnlyList<string> cells)
+    {
+        var cx = x;
+        for (var i = 0; i < cells.Count; i++)
+        {
+            PdfRect(builder, cx, y, widths[i], rowHeight, 0.36, 0.36, 0.36, fill: false);
+            PdfText(builder, cx + 4, y + 3.4, cells[i], "F1", 7.3);
+            cx += widths[i];
+        }
+    }
+
+    private static void PdfRect(StringBuilder builder, double x, double y, double width, double height, double r, double g, double b, bool fill)
+    {
+        var colorOperator = fill ? "rg" : "RG";
+        builder.AppendFormat(CultureInfo.InvariantCulture, "{0:0.###} {1:0.###} {2:0.###} {3}\n", r, g, b, colorOperator);
+        builder.AppendFormat(CultureInfo.InvariantCulture, "{0:0.###} {1:0.###} {2:0.###} {3:0.###} re {4}\n", x, y, width, height, fill ? "f" : "S");
+        builder.Append("0 0 0 rg\n0 0 0 RG\n");
+    }
+
+    private static void PdfText(StringBuilder builder, double x, double y, string text, string font, double size) =>
+        PdfText(builder, x, y, text, font, size, 0, 0, 0);
+
+    private static void PdfText(StringBuilder builder, double x, double y, string text, string font, double size, double r, double g, double b)
+    {
+        builder.AppendFormat(CultureInfo.InvariantCulture, "{0:0.###} {1:0.###} {2:0.###} rg\n", r, g, b);
+        builder.AppendFormat(CultureInfo.InvariantCulture, "BT /{0} {1:0.###} Tf {2:0.###} {3:0.###} Td ({4}) Tj ET\n", font, size, x, y, PdfEscape(text));
+        builder.Append("0 0 0 rg\n");
+    }
+
+    private static string PdfEscape(string? value)
+    {
+        value ??= string.Empty;
+        var clean = new StringBuilder(value.Length);
+        foreach (var ch in value)
+            clean.Append(ch is >= ' ' and <= '~' ? ch : '?');
+
+        return clean.ToString()
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("(", "\\(", StringComparison.Ordinal)
+            .Replace(")", "\\)", StringComparison.Ordinal);
+    }
+
+    private static string PdfTrim(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..Math.Max(0, maxLength - 1)] + "...";
+
+    private static string PdfMoney(long cents) =>
+        (cents / 100m).ToString("C", CultureInfo.GetCultureInfo("en-US"));
 
     private static void WriteSalesCsv(string path, IReadOnlyList<SaleLine> sales)
     {
@@ -4077,6 +4359,33 @@ public sealed partial class MainWindow : Window
             CsvLine("title", "detail")
         };
         lines.AddRange(_closingScanIssues.Select(i => CsvLine(i.Title, i.Detail)));
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    private static void WriteEmailAttachmentsCsv(string path, IReadOnlyList<string> selectedEmailAttachments)
+    {
+        var lines = new List<string>
+        {
+            CsvLine("file_name", "selected")
+        };
+
+        var knownFiles = new[]
+        {
+            "shift_summary.csv",
+            "inventory.csv",
+            "sales_detail.csv",
+            "corrections.csv",
+            "anomalies.csv",
+            "placement_events.csv",
+            "bin_assignments.csv",
+            "initialization.csv",
+            "closing_audit.csv",
+            "closing_report.pdf"
+        };
+        var selected = selectedEmailAttachments.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        lines.AddRange(knownFiles.Select(fileName => CsvLine(
+            fileName,
+            selected.Contains(fileName) ? "1" : "0")));
         File.WriteAllLines(path, lines, Encoding.UTF8);
     }
 
@@ -5441,6 +5750,61 @@ public sealed partial class MainWindow : Window
 
         public static ClosingReportSaleRow From(SaleLine sale) =>
             new(sale.SoldAt, sale.Source, sale.GameId, sale.Bin, sale.Ticket, sale.Quantity, sale.Amount);
+    }
+
+    private sealed record PdfDenominationRow(int Price, int TicketCount, long AmountCents);
+
+    private sealed class SimplePdfDocument
+    {
+        private readonly List<string> _pages = new();
+
+        public void AddPage(string content) => _pages.Add(content);
+
+        public void Save(string path)
+        {
+            var totalObjects = 4 + _pages.Count * 2;
+            var objects = new string[totalObjects + 1];
+            objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+            var kids = string.Join(" ", Enumerable.Range(0, _pages.Count).Select(i => $"{5 + i * 2} 0 R"));
+            objects[2] = $"<< /Type /Pages /Kids [{kids}] /Count {_pages.Count} >>";
+            objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+            objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
+
+            for (var i = 0; i < _pages.Count; i++)
+            {
+                var pageId = 5 + i * 2;
+                var contentId = pageId + 1;
+                objects[pageId] =
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+                    $"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {contentId} 0 R >>";
+                var bytes = Encoding.ASCII.GetBytes(_pages[i]);
+                objects[contentId] = $"<< /Length {bytes.Length} >>\nstream\n{_pages[i]}\nendstream";
+            }
+
+            using var stream = File.Create(path);
+            WriteAscii(stream, "%PDF-1.4\n");
+            var offsets = new long[totalObjects + 1];
+            for (var i = 1; i <= totalObjects; i++)
+            {
+                offsets[i] = stream.Position;
+                WriteAscii(stream, $"{i} 0 obj\n{objects[i]}\nendobj\n");
+            }
+
+            var xrefAt = stream.Position;
+            WriteAscii(stream, $"xref\n0 {totalObjects + 1}\n");
+            WriteAscii(stream, "0000000000 65535 f \n");
+            for (var i = 1; i <= totalObjects; i++)
+                WriteAscii(stream, $"{offsets[i]:0000000000} 00000 n \n");
+            WriteAscii(
+                stream,
+                $"trailer\n<< /Size {totalObjects + 1} /Root 1 0 R >>\nstartxref\n{xrefAt}\n%%EOF\n");
+        }
+
+        private static void WriteAscii(Stream stream, string text)
+        {
+            var bytes = Encoding.ASCII.GetBytes(text);
+            stream.Write(bytes, 0, bytes.Length);
+        }
     }
 
     private sealed record AuditLogRow(
