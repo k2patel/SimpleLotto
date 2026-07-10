@@ -46,7 +46,7 @@ public partial class App : Application
     private static void App_UnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e) =>
         AppLog.Error("Unhandled UI exception.", e.Exception);
 
-    private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+    private static void CurrentDomain_UnhandledException(object sender, System.UnhandledExceptionEventArgs e)
     {
         if (e.ExceptionObject is Exception ex)
             AppLog.Error("Unhandled app domain exception.", ex);
