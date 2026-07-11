@@ -1721,6 +1721,9 @@
                                                                    Text="No upgrade check has run."
                                                                    Foreground="{ThemeResource SlTextBrush}"
                                                                    TextWrapping="Wrap"/>
+                                                        <TextBlock Text="Automatic startup checks run first-week Monday, second-week Tuesday, third-week Wednesday, and fourth-week Thursday."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
                                                         <TextBlock x:Name="SettingsRdisplayUpgradeStatusText"
                                                                    Text="Rdisplay upgrade trigger has not run."
                                                                    Style="{StaticResource SlCaptionTextStyle}"

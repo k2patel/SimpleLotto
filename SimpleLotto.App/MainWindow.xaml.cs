@@ -112,6 +112,8 @@ public sealed partial class MainWindow : Window
     private bool _initialImportComplete;
     private bool _isWindowInitialized;
     private bool _isScannerPaired;
+    private bool _automaticUpgradeCheckRunning;
+    private string _lastAutomaticUpgradeCheckDate = string.Empty;
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
     private bool _hasImportFailure;
@@ -139,6 +141,7 @@ public sealed partial class MainWindow : Window
     private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
     private const string DisplayBurnInEnabledSettingKey = "display_burn_in_enabled";
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
+    private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
     private const int LicenseExpiryWarningDays = 7;
     private const string EmailSendClosingSettingKey = "email_send_closing";
     private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
@@ -255,6 +258,7 @@ public sealed partial class MainWindow : Window
         _isWindowInitialized = true;
         LoadApplicationState();
         RefreshTotals();
+        QueueScheduledUpgradeCheck();
     }
 
     private void License_StatusChanged(LicenseStatus status)
@@ -303,6 +307,7 @@ public sealed partial class MainWindow : Window
         _scannerVid = ReadSetting(state, ScannerVidSettingKey);
         _scannerPid = ReadSetting(state, ScannerPidSettingKey);
         _scannerSerial = ReadSetting(state, ScannerSerialSettingKey);
+        _lastAutomaticUpgradeCheckDate = ReadSetting(state, AutomaticUpgradeLastCheckDateSettingKey);
         _managerPasswordHash = ReadSetting(state, "manager_password_hash");
         _clerkName = ReadSetting(state, "clerk_name");
         _clerkPasswordHash = ReadSetting(state, "clerk_password_hash");
@@ -3117,6 +3122,69 @@ public sealed partial class MainWindow : Window
         {
             CheckUpgradeButton.IsEnabled = true;
         }
+    }
+
+    private void QueueScheduledUpgradeCheck()
+    {
+        if (_automaticUpgradeCheckRunning || !_setupComplete)
+            return;
+
+        var today = DateTime.Today;
+        if (!IsScheduledAutomaticUpgradeCheckDate(today))
+            return;
+
+        var todayKey = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (string.Equals(_lastAutomaticUpgradeCheckDate, todayKey, StringComparison.Ordinal))
+            return;
+
+        _automaticUpgradeCheckRunning = true;
+        _ = Task.Run(async () => await RunScheduledUpgradeCheckAsync(todayKey));
+    }
+
+    private async Task RunScheduledUpgradeCheckAsync(string todayKey)
+    {
+        try
+        {
+            AppLog.Info($"Automatic upgrade check started for scheduled date {todayKey}.");
+            var state = await _updates.CheckAndDownloadAsync();
+            _lastAutomaticUpgradeCheckDate = todayKey;
+            SaveAutomaticUpgradeCheckDate(todayKey);
+            DispatcherQueue.TryEnqueue(() => RefreshUpgradeStatus(state));
+            AppLog.Info($"Automatic upgrade check finished with status {state.Status}.");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Automatic upgrade check failed.", ex);
+        }
+        finally
+        {
+            _automaticUpgradeCheckRunning = false;
+        }
+    }
+
+    private void SaveAutomaticUpgradeCheckDate(string value)
+    {
+        try
+        {
+            _store.SaveSetting(AutomaticUpgradeLastCheckDateSettingKey, value);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Unable to save automatic upgrade check date.", ex);
+        }
+    }
+
+    private static bool IsScheduledAutomaticUpgradeCheckDate(DateTime date)
+    {
+        var weekOfMonth = ((date.Day - 1) / 7) + 1;
+        return weekOfMonth switch
+        {
+            1 => date.DayOfWeek == DayOfWeek.Monday,
+            2 => date.DayOfWeek == DayOfWeek.Tuesday,
+            3 => date.DayOfWeek == DayOfWeek.Wednesday,
+            4 => date.DayOfWeek == DayOfWeek.Thursday,
+            _ => false
+        };
     }
 
     private void ApplyUpgradeButton_Click(object sender, RoutedEventArgs e)

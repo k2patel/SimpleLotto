@@ -466,6 +466,15 @@ Settings must include state setup and technical setup:
 - Backup and email settings belong here when available.
 - Game setup does not live under Settings; it belongs under Inventory.
 
+Application upgrade rules:
+
+- Manual upgrade check belongs under Manager Settings > Store / Version Information.
+- Automatic app upgrade checks should be startup-only and non-blocking.
+- Automatic checks should run only on the scheduled local dates: first-week Monday, second-week Tuesday, third-week Wednesday, and fourth-week Thursday.
+- Automatic checks should record the local date they ran and should not repeat for the same date.
+- Do not add hourly polling or recurring background wakeups for app upgrade checks.
+- Manual Check for Upgrade remains available even when automatic scheduled checks exist.
+
 ## License Management and Game Name Sync
 
 SimpleLotto should use the same license management mechanism as `../windowsPOS`.
@@ -478,6 +487,17 @@ License management rules:
 - Use the same license-info update mechanism where the server provides a short-lived update token after authorized call-home.
 - License check failures should not corrupt local state; preserve the existing valid/grace/expired behavior.
 - License management belongs under Manager Settings unless a visible license warning/banner is needed in the shell.
+
+SimpleLotto license expiry lifecycle:
+
+- The signed license response `expires_at` date is the subscription expiration date.
+- If a license expires on the 5th day of a month, renewal warning should begin on the 29th day of the prior month when that is 7 days before expiration.
+- During the 7 days before `expires_at`, the shell should show a renew-soon banner but the app remains fully usable.
+- On the `expires_at` date, the app should show an expired/grace banner and start a 7-day grace period.
+- During the 7-day grace period after `expires_at`, SimpleLotto remains usable but should call home automatically in recovery-friendly places so renewal can unlock without requiring a manual Settings action.
+- After `expires_at + 7 days`, operational software should lock until a successful authorized call-home renews the cached state. License recovery/settings must remain accessible.
+- License refresh should be best-effort and non-destructive; failed refresh attempts must not corrupt a previously valid cached state.
+- Automatic license refresh should run non-blocking at startup and at appropriate recovery points such as login or license-sensitive actions when the license is near expiry, in grace, or locked.
 
 State game-name sync rules:
 
@@ -529,6 +549,9 @@ SimpleLotto should use the same mechanism as `../windowsPOS` Rdisplay where appl
 - Rdisplay should receive the latest bundle for a bin when multiple bundles are assigned to that bin.
 - Rdisplay tile state should use the calculated ticket range and tickets remaining from the same game/bundle pricing rules used by the Windows UI.
 - Rdisplay image/name data should use the same auto-fetched or manually corrected game setup data from Inventory.
+- The existing `../windowsPOS` Rdisplay client currently understands `license_status` only; it does not render the desired license expiry/grace banner by itself.
+- Any Rdisplay expiry/grace banner needs a deliberate wire-contract migration with explicit banner fields such as expiry date, grace days remaining, banner text, and opacity, plus renderer changes on the display client.
+- Until that migration is implemented, SimpleLotto can only send coarse license status to Rdisplay.
 
 The display mechanism should remain simple: display clients show current operational state, while the Windows app owns sales, inventory, closing, settings, and validation.
 

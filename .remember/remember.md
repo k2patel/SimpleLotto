@@ -1,12 +1,14 @@
 # Handoff
 
 ## State
-I implemented closing history reports, manual closing totals, daily shift labels, disk report folders, and Open Reports actions across `SimpleLotto.App/MainWindow.xaml`, `SimpleLotto.App/MainWindow.xaml.cs`, and `SimpleLotto.App/Services/LocalStore.cs`.
-I recorded the updated base requirements in `docs/product-instructions.md`; schema is now version 8 with manual totals, shift label, and report folder on `closing_history`.
+I implemented WindowsPOS-compatible license call-home/cache/signature verification and a shell license banner, then fixed CI with commit `105ac43`.
+I also added startup-only, non-blocking automatic app upgrade checks on first-week Monday, second-week Tuesday, third-week Wednesday, and fourth-week Thursday; pending local changes document and implement that schedule.
 
 ## Next
-Verify on Windows with `BuildAndRun.ps1 -SkipRun`, then test closing finalization creates `yyyy-MM-dd_shift-###` folders and Open Reports launches Explorer.
-Add true `closing_report.pdf` generation when the reporting layer is mature.
+Verify Windows CI after committing the upgrade-schedule/docs changes.
+Implement the final license expiry lifecycle: renew-soon 7 days before `expires_at`, grace from `expires_at` through `expires_at + 7`, then lock.
+Extend Rdisplay payload/renderer for transparent expiry/grace banners; current Rdisplay only understands `license_status`.
 
 ## Context
-The macOS host cannot execute WinUI `XamlCompiler.exe`, so local `dotnet build` fails at that known Windows-only step.
+Do not add hourly upgrade polling; user explicitly wants scheduled startup-only background checks.
+The macOS host cannot execute WinUI `XamlCompiler.exe`, so use GitHub Actions/Windows for full build verification.

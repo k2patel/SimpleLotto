@@ -23,3 +23,20 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Top banner appears for soon-to-expire licenses and during the 7-day grace period.
    - Expired subscription date also locks the software and shows the expired banner.
    - Rdisplay snapshots include the current `license_status`.
+8. Verify automatic app upgrade checks:
+   - Startup on first-week Monday runs a non-blocking app upgrade check once for that local date.
+   - Startup on second-week Tuesday, third-week Wednesday, and fourth-week Thursday follows the same once-per-date rule.
+   - Startup on non-scheduled dates does not check automatically.
+   - No hourly or recurring background upgrade timer runs after startup.
+   - Manual Check for Upgrade still works from Settings.
+
+## Missing Follow-Up Work
+
+1. License expiry lifecycle needs to be aligned with the final rule:
+   - Renew-soon banner starts 7 days before signed `expires_at`.
+   - Signed `expires_at` date starts a 7-day grace period while the app remains usable.
+   - Full operational lock starts after `expires_at + 7 days`, not immediately on `expires_at`.
+   - Automatic license refresh should run non-blocking at startup and recovery points such as login/license-sensitive actions when near expiry, in grace, or locked.
+2. Rdisplay expiry/grace banner is not implemented:
+   - Current display payload only sends `license_status`.
+   - Rdisplay client/renderer must be extended with banner text, expiry/grace fields, and daily opacity changes before transparent display banners can work.
