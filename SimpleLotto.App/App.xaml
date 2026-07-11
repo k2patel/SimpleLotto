@@ -24,11 +24,11 @@
                     <Color x:Key="SlSuccess">#FF9933</Color>
                     <Color x:Key="SlWarning">#D97706</Color>
                     <Color x:Key="SlBinEmpty">#ECECEE</Color>
-                    <Color x:Key="SlBinLow">#93C5FD</Color>
+                    <Color x:Key="SlBinLow">#BFDBFE</Color>
                     <Color x:Key="SlBinLowStacked">#60A5FA</Color>
-                    <Color x:Key="SlBinMedium">#86EFAC</Color>
+                    <Color x:Key="SlBinMedium">#BBF7D0</Color>
                     <Color x:Key="SlBinMediumStacked">#4ADE80</Color>
-                    <Color x:Key="SlBinHigh">#FF9933</Color>
+                    <Color x:Key="SlBinHigh">#FDBA74</Color>
                     <Color x:Key="SlBinHighStacked">#FB923C</Color>
 
                     <SolidColorBrush x:Key="SlBackgroundBrush" Color="{ThemeResource SlBackground}"/>
@@ -64,11 +64,11 @@
                     <Color x:Key="SlSuccess">#FF9933</Color>
                     <Color x:Key="SlWarning">#B45309</Color>
                     <Color x:Key="SlBinEmpty">#ECECEE</Color>
-                    <Color x:Key="SlBinLow">#93C5FD</Color>
+                    <Color x:Key="SlBinLow">#BFDBFE</Color>
                     <Color x:Key="SlBinLowStacked">#60A5FA</Color>
-                    <Color x:Key="SlBinMedium">#86EFAC</Color>
+                    <Color x:Key="SlBinMedium">#BBF7D0</Color>
                     <Color x:Key="SlBinMediumStacked">#4ADE80</Color>
-                    <Color x:Key="SlBinHigh">#FF9933</Color>
+                    <Color x:Key="SlBinHigh">#FDBA74</Color>
                     <Color x:Key="SlBinHighStacked">#FB923C</Color>
 
                     <SolidColorBrush x:Key="SlBackgroundBrush" Color="{ThemeResource SlBackground}"/>

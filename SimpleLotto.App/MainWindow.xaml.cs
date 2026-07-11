@@ -2434,14 +2434,12 @@ public sealed partial class MainWindow : Window
         var salesCount = _sales.Count;
         var ticketCount = _sales.Sum(s => s.Quantity);
         var revenue = CurrentShiftSalesAmount();
-        var average = ticketCount == 0 ? 0 : revenue / ticketCount;
 
         SalesSubtitleText.Text = salesCount == 0
             ? "No entries yet"
             : $"{salesCount} sale entr{(salesCount == 1 ? "y" : "ies")}";
         RevenueText.Text = revenue.ToString("C", CultureInfo.CurrentCulture);
         TicketsText.Text = ticketCount.ToString(CultureInfo.CurrentCulture);
-        AverageText.Text = average.ToString("C", CultureInfo.CurrentCulture);
         GameMixText.Text = BuildGameMixText();
         RefreshBinsShiftSalesMetric(revenue);
         RefreshClosingMetricCards();
@@ -5930,11 +5928,11 @@ public sealed partial class MainWindow : Window
 
     private static Brush EmptyTileBrush => ThemeBrush("SlBinEmptyBrush", ColorBrush(236, 236, 238));
     private static Brush EmptyTileBorderBrush => ThemeBrush("SlBorderBrush", ColorBrush(190, 196, 205));
-    private static Brush LowTileBrush => ThemeBrush("SlBinLowBrush", ColorBrush(147, 197, 253));
+    private static Brush LowTileBrush => ThemeBrush("SlBinLowBrush", ColorBrush(191, 219, 254));
     private static Brush LowTileStackedBrush => ThemeBrush("SlBinLowStackedBrush", ColorBrush(96, 165, 250));
-    private static Brush MediumTileBrush => ThemeBrush("SlBinMediumBrush", ColorBrush(134, 239, 172));
+    private static Brush MediumTileBrush => ThemeBrush("SlBinMediumBrush", ColorBrush(187, 247, 208));
     private static Brush MediumTileStackedBrush => ThemeBrush("SlBinMediumStackedBrush", ColorBrush(74, 222, 128));
-    private static Brush HighTileBrush => ThemeBrush("SlBinHighBrush", ColorBrush(255, 153, 51));
+    private static Brush HighTileBrush => ThemeBrush("SlBinHighBrush", ColorBrush(253, 186, 116));
     private static Brush HighTileStackedBrush => ThemeBrush("SlBinHighStackedBrush", ColorBrush(251, 146, 60));
     private static Brush BhagvaTileBrush => HighTileBrush;
     private static Brush BhagvaBorderBrush => HighTileStackedBrush;

@@ -34,6 +34,10 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Startup on non-scheduled dates does not check automatically.
    - No hourly or recurring background upgrade timer runs after startup.
    - Manual Check for Upgrade still works from Settings.
+9. Verify application lifetime power behavior:
+   - While SimpleLotto is running, Windows does not enter idle sleep.
+   - The sleep-prevention request remains active when SimpleLotto is minimized to the tray.
+   - The sleep-prevention request is released after using the tray Exit command or otherwise exiting the app.
 
 ## Missing Follow-Up Work
 

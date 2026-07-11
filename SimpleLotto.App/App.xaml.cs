@@ -10,6 +10,7 @@ public partial class App : Application
     private readonly LocalStore _store = new();
     private readonly RdisplayService _rdisplay;
     private readonly RdisplayApiHost _rdisplayApiHost;
+    private readonly SystemSleepPreventionService _sleepPrevention = new();
     private Window? _window;
 
     public App()
@@ -25,9 +26,17 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         AppLog.Info("SimpleLotto launched.");
+        _sleepPrevention.Start();
         _ = StartRdisplayApiAsync();
         _window = new MainWindow(_rdisplay, _store);
+        _window.Closed += MainWindow_Closed;
         _window.Activate();
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        _sleepPrevention.Dispose();
+        _window = null;
     }
 
     private async System.Threading.Tasks.Task StartRdisplayApiAsync()

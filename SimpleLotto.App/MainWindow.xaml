@@ -341,13 +341,6 @@
                                        Style="{StaticResource SlCaptionTextStyle}"/>
                         </StackPanel>
 
-                        <StackPanel Spacing="2">
-                            <TextBlock x:Name="AverageText"
-                                       Text="$0.00"
-                                       Style="{StaticResource SlMetricTextStyle}"/>
-                            <TextBlock Text="Average ticket"
-                                       Style="{StaticResource SlCaptionTextStyle}"/>
-                        </StackPanel>
                     </StackPanel>
                 </Border>
 

@@ -576,6 +576,7 @@ Scanner rules:
 
 Application lifetime rules:
 
+- While SimpleLotto is running, Windows idle sleep must be blocked so scanner, display, and shift workflows continue uninterrupted. Release the sleep-prevention request when the application actually exits.
 - When a barcode scanner is paired, closing the main window must not exit the application by default.
 - When a barcode scanner is paired, window close should minimize SimpleLotto to the Windows system tray so scanner/display/speech services continue running.
 - When no barcode scanner is paired, normal window close may exit the application unless another active background service requirement is added later.
