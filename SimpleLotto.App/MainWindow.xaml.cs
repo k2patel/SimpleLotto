@@ -3103,7 +3103,6 @@ public sealed partial class MainWindow : Window
             _storeCity,
             _storeState,
             string.Empty);
-    }
 
     private async void CheckUpgradeButton_Click(object sender, RoutedEventArgs e)
     {
