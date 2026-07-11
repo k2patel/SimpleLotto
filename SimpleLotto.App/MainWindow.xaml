@@ -9,6 +9,7 @@
           Background="{ThemeResource SlBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -47,7 +48,8 @@
                 <StackPanel Grid.Column="2"
                             Orientation="Horizontal"
                             Spacing="8">
-                    <Button Content="Close Shift"
+                    <Button x:Name="CloseShiftButton"
+                            Content="Close Shift"
                             MinWidth="108"
                             Click="CloseShiftButton_Click"/>
                     <Button x:Name="LogoutButton"
@@ -58,7 +60,37 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1">
+        <Border x:Name="LicenseBanner"
+                Grid.Row="1"
+                Visibility="Collapsed"
+                Background="#FFFFF4CE"
+                BorderBrush="#FFE0A100"
+                BorderThickness="0,0,0,1"
+                Padding="16,8">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <FontIcon x:Name="LicenseBannerIcon"
+                          Glyph="&#xE7BA;"
+                          FontSize="16"
+                          Foreground="#FF3B2F00"
+                          VerticalAlignment="Center"/>
+                <TextBlock x:Name="LicenseBannerText"
+                           Grid.Column="1"
+                           Text="License status needs attention."
+                           Foreground="#FF3B2F00"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"/>
+                <Button Grid.Column="2"
+                        Content="Check License"
+                        Click="CheckLicenseButton_Click"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="NavColumn" Width="190"/>
                 <ColumnDefinition Width="*"/>
@@ -1246,7 +1278,8 @@
                                         <Border Grid.Column="1"
                                                 Style="{StaticResource SlPanelBorderStyle}">
                                             <StackPanel Spacing="12">
-                                                <Button Content="Start Closing Scan"
+                                                <Button x:Name="StartClosingScanButton"
+                                                        Content="Start Closing Scan"
                                                         HorizontalAlignment="Stretch"
                                                         Click="StartClosingScanButton_Click"/>
                                                 <TextBlock Text="Scan dialog collects ticket evidence only. Bin scans are ignored during closing collection."
@@ -2201,7 +2234,7 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="2"
+        <Border Grid.Row="3"
                 Background="{ThemeResource SlSurfaceBrush}"
                 BorderBrush="{ThemeResource SlBorderBrush}"
                 BorderThickness="0,1,0,0"
@@ -2212,7 +2245,7 @@
         </Border>
 
         <Grid x:Name="ClosingScanOverlay"
-              Grid.RowSpan="3"
+              Grid.RowSpan="4"
               Visibility="Collapsed"
               Background="#80000000"
               IsTabStop="True">
@@ -2250,7 +2283,7 @@
         </Grid>
 
         <Grid x:Name="StartupOverlay"
-              Grid.RowSpan="3"
+              Grid.RowSpan="4"
               IsTabStop="True"
               Background="{ThemeResource SlBackgroundBrush}">
             <Border MaxWidth="960"

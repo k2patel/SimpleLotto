@@ -26,6 +26,7 @@ public sealed class RdisplayService : IDisposable
     private long _nextDisplayId = 1;
     private bool _burnInEnabled = true;
     private int _burnInIntervalMinutes = 15;
+    private string _licenseStatus = "pending";
     private const string MasterResetHeader = "X-LottoPos-Override";
     private const string MasterResetToken = "REPLACE_BEFORE_RELEASE_master_reset_2026_xyz";
 
@@ -64,6 +65,16 @@ public sealed class RdisplayService : IDisposable
         }
 
         _ = PushConfigToAllAsync();
+    }
+
+    public void UpdateLicenseStatus(string licenseStatus)
+    {
+        lock (_gate)
+        {
+            _licenseStatus = string.IsNullOrWhiteSpace(licenseStatus) ? "pending" : licenseStatus.Trim();
+        }
+
+        _ = PushToAllAsync();
     }
 
     public RdisplayRegistration? LookupByAuthToken(string? authToken)
@@ -304,6 +315,7 @@ public sealed class RdisplayService : IDisposable
     {
         List<RdisplayTileState> tiles;
         List<RdisplayRegistration> displays;
+        string licenseStatus;
         lock (_gate)
         {
             tiles = _tiles.ToList();
@@ -313,6 +325,7 @@ public sealed class RdisplayService : IDisposable
                 .ThenBy(d => d.Id)
                 .Select(d => d with { })
                 .ToList();
+            licenseStatus = _licenseStatus;
         }
 
         var allTiles = tiles.Select(BuildTile).ToList();
@@ -324,7 +337,7 @@ public sealed class RdisplayService : IDisposable
         if (localScreens.Count == 0)
         {
             if (display.ActiveScreenCount <= 0)
-                return WrapPayload(Array.Empty<Dictionary<string, object?>>(), Array.Empty<Dictionary<string, object?>>(), 0);
+                return WrapPayload(Array.Empty<Dictionary<string, object?>>(), Array.Empty<Dictionary<string, object?>>(), 0, licenseStatus);
 
             localScreens.Add(new LogicalScreen(display, 0, 0));
             logicalScreens = localScreens;
@@ -349,7 +362,7 @@ public sealed class RdisplayService : IDisposable
             });
         }
 
-        return WrapPayload(combined, screenPayloads, localScreens.Count);
+        return WrapPayload(combined, screenPayloads, localScreens.Count, licenseStatus);
     }
 
     public string SnapshotSignature(Dictionary<string, object?> snapshot)
@@ -620,13 +633,14 @@ public sealed class RdisplayService : IDisposable
     private static Dictionary<string, object?> WrapPayload(
         IEnumerable<Dictionary<string, object?>> tiles,
         IEnumerable<Dictionary<string, object?>> screens,
-        int activeScreenCount) =>
+        int activeScreenCount,
+        string licenseStatus) =>
         new()
         {
             ["tiles"] = tiles.Cast<object?>().ToList(),
             ["screens"] = screens.Cast<object?>().ToList(),
             ["active_screen_count"] = activeScreenCount,
-            ["license_status"] = "valid",
+            ["license_status"] = licenseStatus,
             ["generated_at"] = DateTime.UtcNow.ToString("o")
         };
 

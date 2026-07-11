@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     private readonly RdisplayService _rdisplay;
     private readonly LocalStore _store;
     private readonly AppUpdateService _updates;
+    private readonly LicenseService _license;
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<SaleLine> _allSales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
@@ -138,8 +139,7 @@ public sealed partial class MainWindow : Window
     private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
     private const string DisplayBurnInEnabledSettingKey = "display_burn_in_enabled";
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
-    private const string LicenseStatusSettingKey = "license_status";
-    private const string LicenseLastCheckUtcSettingKey = "license_last_check_utc";
+    private const int LicenseExpiryWarningDays = 7;
     private const string EmailSendClosingSettingKey = "email_send_closing";
     private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
     private const string EmailIncludeInventorySettingKey = "email_include_inventory";
@@ -222,6 +222,8 @@ public sealed partial class MainWindow : Window
         _rdisplay = rdisplay;
         _store = store;
         _updates = new AppUpdateService(store);
+        _license = new LicenseService();
+        _license.StatusChanged += License_StatusChanged;
         _subclassProc = TraySubclassProc;
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
@@ -253,6 +255,11 @@ public sealed partial class MainWindow : Window
         _isWindowInitialized = true;
         LoadApplicationState();
         RefreshTotals();
+    }
+
+    private void License_StatusChanged(LicenseStatus status)
+    {
+        _ = DispatcherQueue.TryEnqueue(() => ApplyLicenseStatus(status));
     }
 
     private void LoadApplicationState()
@@ -1006,6 +1013,9 @@ public sealed partial class MainWindow : Window
 
     private void ProcessFocusedScanInput(string raw)
     {
+        if (!EnsureLicenseAllowsOperation("using scanner input"))
+            return;
+
         var segments = SplitImportScanInput(raw).ToArray();
         if (segments.Length == 0)
         {
@@ -1201,6 +1211,9 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> ActivateBundleInBinAsync(string bin, ImportTicket ticket, bool updateDashboardStatus)
     {
+        if (!EnsureLicenseAllowsOperation("activating bundles"))
+            return false;
+
         if (!int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
             !IsConfiguredBin(binNumber))
         {
@@ -2089,6 +2102,9 @@ public sealed partial class MainWindow : Window
 
     private void VoidSelectedButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureLicenseAllowsOperation("voiding sales"))
+            return;
+
         if (SalesListView.SelectedItem is not SaleLine sale)
         {
             StatusText.Text = "Select a sale to void.";
@@ -2113,6 +2129,9 @@ public sealed partial class MainWindow : Window
 
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureLicenseAllowsOperation("closing shifts"))
+            return;
+
         ShowSection("Closing");
         await StartClosingScanWorkflowAsync();
     }
@@ -2949,15 +2968,141 @@ public sealed partial class MainWindow : Window
 
     private void RefreshLicenseRegistrationStatus()
     {
-        var state = _store.Load();
-        var licenseStatus = ReadSetting(state, LicenseStatusSettingKey);
-        var lastCheckUtc = ReadDateTimeSetting(state, LicenseLastCheckUtcSettingKey);
-        LicenseRegistrationText.Text = string.IsNullOrWhiteSpace(licenseStatus)
-            ? "Device registration has not been checked."
-            : $"License status: {licenseStatus}";
-        LicenseLastCheckedText.Text = lastCheckUtc == DateTime.MinValue
+        ApplyLicenseStatus(_license.CheckLicense());
+    }
+
+    private void ApplyLicenseStatus(LicenseStatus status)
+    {
+        LicenseRegistrationText.Text = string.IsNullOrWhiteSpace(status.RegistrationId)
+            ? "Device registration ID unavailable."
+            : $"Registration ID: {status.RegistrationId}";
+        LicenseLastCheckedText.Text = status.LastCheck is null
             ? "License last checked: never"
-            : $"License last checked: {lastCheckUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
+            : $"License last checked: {status.LastCheck.Value.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
+        LicenseStatusText.Text = BuildLicenseStatusText(status);
+        RefreshLicenseBanner(status);
+
+        var available = !IsLicenseLocked(status);
+        CloseShiftButton.IsEnabled = available;
+        StartClosingScanButton.IsEnabled = available;
+        AddBundleToBinButton.IsEnabled = available && _selectedBinNumber is not null;
+        _rdisplay.UpdateLicenseStatus(available ? status.Status : "expired");
+    }
+
+    private static string BuildLicenseStatusText(LicenseStatus status)
+    {
+        var builder = new StringBuilder()
+            .Append("Status: ")
+            .Append(status.Status)
+            .Append(". ")
+            .Append(status.Message);
+
+        if (!string.IsNullOrWhiteSpace(status.SubscriptionExpiresAt))
+        {
+            builder
+                .Append(" Subscription expires ")
+                .Append(status.SubscriptionExpiresAt);
+            if (status.SubscriptionDaysRemaining is { } days)
+                builder.Append(" (").Append(days.ToString(CultureInfo.CurrentCulture)).Append(" days).");
+            else
+                builder.Append('.');
+        }
+
+        if (status.LastAuthorized is not null)
+        {
+            builder
+                .Append(" Last authorized ")
+                .Append(status.LastAuthorized.Value.ToLocalTime().ToString("g", CultureInfo.CurrentCulture))
+                .Append('.');
+        }
+
+        return builder.ToString();
+    }
+
+    private bool EnsureLicenseAllowsOperation(string operation)
+    {
+        var status = _license.CheckLicense();
+        ApplyLicenseStatus(status);
+        if (!IsLicenseLocked(status))
+            return true;
+
+        var message = $"License expired. SimpleLotto is locked. Open Settings > Store and check license before {operation}.";
+        StatusText.Text = message;
+        DashboardScannerStatusText.Text = message;
+        ClosingStatusText.Text = message;
+        return false;
+    }
+
+    private bool IsLicenseAvailableForOperation() =>
+        !IsLicenseLocked(_license.CheckLicense());
+
+    private static bool IsLicenseLocked(LicenseStatus status) =>
+        string.Equals(status.Status, "expired", StringComparison.OrdinalIgnoreCase) ||
+        status.SubscriptionDaysRemaining < 0;
+
+    private void RefreshLicenseBanner(LicenseStatus status)
+    {
+        var message = BuildLicenseBannerMessage(status);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            LicenseBanner.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var locked = IsLicenseLocked(status);
+        LicenseBanner.Visibility = Visibility.Visible;
+        LicenseBannerText.Text = message;
+        LicenseBanner.Background = new SolidColorBrush(locked
+            ? Color.FromArgb(0xFF, 0xFD, 0xE7, 0xE9)
+            : Color.FromArgb(0xFF, 0xFF, 0xF4, 0xCE));
+        LicenseBanner.BorderBrush = new SolidColorBrush(locked
+            ? Color.FromArgb(0xFF, 0xC4, 0x2B, 0x1C)
+            : Color.FromArgb(0xFF, 0xE0, 0xA1, 0x00));
+        var foreground = new SolidColorBrush(locked
+            ? Color.FromArgb(0xFF, 0x5C, 0x1B, 0x14)
+            : Color.FromArgb(0xFF, 0x3B, 0x2F, 0x00));
+        LicenseBannerText.Foreground = foreground;
+        LicenseBannerIcon.Foreground = foreground;
+    }
+
+    private static string BuildLicenseBannerMessage(LicenseStatus status)
+    {
+        if (IsLicenseLocked(status))
+            return "License expired. SimpleLotto is locked until registration is renewed.";
+
+        if (string.Equals(status.Status, "grace", StringComparison.OrdinalIgnoreCase))
+        {
+            var days = status.DaysRemaining.ToString(CultureInfo.CurrentCulture);
+            return $"License renewal is in the 7-day grace period. {days} day{(status.DaysRemaining == 1 ? string.Empty : "s")} remaining before lock.";
+        }
+
+        if (string.Equals(status.Status, "pending", StringComparison.OrdinalIgnoreCase) &&
+            status.LastCheck is not null &&
+            status.LastAuthorized is null)
+        {
+            var days = status.DaysRemaining.ToString(CultureInfo.CurrentCulture);
+            return $"License check is pending. The 7-day grace period has started; {days} day{(status.DaysRemaining == 1 ? string.Empty : "s")} remaining before lock.";
+        }
+
+        if (status.SubscriptionDaysRemaining is { } subscriptionDays &&
+            subscriptionDays >= 0 &&
+            subscriptionDays <= LicenseExpiryWarningDays)
+        {
+            return subscriptionDays == 0
+                ? "License expires today. Renew registration to avoid lock."
+                : $"License expires in {subscriptionDays.ToString(CultureInfo.CurrentCulture)} day{(subscriptionDays == 1 ? string.Empty : "s")}. Renew registration to avoid lock.";
+        }
+
+        return string.Empty;
+    }
+
+    private LicenseStoreInfo CurrentLicenseStoreInfo() =>
+        new(
+            _storeName,
+            _storeStreet,
+            _storeCity,
+            _storeState,
+            string.Empty);
     }
 
     private async void CheckUpgradeButton_Click(object sender, RoutedEventArgs e)
@@ -3156,6 +3301,9 @@ public sealed partial class MainWindow : Window
 
     private async void AddBundleToBinButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureLicenseAllowsOperation("adding bundles"))
+            return;
+
         if (_selectedBinNumber is not { } binNumber)
         {
             StatusText.Text = "Select a bin before adding a bundle.";
@@ -3234,7 +3382,7 @@ public sealed partial class MainWindow : Window
             .ToList();
 
         _selectedBinNumber = binNumber;
-        AddBundleToBinButton.IsEnabled = true;
+        AddBundleToBinButton.IsEnabled = IsLicenseAvailableForOperation();
         var bundleLabel = lines.Count == 1 ? "bundle" : "bundles";
         BinDetailText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} Details ({lines.Count.ToString(CultureInfo.CurrentCulture)} {bundleLabel})";
 
@@ -3265,6 +3413,9 @@ public sealed partial class MainWindow : Window
 
     private async Task StartClosingScanWorkflowAsync()
     {
+        if (!EnsureLicenseAllowsOperation("starting closing scans"))
+            return;
+
         if (_isWorkflowDialogOpen)
             return;
 
@@ -3648,10 +3799,18 @@ public sealed partial class MainWindow : Window
     private void RefreshClosingActionState()
     {
         RefreshTotals();
-        ResolveClosingIssuesButton.IsEnabled = _closingUnmatchedTickets.Count > 0;
-        FinalizeClosingButton.IsEnabled = _closingScanCaptured &&
+        var licenseAvailable = IsLicenseAvailableForOperation();
+        ResolveClosingIssuesButton.IsEnabled = licenseAvailable && _closingUnmatchedTickets.Count > 0;
+        FinalizeClosingButton.IsEnabled = licenseAvailable &&
+            _closingScanCaptured &&
             _closingScanIssues.Count == 0 &&
             _closingUnmatchedTickets.Count == 0;
+
+        if (!licenseAvailable)
+        {
+            ClosingExceptionText.Text = "License expired. Check license registration before continuing closing.";
+            return;
+        }
 
         if (_closingScanIssues.Count > 0)
         {
@@ -3829,6 +3988,9 @@ public sealed partial class MainWindow : Window
 
     private async void FinalizeClosingButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureLicenseAllowsOperation("finalizing closing"))
+            return;
+
         if (!_closingScanCaptured)
         {
             ClosingStatusText.Text = "Run closing scan before finalizing.";
@@ -5122,7 +5284,7 @@ public sealed partial class MainWindow : Window
         ScannerPairingStatusText.Text = "Scanner and display settings saved.";
     }
 
-    private void CheckLicenseButton_Click(object sender, RoutedEventArgs e)
+    private async void CheckLicenseButton_Click(object sender, RoutedEventArgs e)
     {
         if (!RequireManagerAccess("license registration"))
             return;
@@ -5134,11 +5296,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var checkedAtUtc = DateTime.UtcNow;
-        SaveSetting(LicenseStatusSettingKey, "Pending license service");
-        SaveSetting(LicenseLastCheckUtcSettingKey, checkedAtUtc.ToString("O", CultureInfo.InvariantCulture));
-        RefreshLicenseRegistrationStatus();
-        LicenseStatusText.Text = "License service is not connected in this scaffold. Store identity is ready for the WindowsPOS-compatible license check adapter.";
+        LicenseStatusText.Text = "Checking license registration...";
+        try
+        {
+            var status = await _license.PhoneHomeAsync(CurrentLicenseStoreInfo());
+            ApplyLicenseStatus(status);
+            TryRecordAudit("license", "License checked", $"Status {status.Status}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("License check failed.", ex);
+            LicenseStatusText.Text = $"License check could not complete: {ex.Message}";
+        }
     }
 
     private async void PairScannerButton_Click(object sender, RoutedEventArgs e)

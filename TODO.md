@@ -15,3 +15,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Amount is `5 * game price`.
    - Next available ticket advances to `008`.
    - Regular sale rows keep `normal_sale`; closing-generated rows keep `closing_gap_fill_sold`.
+7. Verify license workflow:
+   - Store > Registration shows the 64-character registration ID before first check.
+   - Check License calls the WindowsPOS-compatible license endpoint and updates status, last check, and subscription expiry.
+   - Authorized responses remain valid when a later network/server check fails.
+   - Expired registration blocks scanner sales, bundle activation, voids, and closing while Settings remains available.
+   - Top banner appears for soon-to-expire licenses and during the 7-day grace period.
+   - Expired subscription date also locks the software and shows the expired banner.
+   - Rdisplay snapshots include the current `license_status`.
