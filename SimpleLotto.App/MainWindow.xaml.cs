@@ -1291,7 +1291,15 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> ShowActivationPriceDialogAsync(string bin, ImportTicket ticket)
     {
-        var existingGame = _gameCatalog.FirstOrDefault(g =>
+        var existingGame = FindKnownGame(ticket.GameId);
+        if (existingGame is { PriceCents: > 0 } &&
+            !string.IsNullOrWhiteSpace(existingGame.Name) &&
+            !string.Equals(existingGame.Name, "Name not set", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        existingGame ??= _gameCatalog.FirstOrDefault(g =>
             string.Equals(g.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase));
         var nameBox = new TextBox
         {
@@ -1299,14 +1307,10 @@ public sealed partial class MainWindow : Window
             Text = existingGame?.Name is { Length: > 0 } existingName ? existingName : $"Game {ticket.GameId}",
             PlaceholderText = "Display name"
         };
-        var barcodeBox = new TextBox
-        {
-            Header = "Scan price barcode",
-            PlaceholderText = "Scan price or enter dollars"
-        };
         var priceBox = new NumberBox
         {
             Header = "Game price ($)",
+            Value = existingGame?.PriceCents > 0 ? existingGame.PriceCents / 100d : double.NaN,
             Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
@@ -1314,7 +1318,7 @@ public sealed partial class MainWindow : Window
         };
         var statusText = new TextBlock
         {
-            Text = "Enter the ticket price before activation can continue.",
+            Text = "Enter the ticket price, or scan the price while the game price box is focused.",
             TextWrapping = TextWrapping.Wrap
         };
         var imageUri = existingGame?.ImageUri ?? string.Empty;
@@ -1327,16 +1331,6 @@ public sealed partial class MainWindow : Window
                 Height = 64,
                 Stretch = Stretch.UniformToFill
             };
-
-        barcodeBox.TextChanged += (_, _) =>
-        {
-            var priceCents = PriceCentsFromPriceScan(barcodeBox.Text);
-            if (priceCents <= 0)
-                return;
-
-            priceBox.Value = priceCents / 100d;
-            statusText.Text = $"Price scan resolved to {(priceCents / 100m).ToString("C", CultureInfo.CurrentCulture)}.";
-        };
 
         var content = new StackPanel
         {
@@ -1353,7 +1347,6 @@ public sealed partial class MainWindow : Window
         if (image is not null)
             content.Children.Add(image);
         content.Children.Add(nameBox);
-        content.Children.Add(barcodeBox);
         content.Children.Add(priceBox);
         content.Children.Add(statusText);
 
@@ -1372,13 +1365,13 @@ public sealed partial class MainWindow : Window
                 return;
 
             args.Cancel = true;
-            statusText.Text = "Enter or scan a positive ticket price before continuing.";
+            statusText.Text = "Enter or scan a positive ticket price in the game price box before continuing.";
         };
 
         _isWorkflowDialogOpen = true;
         try
         {
-            _ = barcodeBox.Focus(FocusState.Programmatic);
+            _ = priceBox.Focus(FocusState.Programmatic);
             var result = await dialog.ShowAsync();
             if (result != ContentDialogResult.Primary)
                 return false;
@@ -5507,37 +5500,6 @@ public sealed partial class MainWindow : Window
     private static string MoneyText(long cents) =>
         (cents / 100m).ToString("C", CultureInfo.CurrentCulture);
 
-    private static long PriceCentsFromPriceScan(string raw)
-    {
-        var text = raw.Trim();
-        if (text.Length == 0)
-            return 0;
-
-        var hasExplicitMoneyMarker = text.Contains('.', StringComparison.Ordinal) ||
-                                     text.Contains('$', StringComparison.Ordinal);
-        if (hasExplicitMoneyMarker &&
-            (decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowCurrencySymbol, CultureInfo.CurrentCulture, out var explicitDollars) ||
-             decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowCurrencySymbol, CultureInfo.InvariantCulture, out explicitDollars)))
-        {
-            return explicitDollars <= 0
-                ? 0
-                : (long)Math.Round(explicitDollars * 100m, MidpointRounding.AwayFromZero);
-        }
-
-        var digits = DigitsOnly(text);
-        if (digits.Length == 0 ||
-            !long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ||
-            parsed <= 0)
-        {
-            return 0;
-        }
-
-        if (digits.Length is 3 or 4 && parsed % 100 == 0)
-            return parsed;
-
-        return parsed * 100L;
-    }
-
     private static decimal CoerceMoney(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value))
@@ -5584,10 +5546,15 @@ public sealed partial class MainWindow : Window
             : manual.Name.Trim();
     }
 
+    private GameCatalogRecord? FindKnownGame(string gameId) =>
+        _manualGameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase)) ??
+        _gameCatalog.FirstOrDefault(g =>
+            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+
     private long GamePriceCents(string gameId)
     {
-        var game = _gameCatalog.FirstOrDefault(g =>
-            string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        var game = FindKnownGame(gameId);
         return game?.PriceCents ?? 0;
     }
 

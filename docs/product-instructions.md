@@ -145,8 +145,9 @@ Game price rules:
 - New game types require the user to set a positive price before the game can be used operationally.
 - If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm the game price before that workflow can finalize.
 - Regular bundle activation follows the same missing-price rule as inventory receiving. If the scanned bundle's game ID is new or has no positive price, activation must pause and open a required price-entry dialog before assigning the bundle to the bin.
+- If the scanned bundle's game ID already has a saved positive price and display name, activation must not ask for price or name again; after the bin is selected/scanned, activation should continue.
 - The activation price dialog should show the game ID, bundle ID, selected/scanned bin, any fetched/manual game name, and any fetched/manual image when available.
-- The activation price dialog must allow the operator to enter the price manually or scan a price barcode. A scanned price is only accepted after it resolves to a positive ticket price.
+- The activation price dialog must allow the operator to enter or scan the price into the same game price field; do not add a separate price-scan text field.
 - Entering a missing price during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without it.
 - Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether any scanned game IDs are new or still have no price.
 - If receiving includes any new/unpriced game IDs, the app must present a required price-entry dialog for each missing game before finalizing receiving.
