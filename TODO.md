@@ -15,6 +15,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Amount is `5 * game price`.
    - Next available ticket advances to `008`.
    - Regular sale rows keep `normal_sale`; closing-generated rows keep `closing_gap_fill_sold`.
+   - During first-time setup initial scan, scanning ticket `001` records opening inventory only, keeps current ticket `001`, and does not create a sale or gap-fill.
+   - After setup completes, regular scanning of any ticket serial in a new bundle, then bin, then missing game price/name records activation gap-fill from the bundle's first ticket through the scanned ticket; for example `001` records `000-001`, quantity `2`, next `002`, and `008` records `000-008`, quantity `9`, next `009`.
+   - With active current ticket `002`, scanning `003` records sale range `002-003`, quantity `2`, amount `2 * game price`, and next available ticket `004`.
+   - If a placed bundle has no positive game price, scanning a ticket must require game price setup and must not record a `$0.00` sale.
+   - Scanner input, rejected scans, ticket sales, bundle activations, opening placements, and bin placements appear in Audit.
 7. Verify license workflow:
    - Store > Registration shows the 64-character registration ID before first check.
    - Check License calls the WindowsPOS-compatible license endpoint and updates status, last check, and subscription expiry.

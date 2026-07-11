@@ -301,6 +301,7 @@ Bundle activation definition:
 Regular bundle activation:
 
 - Regular bundle activation is separate from the closing reconciliation loop.
+- Regular bundle activation is also separate from the first-time setup initial import. Initial import records opening inventory only and must not create activation gap-fill sales.
 - During normal inventory/bin workflow, bins may contain multiple active bundles.
 - A bundle can be activated into a bin by scanning bin then bundle, or bundle then bin.
 - The bin scan and bundle/ticket scan that form one activation pair must happen within the configured scan-pair window. The default is 5 seconds.
@@ -313,11 +314,11 @@ Regular bundle activation:
 - Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.
 - After successful activation, the app should give short audio feedback such as `Bundle activated in bin 12`.
 - Activation should trigger cache-first game image lookup for the activated game.
-- If the scanned activation ticket is not the first ticket, the scanned ticket is treated as the current available ticket.
-- The scanned activation ticket itself is not sold during placement; it is the next available ticket to sell and should be shown as current on Rdisplay.
-- During regular operation, tickets before the scanned current ticket are recorded as sold/gap-fill sale activity for the current open close interval.
+- The scanned activation ticket is treated as sold during placement, along with any prior tickets in that bundle.
+- After activation, the active bundle ticket is the next available ticket after the scanned activation ticket and should be shown as current on Rdisplay.
+- During activation, tickets from the first ticket through the scanned activation ticket are recorded as sold/gap-fill sale activity for the current open close interval.
 - Placement-created gap-fill sales must use the source label `activation_gap_fill` so reports can distinguish them from normal scanned sales.
-- The gap-fill range follows the configured first-ticket mode: if first ticket is `000` and activation scans `004`, tickets `000-003` are sold; if first ticket is `001`, tickets `001-003` are sold.
+- The gap-fill range follows the configured first-ticket mode: if first ticket is `000` and activation scans `004`, tickets `000-004` are sold and next ticket is `005`; if first ticket is `001`, tickets `001-004` are sold and next ticket is `005`.
 - Regular activation only applies to bundles not currently placed in any bin. Moving an already placed bundle is a separate manual move workflow from the Bins UI.
 - If a clerk scans a bin plus a ticket for a bundle already active in another bin, ignore the placement intent and do not move the bundle automatically.
 - For an already active bundle placement scan, the app should give audio feedback such as `Bundle active in bin 7, move it manually`.

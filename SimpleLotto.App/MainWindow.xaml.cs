@@ -433,17 +433,26 @@ public sealed partial class MainWindow : Window
 
     private void TryRecordAudit(string category, string action, string detail)
     {
-        var record = NewAuditRecord(category, action, detail);
+        var record = NewAuditRecord(category, action, TruncateAuditDetail(detail));
         try
         {
             _store.InsertAudit(record);
             _auditLogRows.Insert(0, AuditLogRow.From(record));
             ApplyAuditLogPage(resetPage: true);
         }
-        catch
+        catch (Exception ex)
         {
             // Audit failures should not block the operator workflow.
+            AppLog.Error("Audit insert failed.", ex);
         }
+    }
+
+    private static string TruncateAuditDetail(string detail)
+    {
+        var normalized = string.IsNullOrWhiteSpace(detail) ? string.Empty : detail.Trim();
+        return normalized.Length <= 500
+            ? normalized
+            : normalized[..497] + "...";
     }
 
     private StoredAuditRecord NewAuditRecord(string category, string action, string detail) =>
@@ -993,11 +1002,14 @@ public sealed partial class MainWindow : Window
 
     private void ProcessImportScanSegment(string raw)
     {
+        TryRecordAudit("scanner", "Opening scan received", $"Raw scan {raw}");
+
         if (TryParseBinNumber(raw, out var binNumber))
         {
             var bin = _importBins.FirstOrDefault(b => b.Number == binNumber);
             if (bin is null)
             {
+                TryRecordAudit("scanner", "Opening scan rejected", $"Wrong bin {binNumber}");
                 FailImport($"Wrong bin {binNumber}. Valid bins are 1 through {_configuredBinCount}.", "Wrong bin.");
                 return;
             }
@@ -1009,6 +1021,7 @@ public sealed partial class MainWindow : Window
         var ticket = TryParseImportTicket(raw);
         if (ticket is null)
         {
+            TryRecordAudit("scanner", "Opening scan rejected", $"Unrecognized scan {raw}");
             FailImport("Scan was not recognized as a configured-state ticket or a BIN barcode.", "Import failure.");
             return;
         }
@@ -1035,6 +1048,7 @@ public sealed partial class MainWindow : Window
     private void ProcessFocusedScanSegment(string raw)
     {
         ExpireDashboardPendingScanPair();
+        TryRecordAudit("scanner", "Scan received", $"Raw scan {raw}");
 
         if (TryParseBinNumber(raw, out var binNumber))
         {
@@ -1043,12 +1057,14 @@ public sealed partial class MainWindow : Window
                 DashboardScannerStatusText.Text = $"Wrong bin {binNumber}. Scan a valid bin.";
                 DashboardLastScanText.Text = $"Last scan failed: BIN-{binNumber}";
                 StatusText.Text = $"Wrong bin {binNumber}.";
+                TryRecordAudit("scanner", "Scan rejected", $"Wrong bin {binNumber}");
                 _ = SpeakAsync("Wrong bin.");
                 return;
             }
 
             _dashboardPendingBin = binNumber.ToString(CultureInfo.InvariantCulture);
             _dashboardPendingBinAtUtc = DateTime.UtcNow;
+            TryRecordAudit("bin", "Bin scan captured", $"Bin {_dashboardPendingBin}");
             if (_dashboardPendingTicket is not null)
             {
                 PlaceDashboardBundle(_dashboardPendingBin, _dashboardPendingTicket);
@@ -1067,6 +1083,7 @@ public sealed partial class MainWindow : Window
             DashboardScannerStatusText.Text = "Scan was not recognized.";
             DashboardLastScanText.Text = $"Last scan failed: {raw}";
             StatusText.Text = "Scanner input was not recognized.";
+            TryRecordAudit("scanner", "Scan rejected", $"Unrecognized scan {raw}");
             return;
         }
 
@@ -1083,18 +1100,73 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var backfill = BuildTicketBackfillSale(DateTime.Now, activeBundle, ticket.Ticket, "normal_sale");
-        var line = backfill.Sale;
-        var updatedBundle = activeBundle with { Ticket = backfill.NextTicket };
-        _sales.Insert(0, line);
-        SaveSaleLineAndUpdateImportTicket(line, updatedBundle);
-        ReplaceImportLine(updatedBundle);
-        SalesListView.SelectedItem = line;
-        DashboardScannerStatusText.Text = $"Ticket captured for game {ticket.GameId}.";
-        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {line.Ticket} | Next {backfill.NextTicket} | Bin {activeBundle.Bin}";
-        StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, {line.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(line.Quantity == 1 ? string.Empty : "s")}.";
-        RefreshTotals();
-        RefreshOperationalPages();
+        _ = ProcessActiveTicketSaleAsync(activeBundle, ticket);
+    }
+
+    private async Task ProcessActiveTicketSaleAsync(ImportLine activeBundle, ImportTicket ticket)
+    {
+        try
+        {
+            if (GamePriceCents(activeBundle.GameId) <= 0)
+            {
+                DashboardScannerStatusText.Text = $"Price required for game {activeBundle.GameId}.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
+                StatusText.Text = $"Enter a price before recording sales for game {activeBundle.GameId}.";
+                TryRecordAudit(
+                    "sale",
+                    "Sale blocked",
+                    $"Game {activeBundle.GameId}, bundle {activeBundle.BundleId}, bin {activeBundle.Bin}, scanned ticket {ticket.Ticket}, missing game price");
+                var priceSaved = await ShowActivationPriceDialogAsync(activeBundle.Bin, ticket);
+                if (!priceSaved || GamePriceCents(activeBundle.GameId) <= 0)
+                {
+                    DashboardScannerStatusText.Text = $"Price required for game {activeBundle.GameId}. Sale not recorded.";
+                    StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} has no positive price.";
+                    _ = SpeakAsync("Price required.");
+                    return;
+                }
+            }
+
+            var backfill = BuildTicketBackfillSale(DateTime.Now, activeBundle, ticket.Ticket, "normal_sale");
+            var line = backfill.Sale;
+            if (line.Amount <= 0)
+            {
+                DashboardScannerStatusText.Text = $"Price required for game {activeBundle.GameId}. Sale not recorded.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
+                StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} calculated {line.AmountText}.";
+                TryRecordAudit(
+                    "sale",
+                    "Sale blocked",
+                    $"Game {activeBundle.GameId}, bundle {activeBundle.BundleId}, bin {activeBundle.Bin}, sold {line.Ticket}, quantity {line.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {line.AmountText}");
+                _ = SpeakAsync("Price required.");
+                return;
+            }
+
+            var updatedBundle = activeBundle with { Ticket = backfill.NextTicket };
+            _sales.Insert(0, line);
+            if (!SaveSaleLineAndUpdateImportTicket(line, updatedBundle))
+            {
+                _sales.Remove(line);
+                return;
+            }
+
+            ReplaceImportLine(updatedBundle);
+            SalesListView.SelectedItem = line;
+            DashboardScannerStatusText.Text = $"Ticket captured for game {ticket.GameId}.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {line.Ticket} | Next {backfill.NextTicket} | Bin {activeBundle.Bin}";
+            StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, {line.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(line.Quantity == 1 ? string.Empty : "s")}.";
+            TryRecordAudit(
+                "sale",
+                "Ticket sale recorded",
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {activeBundle.Bin}, sold {line.Ticket}, quantity {line.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {line.AmountText}, next {backfill.NextTicket}");
+            RefreshTotals();
+            RefreshOperationalPages();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Scanner sale processing failed.", ex);
+            DashboardScannerStatusText.Text = "Scanner sale failed.";
+            StatusText.Text = $"Unable to record scanner sale: {ex.Message}";
+        }
     }
 
     private async Task PromptForActivationBinAsync(ImportTicket ticket)
@@ -1267,18 +1339,40 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        var line = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin, "activation");
+        var activationSale = BuildActivationGapFillSale(DateTime.Now, ticket, bin);
+        var line = new ImportLine(ticket.GameId, ticket.BundleId, activationSale.NextTicket, bin, "activation");
         _imports.Insert(0, line);
-        SaveImportLine(line);
+        _sales.Insert(0, activationSale.Sale);
+        if (!SaveImportLineAndSale(line, activationSale.Sale))
+        {
+            _imports.Remove(line);
+            _sales.Remove(activationSale.Sale);
+            return false;
+        }
+
+        TryRecordAudit(
+            "activation",
+            "Bundle activated",
+            $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned ticket {ticket.Ticket}, next {activationSale.NextTicket}, bin {bin}");
+        TryRecordAudit(
+            "sale",
+            "Activation sale recorded",
+            $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {bin}, sold {activationSale.Sale.Ticket}, quantity {activationSale.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {activationSale.Sale.AmountText}, next {activationSale.NextTicket}");
+        TryRecordAudit(
+            "bin",
+            "Bin placement recorded",
+            $"Bin {bin}, game {ticket.GameId}, bundle {ticket.BundleId}, next ticket {activationSale.NextTicket}");
         if (updateDashboardStatus)
         {
             DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
-            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket} | Bin {bin}";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {activationSale.Sale.Ticket} | Next {activationSale.NextTicket} | Bin {bin}";
             ClearDashboardPendingScanPair();
         }
 
-        StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}.";
+        SalesListView.SelectedItem = activationSale.Sale;
+        StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}. Sold {activationSale.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(activationSale.Sale.Quantity == 1 ? string.Empty : "s")}; next ticket {activationSale.NextTicket}.";
         _ = SpeakAsync($"Bundle activated in bin {bin}.");
+        RefreshTotals();
         RefreshOperationalPages();
         _ = EnsureGameImageCachedForGameAsync(ticket.GameId);
         return true;
@@ -1371,9 +1465,9 @@ public sealed partial class MainWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Price required",
+            Title = "Game price required",
             Content = content,
-            PrimaryButtonText = "Save and Activate",
+            PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary
         };
@@ -1471,7 +1565,20 @@ public sealed partial class MainWindow : Window
             bin.Number.ToString(CultureInfo.InvariantCulture),
             "initial_import");
         _imports.Insert(0, line);
-        SaveImportLine(line);
+        if (!SaveImportLine(line))
+        {
+            _imports.Remove(line);
+            return;
+        }
+
+        TryRecordAudit(
+            "import",
+            "Opening placement recorded",
+            $"Bin {bin.Number.ToString(CultureInfo.InvariantCulture)}, game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}");
+        TryRecordAudit(
+            "bin",
+            "Bin placement recorded",
+            $"Bin {bin.Number.ToString(CultureInfo.InvariantCulture)}, game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}");
         bin.ImportedCount++;
 
         _pendingImportBin = null;
@@ -2125,7 +2232,12 @@ public sealed partial class MainWindow : Window
             -sale.Amount,
             "undo");
         _sales.Insert(0, correction);
-        SaveSaleLine(correction);
+        if (!SaveSaleLine(correction))
+        {
+            _sales.Remove(correction);
+            return;
+        }
+
         TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
         StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
         RefreshTotals();
@@ -2141,32 +2253,58 @@ public sealed partial class MainWindow : Window
         await StartClosingScanWorkflowAsync();
     }
 
-    private void SaveImportLine(ImportLine line)
+    private bool SaveImportLine(ImportLine line)
     {
         try
         {
             _store.InsertImport(new StoredImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
+            return true;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save placement to SQLite: {ex.Message}";
+            return false;
         }
     }
 
-    private void SaveSaleLine(SaleLine line)
+    private bool SaveImportLineAndSale(ImportLine importLine, SaleLine saleLine)
+    {
+        try
+        {
+            _store.InsertImportAndSale(
+                new StoredImportLine(
+                    importLine.GameId,
+                    importLine.BundleId,
+                    importLine.Ticket,
+                    importLine.Bin,
+                    importLine.Source),
+                ToStoredSaleLine(saleLine));
+            _allSales.Insert(0, saleLine);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save activation sale to SQLite: {ex.Message}";
+            return false;
+        }
+    }
+
+    private bool SaveSaleLine(SaleLine line)
     {
         try
         {
             _store.InsertSale(ToStoredSaleLine(line));
             _allSales.Insert(0, line);
+            return true;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save sale to SQLite: {ex.Message}";
+            return false;
         }
     }
 
-    private void SaveSaleLineAndUpdateImportTicket(SaleLine line, ImportLine updatedBundle)
+    private bool SaveSaleLineAndUpdateImportTicket(SaleLine line, ImportLine updatedBundle)
     {
         try
         {
@@ -2179,10 +2317,12 @@ public sealed partial class MainWindow : Window
                     updatedBundle.Bin,
                     updatedBundle.Source));
             _allSales.Insert(0, line);
+            return true;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save sale and ticket state to SQLite: {ex.Message}";
+            return false;
         }
     }
 
@@ -4786,6 +4926,42 @@ public sealed partial class MainWindow : Window
                 range.Quantity * price,
                 source),
             range.NextTicket);
+    }
+
+    private TicketBackfillSale BuildActivationGapFillSale(DateTime soldAt, ImportTicket ticket, string bin)
+    {
+        var scannedText = string.IsNullOrWhiteSpace(ticket.Ticket) ? "000" : ticket.Ticket.Trim();
+        var width = TicketSerialWidth(scannedText);
+        var price = GamePriceCents(ticket.GameId) / 100m;
+
+        if (TryParseTicketSerial(scannedText, out var scannedSerial))
+        {
+            var quantity = scannedSerial + 1;
+            var startText = FormatTicketSerial(0, width);
+            var endText = FormatTicketSerial(scannedSerial, width);
+            var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
+            return new TicketBackfillSale(
+                new SaleLine(
+                    soldAt,
+                    ticket.GameId,
+                    bin,
+                    soldText,
+                    quantity,
+                    quantity * price,
+                    "activation_gap_fill"),
+                FormatTicketSerial(scannedSerial + 1, width));
+        }
+
+        return new TicketBackfillSale(
+            new SaleLine(
+                soldAt,
+                ticket.GameId,
+                bin,
+                scannedText,
+                1,
+                price,
+                "activation_gap_fill"),
+            scannedText);
     }
 
     private static TicketBackfillRange BuildTicketBackfillRange(string currentTicket, string scannedTicket)

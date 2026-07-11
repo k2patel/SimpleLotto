@@ -123,6 +123,47 @@ public sealed class LocalStore
         cmd.ExecuteNonQuery();
     }
 
+    public void InsertImportAndSale(StoredImportLine import, StoredSaleLine sale)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var importCmd = conn.CreateCommand())
+        {
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, created_at_utc)
+                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $created_at_utc)
+                """;
+            importCmd.Parameters.AddWithValue("$game_id", import.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
+            importCmd.Parameters.AddWithValue("$ticket", import.Ticket);
+            importCmd.Parameters.AddWithValue("$bin", import.Bin);
+            importCmd.Parameters.AddWithValue("$source", import.Source);
+            importCmd.Parameters.AddWithValue("$created_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            importCmd.ExecuteNonQuery();
+        }
+
+        using (var saleCmd = conn.CreateCommand())
+        {
+            saleCmd.Transaction = tx;
+            saleCmd.CommandText = """
+                INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                """;
+            saleCmd.Parameters.AddWithValue("$sold_at_utc", sale.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            saleCmd.Parameters.AddWithValue("$game_id", sale.GameId);
+            saleCmd.Parameters.AddWithValue("$bin", sale.Bin);
+            saleCmd.Parameters.AddWithValue("$ticket", sale.Ticket);
+            saleCmd.Parameters.AddWithValue("$quantity", sale.Quantity);
+            saleCmd.Parameters.AddWithValue("$amount_cents", sale.AmountCents);
+            saleCmd.Parameters.AddWithValue("$source", sale.Source);
+            saleCmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
     public void InsertSaleAndUpdateImportTicket(StoredSaleLine sale, StoredImportLine bundle)
     {
         using var conn = Open();
