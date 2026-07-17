@@ -43,6 +43,7 @@ Login expectations:
 
 - A login screen is always shown after setup is complete.
 - Any valid user can log in.
+- The password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
 - Logging in controls access only. It does not start, end, or otherwise define a financial shift/close interval.
 - SimpleLotto is a single-computer, single-active-user application.
 - Only one user is actively operating the application at a time.

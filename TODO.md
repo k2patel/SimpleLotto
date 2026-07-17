@@ -61,6 +61,10 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - The Visual C++ runtime installer is skipped when a compatible x64 runtime is already installed.
    - An unsigned build skips the certificate-import PowerShell step.
    - The existing firewall rule is refreshed without accumulating duplicate rules.
+14. Verify login keyboard behavior:
+   - Opening the login screen focuses the password field.
+   - Pressing Enter in the password field performs the same validation and login action as clicking Login.
+   - Invalid passwords remain on the login screen and show the existing validation message.
 
 ## Missing Follow-Up Work
 

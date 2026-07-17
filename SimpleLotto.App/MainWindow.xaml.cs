@@ -711,6 +711,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void LoginPasswordBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter || _startupStage != StartupStage.Login)
+            return;
+
+        e.Handled = true;
+        CompleteLoginStage();
+    }
+
     private void StartupBackButton_Click(object sender, RoutedEventArgs e)
     {
         if (_startupStage == StartupStage.Import)
@@ -923,6 +932,7 @@ public sealed partial class MainWindow : Window
         LoginUserComboBox.SelectedIndex = 0;
         LoginPasswordBox.Password = string.Empty;
         StartupStatusText.Text = "Enter the password for the selected user.";
+        _ = LoginPasswordBox.Focus(FocusState.Programmatic);
     }
 
     private void CompleteImportStage()

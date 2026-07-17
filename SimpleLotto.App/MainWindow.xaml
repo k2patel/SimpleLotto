@@ -2556,7 +2556,8 @@
                                   HorizontalAlignment="Stretch"/>
 
                         <PasswordBox x:Name="LoginPasswordBox"
-                                     Header="Password"/>
+                                     Header="Password"
+                                     KeyDown="LoginPasswordBox_KeyDown"/>
                     </StackPanel>
 
                     <Grid Grid.Row="2" ColumnSpacing="12">
