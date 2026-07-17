@@ -56,6 +56,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Game setup changes and successful received/active inventory removals are audited.
    - Duplicate inventory scans produce only `Duplicate` audio and do not create an audit row.
    - An audit insert failure is written to the application log without blocking the operator action.
+13. Verify installer upgrade timing on the Windows machine:
+   - Installing a newer build over an existing SimpleLotto installation performs an in-place upgrade without launching the previous uninstaller.
+   - The Visual C++ runtime installer is skipped when a compatible x64 runtime is already installed.
+   - An unsigned build skips the certificate-import PowerShell step.
+   - The existing firewall rule is refreshed without accumulating duplicate rules.
 
 ## Missing Follow-Up Work
 
