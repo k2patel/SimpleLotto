@@ -68,6 +68,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
 15. Verify manually published branch upgrades:
    - A manual Windows workflow run without `publish_update_manifest` builds/uploads the installer but does not replace the public latest manifest.
    - A manual run with `publish_update_manifest` enabled uploads the manifest and the installed app's Check for Upgrade action discovers that exact build.
+16. Verify closing scan cancellation:
+   - `Close scanning` keeps temporary evidence available for review and finalization.
+   - `Cancel Closing Scan` with evidence asks whether to discard or keep scanning.
+   - Discard clears closing rows, matched bins, issues, unmatched scans, reconciliation changes, and generated closing sales without changing persisted shift data.
+   - Cancellation is audited with discarded counts.
 
 ## Missing Follow-Up Work
 

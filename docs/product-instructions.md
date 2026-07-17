@@ -473,6 +473,7 @@ Closing page bin status:
 - If the user missed a bin, it is the user's responsibility to scan/fix it before final submit.
 - Clicking a bin during closing should show expected game ID, Bundle ID, and ticket ID/current ticket.
 - If the user scans while the closing scan dialog is open, the system matches that ticket to the related active bin/bundle after the dialog closes.
+- `Close scanning` stops collection and keeps the temporary evidence available for review and finalization. `Cancel Closing Scan` requires discard confirmation when evidence exists, clears only the temporary closing state, writes an audit event, and must not change persisted sales, inventory, or shift data.
 - Any other dormant bundle in that bin should be automatically considered sold during closing reconciliation.
 
 ### Settings

@@ -4271,15 +4271,7 @@ public sealed partial class MainWindow : Window
 
         ExitClosingReportContext();
         ClosingTabs.SelectedItem = ClosingScanEvidenceTab;
-        _closingScannedBins.Clear();
-        _closingScannedBundleKeys.Clear();
-        _closingCurrentPlacements.Clear();
-        _closingUnmatchedTickets.Clear();
-        _closingResolvedPlacements.Clear();
-        _closingScanRows.Clear();
-        _closingScanIssues.Clear();
-        _closingScanSales.Clear();
-        _closingScanCaptured = false;
+        ResetClosingScanState();
         RefreshClosingActionState();
         RefreshClosingBins();
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
@@ -4465,6 +4457,20 @@ public sealed partial class MainWindow : Window
         };
         content.Children.Add(leftPanel);
 
+        var cancelButton = new Button
+        {
+            Content = "Cancel Closing Scan",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MinWidth = 148
+        };
+        var footer = new Grid { ColumnSpacing = 12 };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.Children.Add(statusText);
+        Grid.SetColumn(cancelButton, 1);
+        footer.Children.Add(cancelButton);
+        content.Children.Add(footer);
+
         void ApplyResponsiveDialogLayout(double width)
         {
             var stacked = width > 0 && width < 560;
@@ -4490,14 +4496,13 @@ public sealed partial class MainWindow : Window
             Grid.SetColumn(totalPanel, stacked ? 0 : 1);
             Grid.SetColumnSpan(totalPanel, stacked ? 2 : 1);
 
-            Grid.SetRow(statusText, stacked ? 3 : 2);
-            Grid.SetColumn(statusText, 0);
-            Grid.SetColumnSpan(statusText, 2);
+            Grid.SetRow(footer, stacked ? 3 : 2);
+            Grid.SetColumn(footer, 0);
+            Grid.SetColumnSpan(footer, 2);
         }
 
         ApplyResponsiveDialogLayout(rootSize.Width);
         content.SizeChanged += (_, args) => ApplyResponsiveDialogLayout(args.NewSize.Width);
-        content.Children.Add(statusText);
 
         void ApplyDialogSize(Windows.Foundation.Size size)
         {
@@ -4543,8 +4548,34 @@ public sealed partial class MainWindow : Window
 
         SizeChangedEventHandler overlaySizeChanged = (_, _) => ApplyOverlaySizeFromActual();
         var closed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        RoutedEventHandler closeHandler = (_, _) => closed.TrySetResult(true);
+        RoutedEventHandler closeHandler = (_, _) => closed.TrySetResult(false);
+        RoutedEventHandler cancelHandler = async (_, _) =>
+        {
+            if (_closingScanRows.Count == 0 &&
+                _closingScannedBins.Count == 0 &&
+                _closingScanIssues.Count == 0 &&
+                _closingUnmatchedTickets.Count == 0)
+            {
+                closed.TrySetResult(true);
+                return;
+            }
+
+            var confirm = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Discard closing scans?",
+                Content = $"Discard {_closingScanRows.Count.ToString(CultureInfo.CurrentCulture)} temporary closing scan{(_closingScanRows.Count == 1 ? string.Empty : "s")}? No sales, inventory, or shift data will be changed.",
+                PrimaryButtonText = "Discard",
+                CloseButtonText = "Keep Scanning",
+                DefaultButton = ContentDialogButton.Close
+            };
+            if (await confirm.ShowAsync() == ContentDialogResult.Primary)
+                closed.TrySetResult(true);
+            else
+                _ = content.Focus(FocusState.Programmatic);
+        };
         ClosingScanOverlayCloseButton.Click += closeHandler;
+        cancelButton.Click += cancelHandler;
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
 
         _isWorkflowDialogOpen = true;
@@ -4557,26 +4588,56 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlay.Visibility = Visibility.Visible;
             ApplyOverlaySizeFromActual();
             _ = content.Focus(FocusState.Programmatic);
-            await closed.Task;
+            var discarded = await closed.Task;
+            var rowCount = _closingScanRows.Count;
+            var scannedBinCount = _closingScannedBins.Count;
+            var issueCount = _closingScanIssues.Count;
+            var unmatchedCount = _closingUnmatchedTickets.Count;
+
+            if (discarded)
+            {
+                TryRecordAudit(
+                    "closing",
+                    "Closing scan cancelled",
+                    $"Discarded rows {rowCount.ToString(CultureInfo.InvariantCulture)}, scanned bins {scannedBinCount.ToString(CultureInfo.InvariantCulture)}, issues {issueCount.ToString(CultureInfo.InvariantCulture)}, unmatched {unmatchedCount.ToString(CultureInfo.InvariantCulture)}; no shift data changed");
+                ResetClosingScanState();
+                ClosingStatusText.Text = "Closing scan cancelled. Temporary scan evidence was discarded; no shift data changed.";
+            }
+            else
+            {
+                AppLog.Info($"Closing scan overlay closed. rows={rowCount.ToString(CultureInfo.InvariantCulture)}; scannedBins={scannedBinCount.ToString(CultureInfo.InvariantCulture)}; issues={issueCount.ToString(CultureInfo.InvariantCulture)}; unmatched={unmatchedCount.ToString(CultureInfo.InvariantCulture)}.");
+                TryRecordAudit(
+                    "closing",
+                    "Closing scan closed",
+                    $"Rows {rowCount.ToString(CultureInfo.InvariantCulture)}, scanned bins {scannedBinCount.ToString(CultureInfo.InvariantCulture)}, issues {issueCount.ToString(CultureInfo.InvariantCulture)}, unmatched {unmatchedCount.ToString(CultureInfo.InvariantCulture)}");
+                _closingScanCaptured = true;
+                ClosingStatusText.Text = $"{scannedBinCount.ToString(CultureInfo.CurrentCulture)} bin{(scannedBinCount == 1 ? string.Empty : "s")} scanned. Unscanned active bins remain marked.";
+            }
         }
         finally
         {
             ClosingScanOverlayCloseButton.Click -= closeHandler;
+            cancelButton.Click -= cancelHandler;
             ClosingScanOverlay.SizeChanged -= overlaySizeChanged;
             ClosingScanOverlay.Visibility = Visibility.Collapsed;
             ClosingScanOverlayContent.Children.Clear();
-
-            AppLog.Info($"Closing scan overlay closed. rows={_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}; scannedBins={_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}; issues={_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}; unmatched={_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}.");
-            TryRecordAudit(
-                "closing",
-                "Closing scan closed",
-                $"Rows {_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}, scanned bins {_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}, issues {_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}, unmatched {_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}");
             _isWorkflowDialogOpen = false;
-            _closingScanCaptured = true;
             RefreshClosingBins();
             RefreshClosingActionState();
-            ClosingStatusText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. Unscanned active bins remain marked.";
         }
+    }
+
+    private void ResetClosingScanState()
+    {
+        _closingScannedBins.Clear();
+        _closingScannedBundleKeys.Clear();
+        _closingCurrentPlacements.Clear();
+        _closingUnmatchedTickets.Clear();
+        _closingResolvedPlacements.Clear();
+        _closingScanRows.Clear();
+        _closingScanIssues.Clear();
+        _closingScanSales.Clear();
+        _closingScanCaptured = false;
     }
 
     private int ActiveClosingBinCount() =>
@@ -5029,15 +5090,7 @@ public sealed partial class MainWindow : Window
         ClosingOnlineSaleBox.Value = 0;
         ClosingOnlineCashoutBox.Value = 0;
         ClosingInstantCashoutBox.Value = 0;
-        _closingScannedBins.Clear();
-        _closingScannedBundleKeys.Clear();
-        _closingCurrentPlacements.Clear();
-        _closingUnmatchedTickets.Clear();
-        _closingResolvedPlacements.Clear();
-        _closingScanRows.Clear();
-        _closingScanIssues.Clear();
-        _closingScanSales.Clear();
-        _closingScanCaptured = false;
+        ResetClosingScanState();
         StatusText.Text = $"Shift closed. Reports saved to {reportTarget.Folder}.";
         ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Reports saved to {reportTarget.ShiftLabel}.";
         _ = SpeakAsync("Shift closed. New sales count toward the next close.");
