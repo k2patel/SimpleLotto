@@ -39,7 +39,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - The sleep-prevention request remains active when SimpleLotto is minimized to the tray.
    - The sleep-prevention request is released after using the tray Exit command or otherwise exiting the app.
 10. Verify dedicated inventory receiving:
-   - `Scan New Inventory` opens the focused receiving overlay and normal sales/activation scanner routing does not run underneath it.
+   - `Scan New Inventory` is visible only while Inventory is selected, opens the focused receiving overlay, and normal sales/activation scanner routing does not run underneath it.
    - Scanning any valid ticket barcode records only Game ID + Bundle ID; the ticket serial is not stored.
    - Scanning the same staged, already-received, or already-active bundle speaks `Duplicate` and does not change counts, inventory, sales, activation, or audit state.
    - Closing scanning validates missing game prices and commits all staged bundles to unopened receiving inventory.

@@ -2234,6 +2234,10 @@ public sealed partial class MainWindow : Window
 
     private void ShowSection(string section)
     {
+        ScanNewInventoryButton.Visibility = section == "Inventory"
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
         if (section == "Dashboard")
         {
             DashboardContent.Visibility = Visibility.Visible;

@@ -376,7 +376,7 @@ Inventory receiving is the normal recurring stock intake workflow for new unopen
 
 Inventory receiving is for unopened bundles. Because ticket `000` may be physically inaccessible, the dedicated receiving scan dialog may accept any valid ticket barcode from the bundle but must record only the parsed Game ID and Bundle ID. The ticket serial is ignored and must not create a sale, activation, or bin assignment.
 
-The top bar must provide a `Scan New Inventory` action beside `Close Shift`. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides a `Close scanning` action that validates and finalizes the session.
+The top bar must provide a `Scan New Inventory` action beside `Close Shift` only while the Inventory menu is selected. The action must be hidden on Dashboard, Bins, Closing, and Settings. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides a `Close scanning` action that validates and finalizes the session.
 
 If the same Game ID + Bundle ID is scanned more than once, is already in receiving inventory, or is already active in a bin, the app must speak `Duplicate`, take no action, and leave all receiving counts and records unchanged.
 

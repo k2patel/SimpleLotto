@@ -51,6 +51,7 @@
                     <Button x:Name="ScanNewInventoryButton"
                             Content="Scan New Inventory"
                             MinWidth="148"
+                            Visibility="Collapsed"
                             Click="ScanNewInventoryButton_Click"/>
                     <Button x:Name="CloseShiftButton"
                             Content="Close Shift"
