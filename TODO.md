@@ -65,6 +65,9 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Opening the login screen focuses the password field.
    - Pressing Enter in the password field performs the same validation and login action as clicking Login.
    - Invalid passwords remain on the login screen and show the existing validation message.
+15. Verify manually published branch upgrades:
+   - A manual Windows workflow run without `publish_update_manifest` builds/uploads the installer but does not replace the public latest manifest.
+   - A manual run with `publish_update_manifest` enabled uploads the manifest and the installed app's Check for Upgrade action discovers that exact build.
 
 ## Missing Follow-Up Work
 

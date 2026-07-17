@@ -497,6 +497,7 @@ Application upgrade rules:
 - Automatic checks should record the local date they ran and should not repeat for the same date.
 - Do not add hourly polling or recurring background wakeups for app upgrade checks.
 - Manual Check for Upgrade remains available even when automatic scheduled checks exist.
+- Main-branch pushes publish the latest Windows update manifest automatically. A manually dispatched branch build publishes it only when the operator explicitly enables the publish-update-manifest input.
 
 ## License Management and Game Name Sync
 
