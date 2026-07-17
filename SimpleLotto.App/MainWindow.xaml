@@ -51,7 +51,7 @@
                     <Button x:Name="ScanNewInventoryButton"
                             Content="Scan New Inventory"
                             MinWidth="148"
-                            Visibility="Collapsed"
+                            Visibility="{Binding Visibility, ElementName=InventoryContent}"
                             Click="ScanNewInventoryButton_Click"/>
                     <Button x:Name="CloseShiftButton"
                             Content="Close Shift"
@@ -802,6 +802,10 @@
                                             <StackPanel Spacing="12">
                                                 <TextBlock Text="Receiving Rules"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <Button Content="Scan New Inventory"
+                                                        HorizontalAlignment="Stretch"
+                                                        Style="{StaticResource AccentButtonStyle}"
+                                                        Click="ScanNewInventoryButton_Click"/>
                                                 <TextBlock Text="Start Scan New Inventory before scanning delivered bundles."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                 <TextBlock Text="Any ticket barcode from the physical bundle records only its Game ID and Bundle ID."
