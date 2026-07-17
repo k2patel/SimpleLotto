@@ -46,6 +46,8 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<SaleLine> _allSales = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
+    private readonly ObservableCollection<ReceivedBundleLine> _receivedBundles = new();
+    private readonly List<ActivationLine> _activations = new();
     private readonly ObservableCollection<ImportBin> _importBins = new();
     private readonly ObservableCollection<BinCard> _binCards = new();
     private readonly ObservableCollection<BundleDetailLine> _selectedBinBundles = new();
@@ -342,6 +344,27 @@ public sealed partial class MainWindow : Window
         _imports.Clear();
         foreach (var line in state.Imports)
             _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
+
+        _receivedBundles.Clear();
+        foreach (var bundle in state.ReceivedBundles)
+        {
+            _receivedBundles.Add(new ReceivedBundleLine(
+                bundle.GameId,
+                bundle.BundleId,
+                bundle.ReceivedAtUtc.ToLocalTime(),
+                bundle.Source));
+        }
+
+        _activations.Clear();
+        foreach (var activation in state.Activations)
+        {
+            _activations.Add(new ActivationLine(
+                activation.ActivatedAtUtc.ToLocalTime(),
+                activation.GameId,
+                activation.BundleId,
+                activation.Bin,
+                activation.Source));
+        }
 
         _sales.Clear();
         _allSales.Clear();
@@ -1002,10 +1025,9 @@ public sealed partial class MainWindow : Window
 
     private void ProcessImportScanSegment(string raw)
     {
-        TryRecordAudit("scanner", "Opening scan received", $"Raw scan {raw}");
-
         if (TryParseBinNumber(raw, out var binNumber))
         {
+            TryRecordAudit("scanner", "Opening scan received", $"Raw scan {raw}");
             var bin = _importBins.FirstOrDefault(b => b.Number == binNumber);
             if (bin is null)
             {
@@ -1026,6 +1048,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (PhysicalBundleExists(ticket.GameId, ticket.BundleId))
+        {
+            _ = SpeakAsync("Duplicate");
+            return;
+        }
+
+        TryRecordAudit("scanner", "Opening scan received", $"Raw scan {raw}");
         AcceptImportTicket(ticket);
     }
 
@@ -1350,6 +1379,13 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
+        var receivedBundle = _receivedBundles.FirstOrDefault(received =>
+            string.Equals(received.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(received.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
+        if (receivedBundle is not null)
+            _receivedBundles.Remove(receivedBundle);
+        _activations.Insert(0, new ActivationLine(DateTime.Now, ticket.GameId, ticket.BundleId, bin, "activation"));
+
         TryRecordAudit(
             "activation",
             "Bundle activated",
@@ -1543,6 +1579,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (PhysicalBundleExists(ticket.GameId, ticket.BundleId))
+        {
+            _pendingImportTicket = null;
+            _ = SpeakAsync("Duplicate");
+            return;
+        }
+
         _pendingImportTicket = ticket;
         if (_pendingImportBin is not null)
         {
@@ -1558,6 +1601,14 @@ public sealed partial class MainWindow : Window
 
     private void CompleteImportPair(ImportBin bin, ImportTicket ticket)
     {
+        if (PhysicalBundleExists(ticket.GameId, ticket.BundleId))
+        {
+            _pendingImportTicket = null;
+            UpdatePendingImportText();
+            _ = SpeakAsync("Duplicate");
+            return;
+        }
+
         var line = new ImportLine(
             ticket.GameId,
             ticket.BundleId,
@@ -2253,6 +2304,16 @@ public sealed partial class MainWindow : Window
         await StartClosingScanWorkflowAsync();
     }
 
+    private async void ScanNewInventoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureLicenseAllowsOperation("receiving inventory"))
+            return;
+
+        ShowSection("Inventory");
+        InventoryTabs.SelectedItem = ReceivingTab;
+        await StartReceivingScanWorkflowAsync();
+    }
+
     private bool SaveImportLine(ImportLine line)
     {
         try
@@ -2351,7 +2412,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void SaveManualGame(GameCatalogRecord game)
+    private bool SaveManualGame(GameCatalogRecord game)
     {
         try
         {
@@ -2362,15 +2423,20 @@ public sealed partial class MainWindow : Window
                 game.Source,
                 game.ImageUri,
                 game.ImageStatus));
+            return true;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save game to SQLite: {ex.Message}";
+            return false;
         }
     }
 
     private void UpsertManualGameRecord(GameCatalogRecord game)
     {
+        if (!SaveManualGame(game))
+            return;
+
         var existing = _manualGameCatalog.FindIndex(g =>
             string.Equals(g.GameId, game.GameId, StringComparison.OrdinalIgnoreCase));
         if (existing >= 0)
@@ -2378,10 +2444,13 @@ public sealed partial class MainWindow : Window
         else
             _manualGameCatalog.Add(game);
 
-        SaveManualGame(game);
         RefreshGameCatalog();
         SelectGame(game.GameId);
         SyncRdisplayTiles();
+        TryRecordAudit(
+            "inventory",
+            "Game setup saved",
+            $"Game {game.GameId}, name {game.Name}, price {MoneyText(game.PriceCents)}, source {game.Source}, image status {game.ImageStatus}");
     }
 
     private void SelectGame(string gameId)
@@ -2460,14 +2529,20 @@ public sealed partial class MainWindow : Window
             ClosingSalesText.Text = selected.SalesText;
             ClosingTicketsText.Text = selected.TicketText;
             ClosingEvidenceText.Text = selected.BinText;
+            ClosingActivatedText.Text = selected.ActivatedBundles.ToString(CultureInfo.CurrentCulture);
             ClosingExpectedCashText.Text = selected.ExpectedCashText;
             return;
         }
 
         ClosingSalesText.Text = _sales.Sum(s => s.Amount).ToString("C", CultureInfo.CurrentCulture);
         ClosingTicketsText.Text = _sales.Sum(s => s.Quantity).ToString(CultureInfo.CurrentCulture);
+        ClosingActivatedText.Text = CurrentShiftActivationCount().ToString(CultureInfo.CurrentCulture);
         ClosingExpectedCashText.Text = MoneyText(CurrentClosingExpectedCashCents());
     }
+
+    private int CurrentShiftActivationCount() =>
+        _activations.Count(activation =>
+            _lastCloseUtc == DateTime.MinValue || activation.ActivatedAt.ToUniversalTime() > _lastCloseUtc);
 
     private long CurrentClosingExpectedCashCents()
     {
@@ -2537,6 +2612,17 @@ public sealed partial class MainWindow : Window
     {
         _receivingRecords.Clear();
         _inventoryRecords.Clear();
+        foreach (var bundle in _receivedBundles)
+        {
+            _receivingRecords.Add(new InventoryRecord(
+                bundle.ReceivedAt.ToString("g", CultureInfo.CurrentCulture),
+                bundle.GameId,
+                bundle.BundleId,
+                string.Empty,
+                string.Empty,
+                "Unopened"));
+        }
+
         foreach (var line in _imports)
             _inventoryRecords.Add(new InventoryRecord(
                 PlacementSourceLabel(line.Source),
@@ -2571,6 +2657,12 @@ public sealed partial class MainWindow : Window
                 continue;
 
             byGame[import.GameId] = GameCatalogRecord.FromImport(import.GameId);
+        }
+
+        foreach (var received in _receivedBundles)
+        {
+            if (!byGame.ContainsKey(received.GameId))
+                byGame[received.GameId] = GameCatalogRecord.FromImport(received.GameId) with { Source = "Receiving" };
         }
 
         foreach (var game in byGame.Values.OrderBy(g => g.GameId, StringComparer.OrdinalIgnoreCase))
@@ -2830,6 +2922,131 @@ public sealed partial class MainWindow : Window
     private void OpenBundleSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyInventoryPage(resetPage: true);
+    }
+
+    private void ReceivingListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RemoveReceivedBundleButton.IsEnabled =
+            ReceivingListView.SelectedItem is InventoryRecord && IsLicenseAvailableForOperation();
+    }
+
+    private void InventoryListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RemoveActiveBundleButton.IsEnabled =
+            InventoryListView.SelectedItem is InventoryRecord && IsLicenseAvailableForOperation();
+    }
+
+    private async void RemoveReceivedBundleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureLicenseAllowsOperation("removing received inventory") ||
+            ReceivingListView.SelectedItem is not InventoryRecord selected)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Remove received bundle?",
+            Content = $"Remove game {selected.GameId}, bundle {selected.BundleId} from unopened receiving inventory? This does not delete sales or activation history.",
+            PrimaryButtonText = "Remove Bundle",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+
+        _isWorkflowDialogOpen = true;
+        ContentDialogResult result;
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
+
+        if (result != ContentDialogResult.Primary)
+            return;
+
+        try
+        {
+            _store.DeleteReceivedBundle(selected.GameId, selected.BundleId);
+            var bundle = _receivedBundles.FirstOrDefault(item =>
+                string.Equals(item.GameId, selected.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.BundleId, selected.BundleId, StringComparison.OrdinalIgnoreCase));
+            if (bundle is not null)
+                _receivedBundles.Remove(bundle);
+            TryRecordAudit(
+                "inventory",
+                "Received bundle removed",
+                $"Game {selected.GameId}, bundle {selected.BundleId}; sales and activation history unchanged");
+            StatusText.Text = $"Removed received bundle {selected.BundleId}.";
+            RefreshOperationalPages();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to remove received bundle: {ex.Message}";
+        }
+    }
+
+    private async void RemoveActiveBundleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureLicenseAllowsOperation("removing active inventory") ||
+            InventoryListView.SelectedItem is not InventoryRecord selected)
+        {
+            return;
+        }
+
+        var activeBundle = _imports.FirstOrDefault(item =>
+            string.Equals(item.GameId, selected.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.BundleId, selected.BundleId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.Bin, selected.Bin, StringComparison.OrdinalIgnoreCase));
+        if (activeBundle is null)
+        {
+            StatusText.Text = "The selected active bundle no longer exists.";
+            RefreshOperationalPages();
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Remove active bundle?",
+            Content = $"Remove game {activeBundle.GameId}, bundle {activeBundle.BundleId} from bin {activeBundle.Bin}? Recorded sales and activation history will remain unchanged.",
+            PrimaryButtonText = "Remove Bundle",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close
+        };
+
+        _isWorkflowDialogOpen = true;
+        ContentDialogResult result;
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
+
+        if (result != ContentDialogResult.Primary)
+            return;
+
+        try
+        {
+            _store.DeleteImport(activeBundle.GameId, activeBundle.BundleId, activeBundle.Bin);
+            _imports.Remove(activeBundle);
+            TryRecordAudit(
+                "inventory",
+                "Active bundle removed",
+                $"Game {activeBundle.GameId}, bundle {activeBundle.BundleId}, bin {activeBundle.Bin}; sales and activation history unchanged");
+            StatusText.Text = $"Removed bundle {activeBundle.BundleId} from bin {activeBundle.Bin}.";
+            RefreshOperationalPages();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to remove active bundle: {ex.Message}";
+        }
     }
 
     private void ClosingHistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -3611,6 +3828,424 @@ public sealed partial class MainWindow : Window
             string.Equals(i.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(i.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
 
+    private bool PhysicalBundleExists(string gameId, string bundleId) =>
+        _imports.Any(bundle =>
+            string.Equals(bundle.GameId, gameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(bundle.BundleId, bundleId, StringComparison.OrdinalIgnoreCase)) ||
+        _receivedBundles.Any(bundle =>
+            string.Equals(bundle.GameId, gameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(bundle.BundleId, bundleId, StringComparison.OrdinalIgnoreCase));
+
+    private async Task StartReceivingScanWorkflowAsync()
+    {
+        if (_isWorkflowDialogOpen)
+            return;
+
+        var stagedRows = new ObservableCollection<ReceivingScanRow>();
+        var stagedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dialogScanBuffer = new StringBuilder();
+        var statusText = new TextBlock
+        {
+            Text = "Ready. Scan any ticket barcode from each delivered bundle.",
+            Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+            TextWrapping = TextWrapping.Wrap
+        };
+        var totalText = new TextBlock
+        {
+            Text = "0",
+            Style = (Style)Application.Current.Resources["SlMetricTextStyle"],
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center
+        };
+        var scanList = new ListView
+        {
+            ItemsSource = stagedRows,
+            DisplayMemberPath = "ScannedText",
+            SelectionMode = ListViewSelectionMode.None,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+
+        void AcceptScan(string raw)
+        {
+            foreach (var segment in SplitImportScanInput(raw.Trim()))
+            {
+                var ticket = TryParseImportTicket(segment);
+                if (ticket is null)
+                {
+                    statusText.Text = "Scan was not recognized as a ticket barcode for the configured state.";
+                    TryRecordAudit("scanner", "Receiving scan rejected", $"Unrecognized scan {segment}");
+                    continue;
+                }
+
+                var key = BundleKey(ticket);
+                var duplicate = stagedKeys.Contains(key) || PhysicalBundleExists(ticket.GameId, ticket.BundleId);
+                if (duplicate)
+                {
+                    _ = SpeakAsync("Duplicate");
+                    continue;
+                }
+
+                stagedKeys.Add(key);
+                stagedRows.Insert(0, new ReceivingScanRow(ticket.GameId, ticket.BundleId));
+                totalText.Text = stagedRows.Count.ToString(CultureInfo.CurrentCulture);
+                statusText.Text = $"Game {ticket.GameId}, bundle {ticket.BundleId} added.";
+                TryRecordAudit(
+                    "scanner",
+                    "Receiving scan captured",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}; staged for receiving");
+            }
+        }
+
+        var content = new Grid
+        {
+            MinWidth = 320,
+            MinHeight = 360,
+            RowSpacing = 12,
+            ColumnSpacing = 12,
+            IsTabStop = true
+        };
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.AddHandler(
+            UIElement.KeyDownEvent,
+            new KeyEventHandler((_, args) => CaptureScanKey(args, dialogScanBuffer, AcceptScan, statusText)),
+            handledEventsToo: true);
+
+        var promptText = new TextBlock
+        {
+            Text = "Receiving captures Game ID + Bundle ID only. Ticket serial is ignored.",
+            Style = (Style)Application.Current.Resources["SlSectionTitleTextStyle"],
+            TextWrapping = TextWrapping.Wrap
+        };
+        Grid.SetColumnSpan(promptText, 2);
+        content.Children.Add(promptText);
+
+        var listGrid = new Grid { RowSpacing = 8 };
+        listGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        listGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        listGrid.Children.Add(new TextBlock
+        {
+            Text = "Bundles scanned",
+            Style = (Style)Application.Current.Resources["SlSectionTitleTextStyle"]
+        });
+        Grid.SetRow(scanList, 1);
+        listGrid.Children.Add(scanList);
+        var listPanel = new Border
+        {
+            Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            Child = listGrid
+        };
+        Grid.SetRow(listPanel, 1);
+        content.Children.Add(listPanel);
+
+        var totalPanel = new Border
+        {
+            Style = (Style)Application.Current.Resources["SlPanelBorderStyle"],
+            Child = new StackPanel
+            {
+                Spacing = 8,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    totalText,
+                    new TextBlock
+                    {
+                        Text = "bundles added to inventory",
+                        Style = (Style)Application.Current.Resources["SlCaptionTextStyle"],
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        TextAlignment = TextAlignment.Center,
+                        TextWrapping = TextWrapping.Wrap
+                    }
+                }
+            }
+        };
+        Grid.SetRow(totalPanel, 1);
+        Grid.SetColumn(totalPanel, 1);
+        content.Children.Add(totalPanel);
+
+        var cancelButton = new Button
+        {
+            Content = "Cancel Receiving",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MinWidth = 128
+        };
+        var footer = new Grid { ColumnSpacing = 12 };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.Children.Add(statusText);
+        Grid.SetColumn(cancelButton, 1);
+        footer.Children.Add(cancelButton);
+        Grid.SetRow(footer, 2);
+        Grid.SetColumnSpan(footer, 2);
+        content.Children.Add(footer);
+
+        void ApplyResponsiveLayout(double width)
+        {
+            var stacked = width > 0 && width < 640;
+            content.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
+            if (stacked)
+            {
+                if (content.RowDefinitions.Count == 3)
+                    content.RowDefinitions.Insert(2, new RowDefinition { Height = GridLength.Auto });
+                Grid.SetRow(totalPanel, 1);
+                Grid.SetColumn(totalPanel, 0);
+                Grid.SetColumnSpan(totalPanel, 2);
+                Grid.SetRow(listPanel, 2);
+                Grid.SetColumnSpan(listPanel, 2);
+                Grid.SetRow(footer, 3);
+            }
+            else
+            {
+                while (content.RowDefinitions.Count > 3)
+                    content.RowDefinitions.RemoveAt(2);
+                Grid.SetRow(listPanel, 1);
+                Grid.SetColumnSpan(listPanel, 1);
+                Grid.SetRow(totalPanel, 1);
+                Grid.SetColumn(totalPanel, 1);
+                Grid.SetColumnSpan(totalPanel, 1);
+                Grid.SetRow(footer, 2);
+            }
+        }
+
+        content.SizeChanged += (_, args) => ApplyResponsiveLayout(args.NewSize.Width);
+
+        void ApplyOverlaySize()
+        {
+            var width = ClosingScanOverlay.ActualWidth > 0 ? ClosingScanOverlay.ActualWidth : RootGrid.ActualWidth;
+            var height = ClosingScanOverlay.ActualHeight > 0 ? ClosingScanOverlay.ActualHeight : RootGrid.ActualHeight;
+            ClosingScanOverlayPanel.Width = Math.Max(360, Math.Min(1120, width - 96));
+            ClosingScanOverlayPanel.Height = Math.Max(420, Math.Min(760, height - 120));
+            content.Width = Math.Max(320, ClosingScanOverlayPanel.Width - 32);
+            content.Height = Math.Max(360, ClosingScanOverlayPanel.Height - 84);
+            scanList.MaxHeight = Math.Max(180, content.Height - 100);
+            ApplyResponsiveLayout(content.Width);
+        }
+
+        var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishing = false;
+        RoutedEventHandler finishHandler = async (_, _) =>
+        {
+            if (finishing)
+                return;
+
+            finishing = true;
+            ClosingScanOverlayCloseButton.IsEnabled = false;
+            try
+            {
+                if (stagedRows.Count == 0)
+                {
+                    TryRecordAudit("inventory", "Receiving scan finalized", "0 bundles received");
+                    completed.TrySetResult(false);
+                    return;
+                }
+
+                foreach (var gameId in stagedRows
+                             .Select(row => row.GameId)
+                             .Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (GamePriceCents(gameId) > 0)
+                        continue;
+
+                    var sample = stagedRows.First(row =>
+                        string.Equals(row.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+                    if (!await ShowReceivingPriceDialogAsync(sample))
+                    {
+                        statusText.Text = $"Price is required for game {gameId}. Receiving remains open.";
+                        TryRecordAudit(
+                            "inventory",
+                            "Receiving finalization paused",
+                            $"Game {gameId} still requires price confirmation; no bundles committed");
+                        _ = content.Focus(FocusState.Programmatic);
+                        return;
+                    }
+                }
+
+                var receivedAtUtc = DateTime.UtcNow;
+                var stored = stagedRows
+                    .Select(row => new StoredReceivedBundle(row.GameId, row.BundleId, receivedAtUtc))
+                    .ToList();
+                _store.InsertReceivedBundles(stored);
+                foreach (var bundle in stored)
+                {
+                    _receivedBundles.Insert(0, new ReceivedBundleLine(
+                        bundle.GameId,
+                        bundle.BundleId,
+                        bundle.ReceivedAtUtc.ToLocalTime(),
+                        bundle.Source));
+                    TryRecordAudit(
+                        "inventory",
+                        "Bundle received",
+                        $"Game {bundle.GameId}, bundle {bundle.BundleId}, source receiving");
+                }
+
+                TryRecordAudit(
+                    "inventory",
+                    "Receiving scan finalized",
+                    $"{stored.Count.ToString(CultureInfo.InvariantCulture)} bundles committed to unopened inventory");
+
+                completed.TrySetResult(true);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Inventory receiving could not be finalized.", ex);
+                statusText.Text = $"Unable to save received inventory: {ex.Message}";
+                TryRecordAudit("inventory", "Receiving finalization failed", ex.Message);
+            }
+            finally
+            {
+                finishing = false;
+                ClosingScanOverlayCloseButton.IsEnabled = true;
+            }
+        };
+        RoutedEventHandler cancelHandler = async (_, _) =>
+        {
+            if (finishing)
+                return;
+
+            if (stagedRows.Count == 0)
+            {
+                TryRecordAudit("inventory", "Receiving scan cancelled", "0 staged bundles");
+                completed.TrySetResult(false);
+                return;
+            }
+
+            var confirm = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Discard receiving scans?",
+                Content = $"Discard {stagedRows.Count.ToString(CultureInfo.CurrentCulture)} scanned bundle{(stagedRows.Count == 1 ? string.Empty : "s")}?",
+                PrimaryButtonText = "Discard",
+                CloseButtonText = "Keep Scanning",
+                DefaultButton = ContentDialogButton.Close
+            };
+            if (await confirm.ShowAsync() == ContentDialogResult.Primary)
+            {
+                TryRecordAudit(
+                    "inventory",
+                    "Receiving scan cancelled",
+                    $"Discarded {stagedRows.Count.ToString(CultureInfo.InvariantCulture)} staged bundle scans");
+                completed.TrySetResult(false);
+            }
+            else
+                _ = content.Focus(FocusState.Programmatic);
+        };
+        SizeChangedEventHandler overlaySizeChanged = (_, _) => ApplyOverlaySize();
+
+        ClosingScanOverlayCloseButton.Click += finishHandler;
+        cancelButton.Click += cancelHandler;
+        ClosingScanOverlay.SizeChanged += overlaySizeChanged;
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            TryRecordAudit("inventory", "Receiving scan started", "Focused receiving session opened");
+            ClosingScanOverlayTitleText.Text = "Receive New Inventory";
+            ClosingScanOverlayCloseButton.Content = "Close scanning";
+            ClosingScanOverlayContent.Children.Clear();
+            ClosingScanOverlayContent.Children.Add(content);
+            ClosingScanOverlay.Visibility = Visibility.Visible;
+            ApplyOverlaySize();
+            _ = content.Focus(FocusState.Programmatic);
+            var saved = await completed.Task;
+            if (saved)
+            {
+                StatusText.Text = $"Received {stagedRows.Count.ToString(CultureInfo.CurrentCulture)} new bundle{(stagedRows.Count == 1 ? string.Empty : "s")}.";
+                _ = SpeakAsync("Receiving complete");
+                RefreshOperationalPages();
+                foreach (var gameId in stagedRows.Select(row => row.GameId).Distinct(StringComparer.OrdinalIgnoreCase))
+                    _ = EnsureGameImageCachedForGameAsync(gameId);
+            }
+        }
+        finally
+        {
+            ClosingScanOverlayCloseButton.Click -= finishHandler;
+            cancelButton.Click -= cancelHandler;
+            ClosingScanOverlay.SizeChanged -= overlaySizeChanged;
+            ClosingScanOverlay.Visibility = Visibility.Collapsed;
+            ClosingScanOverlayContent.Children.Clear();
+            ClosingScanOverlayCloseButton.Content = "Close scanning";
+            ClosingScanOverlayCloseButton.IsEnabled = true;
+            _isWorkflowDialogOpen = false;
+        }
+    }
+
+    private async Task<bool> ShowReceivingPriceDialogAsync(ReceivingScanRow bundle)
+    {
+        var existingGame = FindKnownGame(bundle.GameId);
+        var nameBox = new TextBox
+        {
+            Header = "Game name",
+            Text = existingGame?.Name is { Length: > 0 } existingName ? existingName : $"Game {bundle.GameId}",
+            PlaceholderText = "Display name"
+        };
+        var priceBox = new NumberBox
+        {
+            Header = "Game price ($)",
+            Value = existingGame?.PriceCents > 0 ? existingGame.PriceCents / 100d : double.NaN,
+            Minimum = 1,
+            SmallChange = 1,
+            LargeChange = 5,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
+        var statusText = new TextBlock
+        {
+            Text = "Confirm a positive ticket price before receiving this game.",
+            TextWrapping = TextWrapping.Wrap
+        };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Game price required",
+            Content = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Game {bundle.GameId} | Bundle {bundle.BundleId}",
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    nameBox,
+                    priceBox,
+                    statusText
+                }
+            },
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (PriceCentsFromNumberBox(priceBox) > 0)
+                return;
+
+            args.Cancel = true;
+            statusText.Text = "Enter a positive ticket price before continuing.";
+        };
+        dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            return false;
+
+        var priceCents = PriceCentsFromNumberBox(priceBox);
+        if (priceCents <= 0)
+            return false;
+
+        UpsertManualGameRecord(new GameCatalogRecord(
+            bundle.GameId,
+            string.IsNullOrWhiteSpace(nameBox.Text) ? $"Game {bundle.GameId}" : nameBox.Text.Trim(),
+            priceCents,
+            "Receiving",
+            existingGame?.ImageUri ?? DefaultGameImageUri,
+            existingGame?.ImageStatus ?? "Image not uploaded"));
+        return true;
+    }
+
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
     {
         await StartClosingScanWorkflowAsync();
@@ -3639,6 +4274,7 @@ public sealed partial class MainWindow : Window
         RefreshClosingBins();
         ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
         AppLog.Info("Closing scan overlay starting.");
+        TryRecordAudit("closing", "Closing scan started", $"{ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture)} active bins expected");
         _ = SpeakAsync("Start scanning.");
 
         var dialogScanBuffer = new StringBuilder();
@@ -3704,6 +4340,7 @@ public sealed partial class MainWindow : Window
             catch (Exception ex)
             {
                 AppLog.Error("Closing scan failed to process barcode.", ex);
+                TryRecordAudit("closing", "Closing scan processing failed", ex.Message);
                 statusText.Text = $"Closing scan failed to process the last barcode: {ex.Message}";
                 ClosingStatusText.Text = "Closing scan failed to process the last barcode. Re-scan or close scanning and restart.";
             }
@@ -3920,6 +4557,10 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlayContent.Children.Clear();
 
             AppLog.Info($"Closing scan overlay closed. rows={_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}; scannedBins={_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}; issues={_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}; unmatched={_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}.");
+            TryRecordAudit(
+                "closing",
+                "Closing scan closed",
+                $"Rows {_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}, scanned bins {_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}, issues {_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}, unmatched {_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}");
             _isWorkflowDialogOpen = false;
             _closingScanCaptured = true;
             RefreshClosingBins();
@@ -3953,6 +4594,10 @@ public sealed partial class MainWindow : Window
                 }
 
                 _closingScanRows.Insert(0, new ClosingScanRow(raw, "No active bin"));
+                TryRecordAudit(
+                    "closing",
+                    "Closing scan unmatched",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}; no active bin");
                 statusText.Text = $"No active bin matched scan {raw}.";
                 return;
             }
@@ -3965,6 +4610,10 @@ public sealed partial class MainWindow : Window
             _closingScanRows.Insert(0, new ClosingScanRow(
                 $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {backfill.Sale.Ticket}",
                 "Scanned"));
+            TryRecordAudit(
+                "closing",
+                "Closing scan captured",
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned ticket {ticket.Ticket}, reconciled range {backfill.Sale.Ticket}, quantity {backfill.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {backfill.Sale.AmountText}, next {backfill.NextTicket}");
             statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. {backfill.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(backfill.Sale.Quantity == 1 ? string.Empty : "s")} captured.";
             return;
         }
@@ -3972,6 +4621,7 @@ public sealed partial class MainWindow : Window
         if (TryParseBinNumber(raw, out var directBin) && IsConfiguredBin(directBin))
         {
             _closingScanRows.Insert(0, new ClosingScanRow(raw, "Ignored bin scan"));
+            TryRecordAudit("closing", "Closing bin scan ignored", $"Bin {directBin.ToString(CultureInfo.InvariantCulture)}; closing accepts ticket barcodes only");
             statusText.Text = "Closing scan accepts ticket barcodes only. Bin scan ignored.";
             return;
         }
@@ -3980,6 +4630,7 @@ public sealed partial class MainWindow : Window
         AddClosingScanIssue(
             "Unrecognized scan",
             $"Scan {raw} was not recognized as a ticket barcode. Re-scan the ticket or resolve before finalizing.");
+        TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
         statusText.Text = $"Scan was not recognized: {raw}";
     }
 
@@ -4045,6 +4696,8 @@ public sealed partial class MainWindow : Window
     private List<ImportLine> ClosingSoldOutBundles() =>
         _imports
             .Where(i => !_closingScannedBundleKeys.Contains(BundleKey(i)))
+            .GroupBy(i => BundleKey(i), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToList();
 
     private async void ResolveClosingIssuesButton_Click(object sender, RoutedEventArgs e)
@@ -4169,6 +4822,10 @@ public sealed partial class MainWindow : Window
             if (result != ContentDialogResult.Primary && selectedBin is null)
             {
                 ClosingStatusText.Text = "Unmatched scan assignment cancelled.";
+                TryRecordAudit(
+                    "closing",
+                    "Closing reconciliation cancelled",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket} remains unmatched");
                 break;
             }
 
@@ -4185,6 +4842,10 @@ public sealed partial class MainWindow : Window
             _closingScannedBundleKeys.Add(BundleKey(ticket));
             _closingUnmatchedTickets.RemoveAt(0);
             ClosingStatusText.Text = $"Resolved game {ticket.GameId}, bundle {ticket.BundleId} to bin {bin}.";
+            TryRecordAudit(
+                "closing",
+                "Closing bundle reconciled",
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}, assigned bin {bin}");
         }
 
         RefreshClosingBins();
@@ -4233,6 +4894,7 @@ public sealed partial class MainWindow : Window
             (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
             MidpointRounding.AwayFromZero);
         var expectedCashCents = instantTicketSalesCents + onlineSaleCents - instantCashoutCents - onlineCashoutCents;
+        var activatedBundles = CurrentShiftActivationCount();
         var selectedEmailAttachments = SelectedSettingsEmailReportNames();
         var closingEmailSummary = BuildClosingEmailSummaryText(
             SettingsEmailSendCheckBox.IsChecked == true,
@@ -4242,7 +4904,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Finalize shift closing?",
-            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {closedBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedBundles.Count == 1 ? string.Empty : "s")} will be closed out as closing gap-fill sold.{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {closedBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedBundles.Count == 1 ? string.Empty : "s")} will be closed out as closing gap-fill sold.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Finalize Closing",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -4278,6 +4940,7 @@ public sealed partial class MainWindow : Window
                 onlineCashoutCents,
                 instantCashoutCents,
                 expectedCashCents,
+                activatedBundles,
                 selectedEmailAttachments);
         }
         catch (Exception ex)
@@ -4306,11 +4969,12 @@ public sealed partial class MainWindow : Window
             expectedCashCents,
             closedBundles.Count,
             _closingCurrentPlacements.Count,
-            _closingResolvedPlacements.Count);
+            _closingResolvedPlacements.Count,
+            activatedBundles);
         var auditRecord = NewAuditRecord(
             "closing",
             "Shift closed",
-            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundles.Count.ToString(CultureInfo.InvariantCulture)} closed bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, expected cash {MoneyText(expectedCashCents)}");
+            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundles.Count.ToString(CultureInfo.InvariantCulture)} closed bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
         try
         {
             _store.CompleteClosing(
@@ -4336,7 +5000,14 @@ public sealed partial class MainWindow : Window
         foreach (var placement in _closingCurrentPlacements)
             ReplaceImportLine(placement);
         foreach (var placement in _closingResolvedPlacements)
+        {
             _imports.Add(placement);
+            var received = _receivedBundles.FirstOrDefault(bundle =>
+                string.Equals(bundle.GameId, placement.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(bundle.BundleId, placement.BundleId, StringComparison.OrdinalIgnoreCase));
+            if (received is not null)
+                _receivedBundles.Remove(received);
+        }
         foreach (var generated in generatedSales)
             _allSales.Insert(0, generated);
         _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
@@ -4413,6 +5084,7 @@ public sealed partial class MainWindow : Window
         long onlineCashoutCents,
         long instantCashoutCents,
         long expectedCashCents,
+        int activatedBundleCount,
         IReadOnlyList<string> selectedEmailAttachments)
     {
         Directory.CreateDirectory(target.Folder);
@@ -4426,8 +5098,8 @@ public sealed partial class MainWindow : Window
             Path.Combine(target.Folder, "shift_summary.csv"),
             new[]
             {
-                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles"),
-                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, _closingScannedBins.Count.ToString(CultureInfo.InvariantCulture), ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture))
+                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles", "activated_bundles"),
+                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, _closingScannedBins.Count.ToString(CultureInfo.InvariantCulture), ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture))
             },
             Encoding.UTF8);
 
@@ -4452,13 +5124,14 @@ public sealed partial class MainWindow : Window
                 CsvLine("closing_finalized", $"shift={target.ShiftLabel}; expected_cash={MoneyCsv(expectedCashCents)}; report_folder={target.Folder}"),
                 CsvLine("cash_formula", formula),
                 CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}"),
+                CsvLine("activated_bundles", activatedBundleCount.ToString(CultureInfo.InvariantCulture)),
                 CsvLine("email_attachments", string.Join(";", selectedEmailAttachments)),
                 CsvLine("pdf_report", Path.Combine(target.Folder, "closing_report.pdf"))
             },
             Encoding.UTF8);
         File.WriteAllText(
             Path.Combine(target.Folder, "closing_report.txt"),
-            BuildClosingReportText(target, periodStart, periodEnd, sales, instantTicketSalesCents, onlineSaleCents, onlineCashoutCents, instantCashoutCents, expectedCashCents, closedBundles.Count, currentBundles.Count, resolvedBundles.Count),
+            BuildClosingReportText(target, periodStart, periodEnd, sales, instantTicketSalesCents, onlineSaleCents, onlineCashoutCents, instantCashoutCents, expectedCashCents, closedBundles.Count, currentBundles.Count, resolvedBundles.Count, activatedBundleCount),
             Encoding.UTF8);
         WriteClosingPdfReport(
             Path.Combine(target.Folder, "closing_report.pdf"),
@@ -4473,7 +5146,8 @@ public sealed partial class MainWindow : Window
             expectedCashCents,
             closedBundles.Count,
             currentBundles.Count,
-            resolvedBundles.Count);
+            resolvedBundles.Count,
+            activatedBundleCount);
     }
 
     private static void WriteClosingPdfReport(
@@ -4489,7 +5163,8 @@ public sealed partial class MainWindow : Window
         long expectedCashCents,
         int closedBundleCount,
         int currentBundleCount,
-        int resolvedBundleCount)
+        int resolvedBundleCount,
+        int activatedBundleCount)
     {
         var pdf = new SimplePdfDocument();
         pdf.AddPage(BuildClosingPdfPage(
@@ -4504,7 +5179,8 @@ public sealed partial class MainWindow : Window
             expectedCashCents,
             closedBundleCount,
             currentBundleCount,
-            resolvedBundleCount));
+            resolvedBundleCount,
+            activatedBundleCount));
         pdf.Save(path);
     }
 
@@ -4520,13 +5196,13 @@ public sealed partial class MainWindow : Window
         long expectedCashCents,
         int closedBundleCount,
         int currentBundleCount,
-        int resolvedBundleCount)
+        int resolvedBundleCount,
+        int activatedBundleCount)
     {
         var builder = new StringBuilder();
         var totalSalesCents = instantTicketSalesCents + onlineSaleCents;
         var totalCashoutCents = instantCashoutCents + onlineCashoutCents;
         var ticketCount = sales.Sum(s => s.Quantity);
-        var saleCount = sales.Count;
         var denominations = PdfDenominations(sales);
 
         PdfRect(builder, 0, 744, 612, 48, 0.08, 0.16, 0.27, fill: true);
@@ -4562,7 +5238,7 @@ public sealed partial class MainWindow : Window
         PdfInventoryStat(builder, 58, 374, "Current bundles", currentBundleCount.ToString(CultureInfo.InvariantCulture));
         PdfInventoryStat(builder, 58, 348, "Closed out bundles", closedBundleCount.ToString(CultureInfo.InvariantCulture));
         PdfInventoryStat(builder, 58, 322, "Resolved bundles", resolvedBundleCount.ToString(CultureInfo.InvariantCulture));
-        PdfInventoryStat(builder, 58, 296, "Sales rows", saleCount.ToString(CultureInfo.InvariantCulture));
+        PdfInventoryStat(builder, 58, 296, "Activated bundles", activatedBundleCount.ToString(CultureInfo.InvariantCulture));
         PdfInventoryStat(builder, 58, 270, "Tickets", ticketCount.ToString(CultureInfo.InvariantCulture));
         PdfInventoryStat(builder, 58, 250, "Instant sales", PdfMoney(instantTicketSalesCents));
 
@@ -4840,7 +5516,8 @@ public sealed partial class MainWindow : Window
         long expectedCashCents,
         int closedBundleCount,
         int currentBundleCount,
-        int resolvedBundleCount)
+        int resolvedBundleCount,
+        int activatedBundleCount)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"Closing report: {target.ShiftLabel}");
@@ -4857,6 +5534,7 @@ public sealed partial class MainWindow : Window
         builder.AppendLine($"Closed bundles: {closedBundleCount.ToString(CultureInfo.CurrentCulture)}");
         builder.AppendLine($"Current bundles: {currentBundleCount.ToString(CultureInfo.CurrentCulture)}");
         builder.AppendLine($"Resolved bundles: {resolvedBundleCount.ToString(CultureInfo.CurrentCulture)}");
+        builder.AppendLine($"Activated bundles: {activatedBundleCount.ToString(CultureInfo.CurrentCulture)}");
         return builder.ToString();
     }
 
@@ -6098,6 +6776,24 @@ public sealed partial class MainWindow : Window
         public string BundleText => $"Bundle {BundleId}";
     }
 
+    private sealed record ReceivedBundleLine(
+        string GameId,
+        string BundleId,
+        DateTime ReceivedAt,
+        string Source);
+
+    private sealed record ReceivingScanRow(string GameId, string BundleId)
+    {
+        public string ScannedText => $"Game {GameId}  |  Bundle {BundleId}";
+    }
+
+    private sealed record ActivationLine(
+        DateTime ActivatedAt,
+        string GameId,
+        string BundleId,
+        string Bin,
+        string Source);
+
     private sealed record GameCatalogRecord(
         string GameId,
         string Name,
@@ -6187,7 +6883,8 @@ public sealed partial class MainWindow : Window
         decimal ExpectedCashAmount,
         int ClosedBundles,
         int CurrentBundles,
-        int ResolvedBundles)
+        int ResolvedBundles,
+        int ActivatedBundles)
     {
         public string ShiftText => string.IsNullOrWhiteSpace(ShiftLabel)
             ? $"{BusinessDate} #{ShiftSequence.ToString(CultureInfo.CurrentCulture)}"
@@ -6212,7 +6909,7 @@ public sealed partial class MainWindow : Window
         public string TicketText => TicketCount.ToString(CultureInfo.CurrentCulture);
         public string BinText => $"{ScannedBins.ToString(CultureInfo.CurrentCulture)} / {ActiveBins.ToString(CultureInfo.CurrentCulture)}";
         public string ReconciliationText =>
-            $"{ClosedBundles.ToString(CultureInfo.CurrentCulture)} closed, {CurrentBundles.ToString(CultureInfo.CurrentCulture)} updated, {ResolvedBundles.ToString(CultureInfo.CurrentCulture)} resolved";
+            $"{ClosedBundles.ToString(CultureInfo.CurrentCulture)} closed, {CurrentBundles.ToString(CultureInfo.CurrentCulture)} updated, {ResolvedBundles.ToString(CultureInfo.CurrentCulture)} resolved, {ActivatedBundles.ToString(CultureInfo.CurrentCulture)} activated";
         public bool HasReportFolder => !string.IsNullOrWhiteSpace(ReportFolder) && Directory.Exists(ReportFolder);
         public string ReportFolderText => string.IsNullOrWhiteSpace(ReportFolder)
             ? "No report folder recorded."
@@ -6249,7 +6946,8 @@ public sealed partial class MainWindow : Window
                 record.ExpectedCashCents / 100m,
                 record.ClosedBundles,
                 record.CurrentBundles,
-                record.ResolvedBundles);
+                record.ResolvedBundles,
+                record.ActivatedBundles);
 
         private string ShiftDateText()
         {

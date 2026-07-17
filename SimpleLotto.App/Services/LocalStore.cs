@@ -8,7 +8,7 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 9;
+    private const int SchemaVersion = 12;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -53,6 +53,8 @@ public sealed class LocalStore
         }
 
         state.Imports.AddRange(QueryImports(conn));
+        state.ReceivedBundles.AddRange(QueryReceivedBundles(conn));
+        state.Activations.AddRange(QueryActivations(conn));
         state.Sales.AddRange(QuerySales(conn));
         state.ManualGames.AddRange(QueryManualGames(conn));
         state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
@@ -161,7 +163,95 @@ public sealed class LocalStore
             saleCmd.ExecuteNonQuery();
         }
 
+        using (var receivedCmd = conn.CreateCommand())
+        {
+            receivedCmd.Transaction = tx;
+            receivedCmd.CommandText = """
+                DELETE FROM received_inventory
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                """;
+            receivedCmd.Parameters.AddWithValue("$game_id", import.GameId);
+            receivedCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
+            receivedCmd.ExecuteNonQuery();
+        }
+
+        if (string.Equals(import.Source, "activation", StringComparison.OrdinalIgnoreCase))
+        {
+            using var activationCmd = conn.CreateCommand();
+            activationCmd.Transaction = tx;
+            activationCmd.CommandText = """
+                INSERT INTO activation_events (activated_at_utc, game_id, bundle_id, bin, source)
+                VALUES ($activated_at_utc, $game_id, $bundle_id, $bin, $source)
+                """;
+            activationCmd.Parameters.AddWithValue("$activated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            activationCmd.Parameters.AddWithValue("$game_id", import.GameId);
+            activationCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
+            activationCmd.Parameters.AddWithValue("$bin", import.Bin);
+            activationCmd.Parameters.AddWithValue("$source", import.Source);
+            activationCmd.ExecuteNonQuery();
+        }
+
         tx.Commit();
+    }
+
+    public void InsertReceivedBundles(IEnumerable<StoredReceivedBundle> bundles)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        foreach (var bundle in bundles)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO received_inventory (game_id, bundle_id, received_at_utc, source)
+                VALUES ($game_id, $bundle_id, $received_at_utc, $source)
+                """;
+            cmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+            cmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+            cmd.Parameters.AddWithValue("$received_at_utc", bundle.ReceivedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            cmd.Parameters.AddWithValue("$source", bundle.Source);
+            cmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    public void DeleteReceivedBundle(string gameId, string bundleId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM received_inventory
+            WHERE game_id = $game_id
+              AND bundle_id = $bundle_id
+            """;
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Received bundle was not found.");
+    }
+
+    public void DeleteImport(string gameId, string bundleId, string bin)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM imports
+            WHERE id = (
+                SELECT id
+                FROM imports
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                  AND bin = $bin
+                ORDER BY id DESC
+                LIMIT 1)
+            """;
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        cmd.Parameters.AddWithValue("$bin", bin);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Active bundle was not found.");
     }
 
     public void InsertSaleAndUpdateImportTicket(StoredSaleLine sale, StoredImportLine bundle)
@@ -230,11 +320,11 @@ public sealed class LocalStore
                 INSERT INTO closing_history (
                     closed_at_utc, interval_start_utc, business_date, shift_sequence, shift_label, report_folder, scanned_bins, active_bins, sales_count, ticket_count,
                     sales_cents, online_sale_cents, online_cashout_cents, instant_cashout_cents, expected_cash_cents,
-                    closed_bundles, current_bundles, resolved_bundles)
+                    closed_bundles, current_bundles, resolved_bundles, activated_bundles)
                 VALUES (
                     $closed_at_utc, $interval_start_utc, $business_date, $shift_sequence, $shift_label, $report_folder, $scanned_bins, $active_bins, $sales_count, $ticket_count,
                     $sales_cents, $online_sale_cents, $online_cashout_cents, $instant_cashout_cents, $expected_cash_cents,
-                    $closed_bundles, $current_bundles, $resolved_bundles)
+                    $closed_bundles, $current_bundles, $resolved_bundles, $activated_bundles)
                 """;
             closingCmd.Parameters.AddWithValue("$closed_at_utc", closingRecord.ClosedAtUtc.ToString("O", CultureInfo.InvariantCulture));
             closingCmd.Parameters.AddWithValue("$interval_start_utc", closingRecord.IntervalStartUtc.ToString("O", CultureInfo.InvariantCulture));
@@ -254,6 +344,7 @@ public sealed class LocalStore
             closingCmd.Parameters.AddWithValue("$closed_bundles", closingRecord.ClosedBundles);
             closingCmd.Parameters.AddWithValue("$current_bundles", closingRecord.CurrentBundles);
             closingCmd.Parameters.AddWithValue("$resolved_bundles", closingRecord.ResolvedBundles);
+            closingCmd.Parameters.AddWithValue("$activated_bundles", closingRecord.ActivatedBundles);
             closingCmd.ExecuteNonQuery();
         }
 
@@ -326,6 +417,17 @@ public sealed class LocalStore
             importCmd.Parameters.AddWithValue("$source", bundle.Source);
             importCmd.Parameters.AddWithValue("$created_at_utc", closedAtUtc.ToString("O", CultureInfo.InvariantCulture));
             importCmd.ExecuteNonQuery();
+
+            using var receivedCmd = conn.CreateCommand();
+            receivedCmd.Transaction = tx;
+            receivedCmd.CommandText = """
+                DELETE FROM received_inventory
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                """;
+            receivedCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+            receivedCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+            receivedCmd.ExecuteNonQuery();
         }
 
         UpsertSetting(conn, tx, "last_close_utc", closedAtUtc.ToString("O", CultureInfo.InvariantCulture));
@@ -490,6 +592,28 @@ public sealed class LocalStore
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bundle ON imports(game_id, bundle_id)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bin ON imports(bin)");
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS received_inventory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id TEXT NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    received_at_utc TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'receiving',
+                    UNIQUE(game_id, bundle_id)
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_received_inventory_game ON received_inventory(game_id)");
+            Exec(conn, """
+                CREATE TABLE IF NOT EXISTS activation_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    activated_at_utc TEXT NOT NULL,
+                    game_id TEXT NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    bin TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'activation'
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_activation_events_activated_at ON activation_events(activated_at_utc)");
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS sales (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sold_at_utc TEXT NOT NULL,
@@ -525,7 +649,8 @@ public sealed class LocalStore
                     expected_cash_cents INTEGER NOT NULL DEFAULT 0,
                     closed_bundles INTEGER NOT NULL,
                     current_bundles INTEGER NOT NULL,
-                    resolved_bundles INTEGER NOT NULL
+                    resolved_bundles INTEGER NOT NULL,
+                    activated_bundles INTEGER NOT NULL DEFAULT 0
                 )
                 """);
             EnsureColumn(conn, "closing_history", "interval_start_utc", "TEXT NOT NULL DEFAULT ''");
@@ -537,6 +662,7 @@ public sealed class LocalStore
             EnsureColumn(conn, "closing_history", "online_cashout_cents", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(conn, "closing_history", "instant_cashout_cents", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(conn, "closing_history", "expected_cash_cents", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(conn, "closing_history", "activated_bundles", "INTEGER NOT NULL DEFAULT 0");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_closed_at ON closing_history(closed_at_utc)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_business_date ON closing_history(business_date)");
             Exec(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_closing_history_business_shift ON closing_history(business_date, shift_sequence) WHERE business_date <> '' AND shift_sequence > 0");
@@ -551,6 +677,8 @@ public sealed class LocalStore
                 )
                 """);
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log(occurred_at_utc)");
+            RepairDuplicateImports(conn);
+            Exec(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_imports_physical_bundle_unique ON imports(trim(game_id) COLLATE NOCASE, trim(bundle_id) COLLATE NOCASE)");
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS manual_games (
                     game_id TEXT PRIMARY KEY,
@@ -582,7 +710,7 @@ public sealed class LocalStore
                 """);
             EnsureColumn(conn, "rdisplay_displays", "last_server_url", "TEXT NOT NULL DEFAULT ''");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_rdisplay_displays_token ON rdisplay_displays(auth_token)");
-            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Add closing business date/shift sequence and upgrade-ready schema ledger");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Enforce unique physical bundles and repair duplicate active inventory");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             _schemaReady = true;
         }
@@ -596,6 +724,39 @@ public sealed class LocalStore
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : 0;
+    }
+
+    private static void RepairDuplicateImports(SqliteConnection conn)
+    {
+        using var countCmd = conn.CreateCommand();
+        countCmd.CommandText = """
+            SELECT COALESCE(SUM(bundle_count - 1), 0)
+            FROM (
+                SELECT COUNT(*) AS bundle_count
+                FROM imports
+                GROUP BY lower(trim(game_id)), lower(trim(bundle_id))
+                HAVING COUNT(*) > 1)
+            """;
+        var duplicateCount = Convert.ToInt32(countCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (duplicateCount <= 0)
+            return;
+
+        Exec(conn, """
+            DELETE FROM imports
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM imports
+                GROUP BY lower(trim(game_id)), lower(trim(bundle_id)))
+            """);
+
+        using var auditCmd = conn.CreateCommand();
+        auditCmd.CommandText = """
+            INSERT INTO audit_log (occurred_at_utc, category, action, actor, detail)
+            VALUES ($occurred_at_utc, 'inventory', 'Duplicate active bundles repaired', 'System', $detail)
+            """;
+        auditCmd.Parameters.AddWithValue("$occurred_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        auditCmd.Parameters.AddWithValue("$detail", $"Removed {duplicateCount.ToString(CultureInfo.InvariantCulture)} duplicate active bundle record(s); kept the most recently recorded placement for each Game ID + Bundle ID.");
+        auditCmd.ExecuteNonQuery();
     }
 
     private static void RecordSchemaMigration(SqliteConnection conn, int version, int previousVersion, string description)
@@ -622,6 +783,46 @@ public sealed class LocalStore
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             rows.Add(new StoredImportLine(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+        return rows;
+    }
+
+    private static List<StoredReceivedBundle> QueryReceivedBundles(SqliteConnection conn)
+    {
+        var rows = new List<StoredReceivedBundle>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT game_id, bundle_id, received_at_utc, source FROM received_inventory ORDER BY id DESC";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var receivedAt = DateTime.TryParse(
+                reader.GetString(2),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var parsed)
+                ? parsed
+                : DateTime.UtcNow;
+            rows.Add(new StoredReceivedBundle(reader.GetString(0), reader.GetString(1), receivedAt, reader.GetString(3)));
+        }
+
+        return rows;
+    }
+
+    private static List<StoredActivationRecord> QueryActivations(SqliteConnection conn)
+    {
+        var rows = new List<StoredActivationRecord>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT activated_at_utc, game_id, bundle_id, bin, source FROM activation_events ORDER BY id DESC";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new StoredActivationRecord(
+                ReadDateTime(reader.GetString(0)),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4)));
+        }
+
         return rows;
     }
 
@@ -671,7 +872,7 @@ public sealed class LocalStore
             SELECT closed_at_utc, interval_start_utc, business_date, shift_sequence, shift_label, report_folder,
                    scanned_bins, active_bins, sales_count, ticket_count,
                    sales_cents, online_sale_cents, online_cashout_cents, instant_cashout_cents, expected_cash_cents,
-                   closed_bundles, current_bundles, resolved_bundles
+                   closed_bundles, current_bundles, resolved_bundles, activated_bundles
             FROM closing_history
             ORDER BY closed_at_utc DESC
             """;
@@ -700,7 +901,8 @@ public sealed class LocalStore
                 reader.GetInt64(14),
                 reader.GetInt32(15),
                 reader.GetInt32(16),
-                reader.GetInt32(17)));
+                reader.GetInt32(17),
+                reader.GetInt32(18)));
         }
 
         return rows;
@@ -835,6 +1037,8 @@ public sealed class PersistedState
 {
     public Dictionary<string, string> Settings { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<StoredImportLine> Imports { get; } = new();
+    public List<StoredReceivedBundle> ReceivedBundles { get; } = new();
+    public List<StoredActivationRecord> Activations { get; } = new();
     public List<StoredSaleLine> Sales { get; } = new();
     public List<StoredGameRecord> ManualGames { get; } = new();
     public List<StoredRdisplayDisplay> RdisplayDisplays { get; } = new();
@@ -856,6 +1060,10 @@ public sealed record StoreSetup(
     string ClerkPasswordHash);
 
 public sealed record StoredImportLine(string GameId, string BundleId, string Ticket, string Bin, string Source);
+
+public sealed record StoredReceivedBundle(string GameId, string BundleId, DateTime ReceivedAtUtc, string Source = "receiving");
+
+public sealed record StoredActivationRecord(DateTime ActivatedAtUtc, string GameId, string BundleId, string Bin, string Source = "activation");
 
 public sealed record StoredSaleLine(
     DateTime SoldAtUtc,
@@ -884,7 +1092,8 @@ public sealed record StoredClosingRecord(
     long ExpectedCashCents,
     int ClosedBundles,
     int CurrentBundles,
-    int ResolvedBundles);
+    int ResolvedBundles,
+    int ActivatedBundles);
 
 public sealed record StoredAuditRecord(
     DateTime OccurredAtUtc,
