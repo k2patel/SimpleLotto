@@ -57,6 +57,7 @@
         <Setter Property="Background" Value="{ThemeResource SlShiftActionBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource SlWarningBrush}"/>
         <Setter Property="Foreground" Value="{ThemeResource SlTextBrush}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource ControlCornerRadius}"/>
         <Setter Property="MinHeight" Value="34"/>
     </Style>
 
@@ -64,6 +65,7 @@
         <Setter Property="Background" Value="{ThemeResource SlLogoutActionBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource SlDangerBrush}"/>
         <Setter Property="Foreground" Value="{ThemeResource SlTextBrush}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource ControlCornerRadius}"/>
         <Setter Property="MinHeight" Value="34"/>
     </Style>
 </ResourceDictionary>
