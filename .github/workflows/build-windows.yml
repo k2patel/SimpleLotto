@@ -276,6 +276,46 @@ jobs:
           $folderId = "${{ steps.zipline_folder.outputs.folder_id }}"
           if ([string]::IsNullOrWhiteSpace($folderId)) { throw "Zipline release folder id was not resolved" }
 
+          function Invoke-Zipline {
+            param([string]$Label, [string[]]$Arguments)
+            $responsePath = Join-Path $env:RUNNER_TEMP "$($Label)-response.txt"
+            Remove-Item -Path $responsePath -Force -ErrorAction SilentlyContinue
+            $status = & curl.exe --silent --show-error --location @Arguments --output "$responsePath" --write-out "%{http_code}"
+            $code = 0
+            $parsed = [int]::TryParse($status.Trim(), [ref]$code)
+            return [pscustomobject]@{
+              ExitCode = $LASTEXITCODE
+              Status = $status
+              StatusCode = $code
+              StatusParsed = $parsed
+              Body = if (Test-Path $responsePath) { Get-Content -Path $responsePath -Raw } else { "" }
+            }
+          }
+
+          function Assert-Zipline {
+            param($Result, [int[]]$AllowedStatus = @(200, 201, 204))
+            if ($Result.ExitCode -ne 0 -or -not $Result.StatusParsed -or -not ($AllowedStatus -contains $Result.StatusCode)) {
+              throw "Zipline call failed with exit code $($Result.ExitCode) HTTP $($Result.Status) body: $($Result.Body)"
+            }
+          }
+
+          $encodedFileName = [System.Uri]::EscapeDataString($installer.Name)
+          $existing = Invoke-Zipline "list-installer" @(
+            "--request", "GET",
+            "--header", "Authorization: $env:ZIPLINE_TOKEN",
+            "https://files.k2patel.in/api/user/files?page=1&searchField=name&searchQuery=$encodedFileName"
+          )
+          Assert-Zipline $existing
+          $existingFiles = @((($existing.Body | ConvertFrom-Json).page) | Where-Object { $_.name -eq $installer.Name })
+          foreach ($existingFile in $existingFiles) {
+            $delete = Invoke-Zipline "delete-installer-$($existingFile.id)" @(
+              "--request", "DELETE",
+              "--header", "Authorization: $env:ZIPLINE_TOKEN",
+              "https://files.k2patel.in/api/user/files/$($existingFile.id)"
+            )
+            Assert-Zipline $delete
+          }
+
           $responsePath = Join-Path $env:RUNNER_TEMP "zipline-installer-response.txt"
           $response = ""
           $httpStatus = ""
