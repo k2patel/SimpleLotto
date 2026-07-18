@@ -2685,6 +2685,10 @@ public sealed partial class MainWindow : Window
         {
             DashboardContent.Visibility = Visibility.Visible;
             SectionContent.Visibility = Visibility.Collapsed;
+            BinsContent.Visibility = Visibility.Collapsed;
+            InventoryContent.Visibility = Visibility.Collapsed;
+            ClosingContent.Visibility = Visibility.Collapsed;
+            SettingsContent.Visibility = Visibility.Collapsed;
             SetSelectedNav(section);
             StatusText.Text = "Dashboard";
             return;

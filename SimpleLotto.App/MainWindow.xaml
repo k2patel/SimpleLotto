@@ -18,9 +18,10 @@
                 Background="{ThemeResource SlSurfaceBrush}"
                 BorderBrush="{ThemeResource SlBorderBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="16,14">
-            <Grid ColumnSpacing="16">
+                Padding="16,8">
+            <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
@@ -47,12 +48,106 @@
 
                 <StackPanel Grid.Column="2"
                             Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
                             Spacing="8">
-                    <Button x:Name="ScanNewInventoryButton"
-                            Content="Scan New Inventory"
-                            MinWidth="148"
-                            Visibility="{Binding Visibility, ElementName=InventoryContent}"
-                            Click="ScanNewInventoryButton_Click"/>
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding Visibility, ElementName=BinsContent}">
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsTotalText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Total bins" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsActiveText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Active bins" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsBundleText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="108" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsShiftSalesText" Text="$0.00" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Sales" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding Visibility, ElementName=InventoryContent}">
+                        <Border Width="132" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="InventoryReceivingCountText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Unopened bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="132" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="InventoryBundleCountText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Active bin bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding Visibility, ElementName=ClosingContent}">
+                        <Border Width="88" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingSalesText" Text="$0.00" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Sales" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingTicketsText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Total tickets" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingEvidenceText" Text="0 / 0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Bins scanned" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="82" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingActivatedText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Activated" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="110" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingExpectedCashText" Text="$0.00" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Expected cash" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="3"
+                            VerticalAlignment="Center"
+                            Spacing="4">
+                    <Button x:Name="CloseShiftButton"
+                            Content="Close Shift"
+                            Style="{StaticResource SlShiftActionButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            ToolTipService.ToolTip="Close the current shift"
+                            Click="CloseShiftButton_Click"/>
+                    <Button x:Name="LogoutButton"
+                            Content="Logout"
+                            Style="{StaticResource SlLogoutActionButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            ToolTipService.ToolTip="Log out of SimpleLotto"
+                            Click="LogoutButton_Click"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -91,7 +186,6 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="NavColumn" Width="190"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="132"/>
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
@@ -362,66 +456,20 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <Grid>
                         <Grid x:Name="BinsContent"
-                              RowSpacing="16">
+                              RowSpacing="16"
+                              Visibility="Collapsed">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="160"/>
-                                </Grid.ColumnDefinitions>
+                            <Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Bins"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
                                     <TextBlock Text="Active and dormant bundle display state. Placement scans assign unplaced bundles; moves are manual from a bin."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsTotalText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Total bins"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsActiveText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Active bins"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="3"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsBundleText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Bundles"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="4"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsShiftSalesText"
-                                                   Text="$0.00"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Sales"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
                             </Grid>
 
                             <Grid Grid.Row="1"
@@ -657,38 +705,13 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="180"/>
-                                </Grid.ColumnDefinitions>
+                            <Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Inventory"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
                                     <TextBlock Text="Receiving is unopened stock intake. Initial import and activation are active bin placement records."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="InventoryReceivingCountText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Unopened bundles"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="InventoryBundleCountText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Active bin bundles"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
                             </Grid>
 
                             <TabView x:Name="InventoryTabs"
@@ -1159,71 +1182,13 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="120"/>
-                                    <ColumnDefinition Width="120"/>
-                                    <ColumnDefinition Width="120"/>
-                                    <ColumnDefinition Width="110"/>
-                                    <ColumnDefinition Width="135"/>
-                                </Grid.ColumnDefinitions>
+                            <Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Closing"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
                                     <TextBlock Text="Shift balancing keeps sales totals, inventory evidence, and reconciliation separate."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingSalesText"
-                                                   Text="$0.00"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Sales"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingTicketsText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Total tickets"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="3"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingEvidenceText"
-                                                   Text="0 / 0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Bins scanned"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="4"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingActivatedText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Activated"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="5"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingExpectedCashText"
-                                                   Text="$0.00"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Expected cash"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
                             </Grid>
 
                             <TabView x:Name="ClosingTabs"
@@ -2275,26 +2240,6 @@
                 </ScrollViewer>
             </Grid>
 
-            <Border Grid.Column="2"
-                    Background="{ThemeResource SlSurfaceBrush}"
-                    BorderBrush="{ThemeResource SlBorderBrush}"
-                    BorderThickness="1,0,0,0"
-                    Padding="12,16">
-                <StackPanel Spacing="10">
-                    <Button x:Name="CloseShiftButton"
-                            Content="Close Shift"
-                            Style="{StaticResource SlShiftActionButtonStyle}"
-                            HorizontalAlignment="Stretch"
-                            ToolTipService.ToolTip="Close the current shift"
-                            Click="CloseShiftButton_Click"/>
-                    <Button x:Name="LogoutButton"
-                            Content="Logout"
-                            Style="{StaticResource SlLogoutActionButtonStyle}"
-                            HorizontalAlignment="Stretch"
-                            ToolTipService.ToolTip="Log out of SimpleLotto"
-                            Click="LogoutButton_Click"/>
-                </StackPanel>
-            </Border>
         </Grid>
 
         <Border Grid.Row="3"

@@ -41,17 +41,29 @@
         <Setter Property="Padding" Value="20"/>
     </Style>
 
+    <Style x:Key="SlHeaderMetricCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource SlSurfaceAltBrush}"/>
+        <Setter Property="BorderBrush" Value="{ThemeResource SlBorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="8,5"/>
+    </Style>
+
+    <Style x:Key="SlHeaderMetricCaptionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource SlCaptionTextStyle}">
+        <Setter Property="FontSize" Value="11"/>
+    </Style>
+
     <Style x:Key="SlShiftActionButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{ThemeResource SlShiftActionBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource SlWarningBrush}"/>
         <Setter Property="Foreground" Value="{ThemeResource SlTextBrush}"/>
-        <Setter Property="MinHeight" Value="42"/>
+        <Setter Property="MinHeight" Value="34"/>
     </Style>
 
     <Style x:Key="SlLogoutActionButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{ThemeResource SlLogoutActionBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource SlDangerBrush}"/>
         <Setter Property="Foreground" Value="{ThemeResource SlTextBrush}"/>
-        <Setter Property="MinHeight" Value="42"/>
+        <Setter Property="MinHeight" Value="34"/>
     </Style>
 </ResourceDictionary>
