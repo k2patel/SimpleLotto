@@ -13,23 +13,11 @@ See [docs/product-instructions.md](docs/product-instructions.md) for the high-le
 
 ## Build
 
-On Windows with the WinUI prerequisites installed:
-
-```powershell
-cd SimpleLotto.App
-..\BuildAndRun.ps1 -SkipRun
-```
-
-To run after a successful build:
-
-```powershell
-cd SimpleLotto.App
-..\BuildAndRun.ps1
-```
+Development does not require a local Windows machine. Build and package validation runs through `.github/workflows/build-windows.yml` on GitHub Actions.
 
 ## Windows Installer
 
-Development may happen on macOS, but Windows builds are produced by GitHub Actions. Run the **Build Windows Installer** workflow manually, or push to `main`, to produce and upload:
+Run the **Build Windows Installer** workflow manually, open a pull request, or push to `main` to build the Windows package. Installer upload occurs only for allowed non-fork workflow runs.
 
 ```text
 SimpleLotto-0.0.1-<short-sha>.exe

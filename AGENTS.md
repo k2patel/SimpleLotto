@@ -6,27 +6,7 @@ This repository is in the architecture and early scaffold phase for a WinUI 3 lo
 
 ## Build, Test, and Development Commands
 
-Run commands from a Windows environment with WinUI prerequisites, .NET SDK `10.0.100`, Developer Mode, and the `winapp` CLI available.
-
-```powershell
-cd SimpleLotto.App
-..\BuildAndRun.ps1 -SkipRun
-```
-
-Builds the app without launching it.
-
-```powershell
-cd SimpleLotto.App
-..\BuildAndRun.ps1
-```
-
-Builds and runs the current scaffold, using MSBuild when available and falling back to `dotnet build`.
-
-```powershell
-dotnet build ..\SimpleLotto.sln -p:Platform=x64
-```
-
-Useful for a solution-level compile check when launch is not needed.
+Windows build and package validation is performed by `.github/workflows/build-windows.yml` on GitHub Actions. Local development does not require a Windows machine or the PowerShell build script. The workflow restores and builds `SimpleLotto.sln`, publishes the self-contained WinUI app, builds the installer, and uploads eligible artifacts.
 
 ## Coding Style & Naming Conventions
 
@@ -34,7 +14,7 @@ Use C# 14 with nullable reference types enabled. Follow the existing style: file
 
 ## Testing Guidelines
 
-There is no test project yet. For logic-heavy architecture decisions, plan seams that can later be covered in a sibling project such as `SimpleLotto.App.Tests/`. Name future tests after the behavior being verified, for example `AddSale_CalculatesRevenueTotal`. Until automated tests exist, verify compile health with `..\BuildAndRun.ps1 -SkipRun` and document manual checks for any prototype workflow you touch.
+There is no test project yet. For logic-heavy architecture decisions, plan seams that can later be covered in a sibling project such as `SimpleLotto.App.Tests/`. Name future tests after the behavior being verified, for example `AddSale_CalculatesRevenueTotal`. Verify compile/package health through the GitHub Actions Windows workflow and document manual checks for any prototype workflow you touch.
 
 ## Commit & Pull Request Guidelines
 

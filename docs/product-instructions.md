@@ -43,6 +43,7 @@ Login expectations:
 
 - A login screen is always shown after setup is complete.
 - Any valid user can log in.
+- The password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
 - Logging in controls access only. It does not start, end, or otherwise define a financial shift/close interval.
 - SimpleLotto is a single-computer, single-active-user application.
 - Only one user is actively operating the application at a time.
@@ -148,6 +149,7 @@ Game price rules:
 - If the scanned bundle's game ID already has a saved positive price and display name, activation must not ask for price or name again; after the bin is selected/scanned, activation should continue.
 - The activation price dialog should show the game ID, bundle ID, selected/scanned bin, any fetched/manual game name, and any fetched/manual image when available.
 - The activation price dialog must allow the operator to enter or scan the price into the same game price field; do not add a separate price-scan text field.
+- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, game price, and game name; do not add separate barcode-focused text boxes for values that are already captured by the scanner workflow.
 - Entering a missing price during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without it.
 - Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether any scanned game IDs are new or still have no price.
 - If receiving includes any new/unpriced game IDs, the app must present a required price-entry dialog for each missing game before finalizing receiving.
@@ -171,6 +173,9 @@ Ticket barcode parsing:
 - Barcode parsing must use the configured store/state layout strictly; do not guess another state layout after a configured layout fails.
 - Parsed ticket identity must separate game code, bundle/pack number, and ticket serial.
 - Physical bundle identity is `game code + bundle/pack number`; ticket serial identifies the current ticket within that physical bundle.
+- Physical bundle identity is globally unique in current inventory. The same Game ID + Bundle ID must never appear more than once, even when multiple different bundles are allowed in the same bin.
+- Duplicate bundle scans during initial import or receiving must speak `Duplicate` and must not add, move, sell, activate, audit, or otherwise change the bundle.
+- Storage must enforce physical-bundle uniqueness in addition to UI scan checks. If legacy data contains duplicate active rows, migration must keep the most recently recorded placement, remove the older duplicate rows, and write a system audit entry without changing sales or activation history.
 
 Bundle price rules:
 
@@ -245,6 +250,8 @@ Dashboard should include:
 
 Dashboard must stay operational and compact. It should not become a separate reporting module or add new top-level workflows.
 
+Dashboard current-shift metrics should focus on operational accountability: sales amount, tickets sold, active/open inventory context, and closing readiness. Do not show an average ticket price metric on Dashboard unless a future reporting workflow explicitly needs it; average ticket price is not useful in the live counter workflow.
+
 Dashboard undo rules:
 
 - Undo is available from Dashboard.
@@ -277,6 +284,7 @@ Dashboard bin behavior:
 - Non-empty bin color is based on sales activity for the game number, not the bundle ID.
 - Use the color scale to show highest-selling, medium-selling, and low-selling game activity.
 - If multiple bundles are in the same bin, the bin tile should indicate that stacked/multiple-bundle state.
+- Low, medium, and high single-bundle colors should use lighter base fills. Multiple-bundle/stacked variants should be visibly darker than the base state so the difference is noticeable at a glance.
 - When the user opens a bin, do not show the game photo as the primary detail. Show a summary of each bundle in that bin.
 - Bundle summary must include price, lotto name, game ID, bundle ID, and ticket range/status.
 - Multiple bundles in one bin should use a slightly darker visual treatment than a normal single-bundle bin so the operator can distinguish it quickly.
@@ -317,6 +325,7 @@ Regular bundle activation:
 - The scanned activation ticket is treated as sold during placement, along with any prior tickets in that bundle.
 - After activation, the active bundle ticket is the next available ticket after the scanned activation ticket and should be shown as current on Rdisplay.
 - During activation, tickets from the first ticket through the scanned activation ticket are recorded as sold/gap-fill sale activity for the current open close interval.
+- This rule applies to any valid ticket serial in the scanned bundle. Ticket `001` and ticket `008` are examples only; the scanned ticket number determines the inclusive sold range and the next available ticket.
 - Placement-created gap-fill sales must use the source label `activation_gap_fill` so reports can distinguish them from normal scanned sales.
 - The gap-fill range follows the configured first-ticket mode: if first ticket is `000` and activation scans `004`, tickets `000-004` are sold and next ticket is `005`; if first ticket is `001`, tickets `001-004` are sold and next ticket is `005`.
 - Regular activation only applies to bundles not currently placed in any bin. Moving an already placed bundle is a separate manual move workflow from the Bins UI.
@@ -352,7 +361,7 @@ Inventory list behavior:
 - The game catalog must be searchable by Game ID.
 - Receiving, Open / Active Bundles, and Game Prices must support fast prefix search usable while typing. Typing `1`, then `12`, then `123` should narrow against records that start with that entered value.
 - Open / Active Bundles search should include bin ID, game ID, bundle ID, and ticket where practical.
-- Receiving search should include game ID, bundle ID, and ticket.
+- Receiving search should include game ID and bundle ID. Receiving does not retain ticket serials.
 - Receiving, Open / Active Bundles, and Game Prices should use paging instead of one long vertical scrolling list.
 - Page size should be calculated from the visible list space so page counts grow or shrink with the window size; do not hard-code one fixed row count.
 - Paging controls must show the current page and total pages when known.
@@ -366,9 +375,13 @@ Receiving a bundle should trigger cache-first game image lookup for the received
 
 Inventory receiving is the normal recurring stock intake workflow for new unopened bundles delivered to the store. It may happen daily, weekly, or whenever new lottery inventory arrives.
 
-Inventory receiving is for unopened bundles. The receiving workflow expects scans of ticket `000`. If the user scans a non-`000` ticket during receiving, the system should treat it as an open bundle that cannot remain in receiving inventory. The user must either place it into a bin by providing/scanning a bin number or ignore/remove it from the receiving flow.
+Inventory receiving is for unopened bundles. Because ticket `000` may be physically inaccessible, the dedicated receiving scan dialog may accept any valid ticket barcode from the bundle but must record only the parsed Game ID and Bundle ID. The ticket serial is ignored and must not create a sale, activation, or bin assignment.
 
-If the user places that open bundle into a bin, it follows the same rules as regular activation, including `activation_gap_fill` for prior tickets. If the user ignores/removes the scan from receiving, do not create an inventory, activation, sale, or audit record for that ignored scan.
+The top bar must provide a `Scan New Inventory` action beside `Close Shift` only while the Inventory menu is selected. Its visibility must follow the Inventory content visibility directly, and the Receiving tab should repeat the same action as a clearly visible entry point. The action must be hidden on Dashboard, Bins, Closing, and Settings. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides a `Close scanning` action that validates and finalizes the session.
+
+If the same Game ID + Bundle ID is scanned more than once, is already in receiving inventory, or is already active in a bin, the app must speak `Duplicate`, take no action, and leave all receiving counts and records unchanged.
+
+When a received bundle is later activated into a bin, it must be removed from unopened receiving inventory as part of the same successful activation transaction. Each successful activation must be recorded in an activation ledger so Closing can show how many bundles were activated in the current shift and include that count in shift history and generated closing reports.
 
 Initial inventory import is separate from both receiving and regular activation. It is a one-time first-install workflow for capturing the store's current physical bin layout: which lotto bundle is already in each bin and which ticket is currently available for sale.
 
@@ -380,8 +393,17 @@ Initial import rules:
 - The scanned ticket becomes the starting current ticket for tracking, and tickets before it are an opening offset only.
 - Initial import must not create sales, gap-fill revenue, or clerk cash accountability for those earlier tickets.
 - Initial import records should be labeled separately from regular activation and inventory receiving in storage, UI, audit, and reports.
+- Initial import may place multiple different bundles in one bin, but it must reject a Game ID + Bundle ID that already exists in any bin.
 
 Do not overload one inventory record type to mean both unopened receiving and active bin placement. Unopened receiving, initial active-bin import, and later bundle activation must remain separate workflow sources even if a future UI shows them together.
+
+Inventory correction rules:
+
+- Receiving and Open / Active Bundles must allow the operator to select a bundle and use an explicit `Remove Selected Bundle` action.
+- Removal must require a confirmation dialog that identifies the Game ID, Bundle ID, and bin when applicable.
+- Removing a current inventory record corrects inventory state only. It must not delete or rewrite recorded sales, activation events, or closed-shift history.
+- Every completed removal must be audited.
+- Closing gap-fill and sold-out calculations must de-duplicate by physical Game ID + Bundle ID defensively, even though storage also enforces uniqueness.
 
 ### Closing
 
@@ -451,6 +473,7 @@ Closing page bin status:
 - If the user missed a bin, it is the user's responsibility to scan/fix it before final submit.
 - Clicking a bin during closing should show expected game ID, Bundle ID, and ticket ID/current ticket.
 - If the user scans while the closing scan dialog is open, the system matches that ticket to the related active bin/bundle after the dialog closes.
+- `Close scanning` stops collection and keeps the temporary evidence available for review and finalization. `Cancel Closing Scan` requires discard confirmation when evidence exists, clears only the temporary closing state, writes an audit event, and must not change persisted sales, inventory, or shift data.
 - Any other dormant bundle in that bin should be automatically considered sold during closing reconciliation.
 
 ### Settings
@@ -475,6 +498,7 @@ Application upgrade rules:
 - Automatic checks should record the local date they ran and should not repeat for the same date.
 - Do not add hourly polling or recurring background wakeups for app upgrade checks.
 - Manual Check for Upgrade remains available even when automatic scheduled checks exist.
+- Main-branch pushes publish the latest Windows update manifest automatically. A manually dispatched branch build publishes it only when the operator explicitly enables the publish-update-manifest input.
 
 ## License Management and Game Name Sync
 
@@ -574,9 +598,18 @@ Scanner rules:
 - Scanner status and pairing diagnostics belong under Settings.
 - Settings > Scanner and Display must include barcode scanner pairing and unpairing controls. Pairing should reuse the WindowsPOS HID keyboard-class scanner model: list candidate HID devices, store VID/PID/serial when available, and use that pairing as the prerequisite for background scanner capture.
 
+Audit rules:
+
+- Audit is part of the operational accountability surface, not optional diagnostics.
+- Record scanner activity, rejected/unrecognized scans, sale records, bundle activations, bin placements, opening/initial placements, corrections, settings changes, login/logout, display registration changes, license checks, and closing finalization.
+- Audit entries should include enough detail to reconstruct what happened: active user or system actor, timestamp, workflow/source, game ID, bundle ID, bin, ticket/range, quantity, amount, next ticket where relevant, and failure reason when rejected.
+- Focused receiving and closing sessions must audit session start, accepted scans, rejected scans, cancellation/close outcome, finalization, and reconciliation decisions. Receiving duplicates remain the explicit exception because they are audio-only no-op input.
+- Game price/name/image setup changes and inventory removals must be audited after successful persistence. Audit detail must state that inventory removal preserves prior sales and activation history.
+- Audit write failures must not block clerk workflow, but they must be logged to the application log so the failure itself can be diagnosed.
+
 Application lifetime rules:
 
-- While SimpleLotto is running, Windows idle sleep must be blocked so scanner, display, and shift workflows continue uninterrupted. Release the sleep-prevention request when the application actually exits.
+- While SimpleLotto is running, including when minimized to the tray, Windows idle sleep must be blocked so scanner, display, and shift workflows continue uninterrupted. Release the sleep-prevention request when the application actually exits.
 - When a barcode scanner is paired, closing the main window must not exit the application by default.
 - When a barcode scanner is paired, window close should minimize SimpleLotto to the Windows system tray so scanner/display/speech services continue running.
 - When no barcode scanner is paired, normal window close may exit the application unless another active background service requirement is added later.
@@ -740,8 +773,8 @@ Use the Microsoft WinUI guidance for this project:
 - Use `ListView` with grid-based item templates for tabular data.
 - Use `NumberBox`, `ComboBox`, `TextBox`, `ToggleSwitch`, tabs, dialogs, and InfoBars where they fit.
 - Use theme resources for colors and support Light, Dark, and High Contrast.
-- Build and run with the WinUI workflow script on Windows.
-- Do not run the packaged `.exe` directly; use `winapp run` or `BuildAndRun.ps1`.
+- Build and package validation runs through `.github/workflows/build-windows.yml` on GitHub Actions; local development does not require Windows or PowerShell.
+- Treat the GitHub Actions Windows build as the compile/package authority for this repository.
 
 Before implementing major XAML screens, use the WinUI/Microsoft skill guidance to map each requirement to platform controls.
 

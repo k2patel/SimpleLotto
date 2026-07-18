@@ -48,6 +48,11 @@
                 <StackPanel Grid.Column="2"
                             Orientation="Horizontal"
                             Spacing="8">
+                    <Button x:Name="ScanNewInventoryButton"
+                            Content="Scan New Inventory"
+                            MinWidth="148"
+                            Visibility="{Binding Visibility, ElementName=InventoryContent}"
+                            Click="ScanNewInventoryButton_Click"/>
                     <Button x:Name="CloseShiftButton"
                             Content="Close Shift"
                             MinWidth="108"
@@ -754,11 +759,9 @@
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="110"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Received" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game / Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="2" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <TextBlock x:Name="ReceivingPageStatusText"
                                                            Grid.Row="2"
@@ -767,7 +770,8 @@
                                                 <ListView x:Name="ReceivingListView"
                                                           Grid.Row="3"
                                                           MinHeight="220"
-                                                          SelectionMode="None"
+                                                          SelectionMode="Single"
+                                                          SelectionChanged="ReceivingListView_SelectionChanged"
                                                           SizeChanged="InventoryPagedList_SizeChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
@@ -777,7 +781,6 @@
                                                                 <Grid.ColumnDefinitions>
                                                                     <ColumnDefinition Width="110"/>
                                                                     <ColumnDefinition Width="*"/>
-                                                                    <ColumnDefinition Width="110"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <TextBlock Text="{Binding Source}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>
@@ -788,9 +791,6 @@
                                                                     <TextBlock Text="{Binding BundleText}"
                                                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 </StackPanel>
-                                                                <TextBlock Grid.Column="2"
-                                                                           Text="{Binding Ticket}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
                                                             </Grid>
                                                         </DataTemplate>
                                                     </ListView.ItemTemplate>
@@ -802,12 +802,23 @@
                                             <StackPanel Spacing="12">
                                                 <TextBlock Text="Receiving Rules"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <TextBlock Text="Unopened receiving expects ticket 000."
+                                                <Button Content="Scan New Inventory"
+                                                        HorizontalAlignment="Stretch"
+                                                        Style="{StaticResource AccentButtonStyle}"
+                                                        Click="ScanNewInventoryButton_Click"/>
+                                                <TextBlock Text="Start Scan New Inventory before scanning delivered bundles."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
-                                                <TextBlock Text="A non-000 scan is an open bundle and must be placed into a bin or ignored."
+                                                <TextBlock Text="Any ticket barcode from the physical bundle records only its Game ID and Bundle ID."
+                                                           Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <TextBlock Text="Duplicate scans are ignored with audio feedback."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                 <TextBlock Text="Receiving stays separate from active bins, initial import, and sales."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <Button x:Name="RemoveReceivedBundleButton"
+                                                        Content="Remove Selected Bundle"
+                                                        HorizontalAlignment="Stretch"
+                                                        IsEnabled="False"
+                                                        Click="RemoveReceivedBundleButton_Click"/>
                                             </StackPanel>
                                         </Border>
                                     </Grid>
@@ -886,7 +897,8 @@
                                                           Grid.Row="3"
                                                           MinHeight="220"
                                                           SizeChanged="InventoryPagedList_SizeChanged"
-                                                          SelectionMode="None">
+                                                          SelectionMode="Single"
+                                                          SelectionChanged="InventoryListView_SelectionChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
                                                             <Grid MinHeight="44"
@@ -930,6 +942,11 @@
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                 <TextBlock Text="Game images are cache-first: check local image cache before fetching, and allow manual replacement from the Games tab."
                                                            Style="{StaticResource SlCaptionTextStyle}"/>
+                                                <Button x:Name="RemoveActiveBundleButton"
+                                                        Content="Remove Selected Bundle"
+                                                        HorizontalAlignment="Stretch"
+                                                        IsEnabled="False"
+                                                        Click="RemoveActiveBundleButton_Click"/>
                                             </StackPanel>
                                         </Border>
                                     </Grid>
@@ -1127,10 +1144,11 @@
                             <Grid ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="160"/>
+                                    <ColumnDefinition Width="120"/>
+                                    <ColumnDefinition Width="120"/>
+                                    <ColumnDefinition Width="120"/>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="135"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Closing"
@@ -1169,6 +1187,16 @@
                                     </StackPanel>
                                 </Border>
                                 <Border Grid.Column="4"
+                                        Style="{StaticResource SlPanelBorderStyle}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="ClosingActivatedText"
+                                                   Text="0"
+                                                   Style="{StaticResource SlMetricTextStyle}"/>
+                                        <TextBlock Text="Activated"
+                                                   Style="{StaticResource SlCaptionTextStyle}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="5"
                                         Style="{StaticResource SlPanelBorderStyle}">
                                     <StackPanel Spacing="2">
                                         <TextBlock x:Name="ClosingExpectedCashText"
@@ -2532,7 +2560,8 @@
                                   HorizontalAlignment="Stretch"/>
 
                         <PasswordBox x:Name="LoginPasswordBox"
-                                     Header="Password"/>
+                                     Header="Password"
+                                     KeyDown="LoginPasswordBox_KeyDown"/>
                     </StackPanel>
 
                     <Grid Grid.Row="2" ColumnSpacing="12">

@@ -67,7 +67,13 @@ Filename: "{tmp}\VC_redist.x64.exe"; \
 Filename: "powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$cert = '{tmp}\SimpleLotto-CodeSigning.cer'; if (Test-Path $cert) {{ Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\Root | Out-Null; Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null }}"""; \
     Flags: runhidden waituntilterminated; \
-    StatusMsg: "Trusting SimpleLotto installer certificate..."
+    StatusMsg: "Trusting SimpleLotto installer certificate..."; \
+    Check: SigningCertificateAvailable
+
+Filename: "netsh.exe"; \
+    Parameters: "advfirewall firewall delete rule name=""{#MyFirewallRuleName}"""; \
+    Flags: runhidden runascurrentuser; \
+    StatusMsg: "Refreshing Windows Firewall rule for port {#MyApiPort}..."
 
 Filename: "netsh.exe"; \
     Parameters: "advfirewall firewall add rule name=""{#MyFirewallRuleName}"" dir=in action=allow protocol=TCP localport={#MyApiPort} profile=private,domain scope=Subnet description=""Allow SimpleLotto Rdisplay/local API on the local network"""; \
@@ -95,22 +101,9 @@ begin
 end;
 
 function InitializeSetup(): Boolean;
-var
-  UninstallString: String;
-  ResultCode: Integer;
 begin
   Result := True;
   KillSimpleLotto();
-
-  if RegQueryStringValue(HKLM64,
-       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1',
-       'UninstallString', UninstallString) then
-  begin
-    Exec(RemoveQuotes(UninstallString),
-         '/SILENT /SUPPRESSMSGBOXES /NORESTART',
-         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    KillSimpleLotto();
-  end;
 end;
 
 function InitializeUninstall(): Boolean;
@@ -130,19 +123,39 @@ end;
 
 function VCRedistNeeded(): Boolean;
 var
-  Major, Minor, Bld: Cardinal;
+  Installed, Major, Minor: Cardinal;
 begin
-  if not RegQueryDWordValue(HKLM,
+  if not RegQueryDWordValue(HKLM64,
+       'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64',
+       'Installed', Installed) then
+  begin
+    Result := True;
+    exit;
+  end;
+  if Installed <> 1 then
+  begin
+    Result := True;
+    exit;
+  end;
+  if not RegQueryDWordValue(HKLM64,
        'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64',
        'Major', Major) then
   begin
     Result := True;
     exit;
   end;
-  RegQueryDWordValue(HKLM,
-    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Minor', Minor);
-  RegQueryDWordValue(HKLM,
-    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Bld', Bld);
+  if not RegQueryDWordValue(HKLM64,
+       'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64',
+       'Minor', Minor) then
+  begin
+    Result := True;
+    exit;
+  end;
   Result := (Major < 14)
         or ((Major = 14) and (Minor < 40));
+end;
+
+function SigningCertificateAvailable(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{tmp}\SimpleLotto-CodeSigning.cer'));
 end;

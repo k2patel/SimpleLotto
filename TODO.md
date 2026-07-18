@@ -4,7 +4,7 @@
 
 The latest fixes need verification in the intended Windows WinUI environment because this macOS host cannot execute the Windows XAML compiler.
 
-1. Run `..\BuildAndRun.ps1 -SkipRun` from `SimpleLotto.App`.
+1. Verify the Windows package through `.github/workflows/build-windows.yml`; local Windows/PowerShell verification is not part of the current development workflow.
 2. Verify Bins current-shift sales updates after ticket scans.
 3. Verify Inventory shows separate unopened receiving and active bin bundle cards.
 4. Verify Closing top metric cards switch between history context and live scan context correctly.
@@ -38,6 +38,41 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - While SimpleLotto is running, Windows does not enter idle sleep.
    - The sleep-prevention request remains active when SimpleLotto is minimized to the tray.
    - The sleep-prevention request is released after using the tray Exit command or otherwise exiting the app.
+10. Verify dedicated inventory receiving:
+   - `Scan New Inventory` is visible in the top bar only while Inventory is selected, is also available inside the Receiving tab, opens the focused receiving overlay, and normal sales/activation scanner routing does not run underneath it.
+   - Scanning any valid ticket barcode records only Game ID + Bundle ID; the ticket serial is not stored.
+   - Scanning the same staged, already-received, or already-active bundle speaks `Duplicate` and does not change counts, inventory, sales, activation, or audit state.
+   - Closing scanning validates missing game prices and commits all staged bundles to unopened receiving inventory.
+   - Activating a received bundle removes it from Receiving in the same transaction that creates the active bin placement and activation sale.
+   - Closing shows the current-shift activated bundle count; closing history, `shift_summary.csv`, text report, and PDF report preserve the count after finalization.
+11. Verify physical bundle uniqueness and correction:
+   - During initial import, scanning an already-imported Game ID + Bundle ID speaks `Duplicate` and does not add another row or change the selected bin.
+   - Multiple different bundles can still be imported into the same bin.
+   - Upgrading a database with duplicate active bundle rows keeps the most recently recorded placement, removes older duplicates, and creates a system audit entry without changing sales history.
+   - An unscanned malformed duplicate cannot produce double closing gap-fill.
+   - Removing a selected received or active bundle requires confirmation, updates current inventory, writes audit, and preserves sales/activation history.
+12. Verify inventory and closing audit coverage:
+   - Receiving and closing session start, accepted/rejected scans, close/cancel, finalization failures, successful finalization, and closing reconciliation decisions include actor, UTC timestamp, workflow, and relevant bundle/bin/ticket details.
+   - Game setup changes and successful received/active inventory removals are audited.
+   - Duplicate inventory scans produce only `Duplicate` audio and do not create an audit row.
+   - An audit insert failure is written to the application log without blocking the operator action.
+13. Verify installer upgrade timing on the Windows machine:
+   - Installing a newer build over an existing SimpleLotto installation performs an in-place upgrade without launching the previous uninstaller.
+   - The Visual C++ runtime installer is skipped when a compatible x64 runtime is already installed.
+   - An unsigned build skips the certificate-import PowerShell step.
+   - The existing firewall rule is refreshed without accumulating duplicate rules.
+14. Verify login keyboard behavior:
+   - Opening the login screen focuses the password field.
+   - Pressing Enter in the password field performs the same validation and login action as clicking Login.
+   - Invalid passwords remain on the login screen and show the existing validation message.
+15. Verify manually published branch upgrades:
+   - A manual Windows workflow run without `publish_update_manifest` builds/uploads the installer but does not replace the public latest manifest.
+   - A manual run with `publish_update_manifest` enabled uploads the manifest and the installed app's Check for Upgrade action discovers that exact build.
+16. Verify closing scan cancellation:
+   - `Close scanning` keeps temporary evidence available for review and finalization.
+   - `Cancel Closing Scan` with evidence asks whether to discard or keep scanning.
+   - Discard clears closing rows, matched bins, issues, unmatched scans, reconciliation changes, and generated closing sales without changing persisted shift data.
+   - Cancellation is audited with discarded counts.
 
 ## Missing Follow-Up Work
 
