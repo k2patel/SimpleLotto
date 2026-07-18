@@ -18,6 +18,7 @@ using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
@@ -118,6 +119,7 @@ public sealed partial class MainWindow : Window
     private bool _isWindowInitialized;
     private bool _isScannerPaired;
     private bool _automaticUpgradeCheckRunning;
+    private bool _loginInProgress;
     private string _lastAutomaticUpgradeCheckDate = string.Empty;
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
@@ -721,41 +723,7 @@ public sealed partial class MainWindow : Window
         return Convert.ToBase64String(protectedBytes);
     }
 
-    private static string HashPassword(string password)
-    {
-        var salt = RandomNumberGenerator.GetBytes(16);
-        var hash = SHA256.HashData(Combine(salt, Encoding.UTF8.GetBytes(password)));
-        return $"{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
-    }
-
-    private static bool VerifyPassword(string password, string storedHash)
-    {
-        var parts = storedHash.Split(':', 2);
-        if (parts.Length != 2)
-            return false;
-
-        try
-        {
-            var salt = Convert.FromBase64String(parts[0]);
-            var expected = Convert.FromBase64String(parts[1]);
-            var actual = SHA256.HashData(Combine(salt, Encoding.UTF8.GetBytes(password)));
-            return CryptographicOperations.FixedTimeEquals(actual, expected);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-    }
-
-    private static byte[] Combine(byte[] left, byte[] right)
-    {
-        var output = new byte[left.Length + right.Length];
-        Buffer.BlockCopy(left, 0, output, 0, left.Length);
-        Buffer.BlockCopy(right, 0, output, left.Length, right.Length);
-        return output;
-    }
-
-    private void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
+    private async void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
     {
         switch (_startupStage)
         {
@@ -766,19 +734,22 @@ public sealed partial class MainWindow : Window
                 CompleteImportStage();
                 break;
             case StartupStage.Login:
-                CompleteLoginStage();
+                await CompleteLoginStageAsync();
                 break;
         }
     }
 
-    private void LoginPasswordBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    private async void LoginPasswordBox_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key != VirtualKey.Enter || _startupStage != StartupStage.Login)
             return;
 
         e.Handled = true;
-        CompleteLoginStage();
+        await CompleteLoginStageAsync();
     }
+
+    private void LoginUserComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        ConfigureLoginPasswordEntry();
 
     private void StartupBackButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1095,9 +1066,23 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(ManagerPasswordBox.Password))
+        if (!PinHashService.IsValidPin(ManagerPasswordBox.Password))
         {
-            StartupStatusText.Text = "Manager password is required.";
+            StartupStatusText.Text = "Manager PIN must contain exactly four digits.";
+            return;
+        }
+
+        var clerkName = ClerkNameBox.Text.Trim();
+        var clerkPin = ClerkPasswordBox.Password;
+        if (string.IsNullOrWhiteSpace(clerkName) != string.IsNullOrEmpty(clerkPin))
+        {
+            StartupStatusText.Text = "Enter both a Clerk name and four-digit PIN, or leave both blank.";
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(clerkPin) && !PinHashService.IsValidPin(clerkPin))
+        {
+            StartupStatusText.Text = "Clerk PIN must contain exactly four digits.";
             return;
         }
 
@@ -1107,11 +1092,11 @@ public sealed partial class MainWindow : Window
         _storeStreet = storeStreet;
         _storeCity = storeCity;
         _configuredBinCount = Math.Min(500, binCount);
-        _managerPasswordHash = HashPassword(ManagerPasswordBox.Password);
-        _clerkName = ClerkNameBox.Text.Trim();
-        _clerkPasswordHash = string.IsNullOrWhiteSpace(ClerkPasswordBox.Password)
+        _managerPasswordHash = PinHashService.CreateHash(ManagerPasswordBox.Password);
+        _clerkName = clerkName;
+        _clerkPasswordHash = string.IsNullOrEmpty(clerkPin)
             ? string.Empty
-            : HashPassword(ClerkPasswordBox.Password);
+            : PinHashService.CreateHash(clerkPin);
         _setupComplete = true;
         _initialImportComplete = false;
         BuildImportBins();
@@ -1119,8 +1104,11 @@ public sealed partial class MainWindow : Window
         ShowImportStage();
     }
 
-    private void CompleteLoginStage()
+    private async Task CompleteLoginStageAsync()
     {
+        if (_loginInProgress)
+            return;
+
         if (LoginUserComboBox.SelectedItem is not ComboBoxItem userItem)
         {
             StartupStatusText.Text = "Select a user to login.";
@@ -1130,22 +1118,153 @@ public sealed partial class MainWindow : Window
         var user = userItem.Content?.ToString() ?? string.Empty;
         var isManager = string.Equals(user, "Manager", StringComparison.Ordinal);
         var expectedHash = isManager ? _managerPasswordHash : _clerkPasswordHash;
-        if (!VerifyPassword(LoginPasswordBox.Password, expectedHash))
-        {
-            StartupStatusText.Text = "Password does not match the selected user.";
-            return;
-        }
+        var credential = LoginPasswordBox.Password;
 
-        _activeUserRole = isManager ? UserRole.Manager : UserRole.Clerk;
-        _activeUserName = user;
-        StartupOverlay.Visibility = Visibility.Collapsed;
-        StatusText.Text = $"{user} logged in as {_activeUserRole} for {_storeState}.";
-        DashboardScannerModeText.Text = "Global scanner";
-        DashboardScannerStatusText.Text = "Ready for scanner input.";
-        DashboardPairingStatusText.Text = "Background capture: not paired";
-        ApplyRoleAccess();
-        RefreshOperationalPages();
-        TryRecordAudit("auth", "Login", $"{user} logged in as {_activeUserRole}");
+        _loginInProgress = true;
+        StartupPrimaryButton.IsEnabled = false;
+        LoginUserComboBox.IsEnabled = false;
+        LoginPasswordBox.IsEnabled = false;
+        try
+        {
+            var verification = await Task.Run(() => PinHashService.Verify(credential, expectedHash));
+            if (!verification.IsValid)
+            {
+                StartupStatusText.Text = "Password does not match the selected user.";
+                return;
+            }
+
+            string? upgradedHash = null;
+            if (verification.IsLegacy)
+            {
+                var selectedPin = await PromptForFourDigitPinAsync(user, credential);
+                if (selectedPin is null)
+                {
+                    StartupStatusText.Text = "Create a new four-digit PIN to finish this required login update.";
+                    return;
+                }
+
+                upgradedHash = await Task.Run(() => PinHashService.CreateHash(selectedPin));
+            }
+            else if (verification.NeedsUpgrade)
+            {
+                upgradedHash = await Task.Run(() => PinHashService.CreateHash(credential));
+            }
+
+            if (upgradedHash is not null)
+            {
+                if (!TrySaveUpgradedPinHash(isManager, upgradedHash))
+                {
+                    StartupStatusText.Text = "The login was verified, but its required PIN update could not be saved. Try again.";
+                    return;
+                }
+
+                TryRecordAudit(
+                    "auth",
+                    verification.IsLegacy ? "Required PIN created" : "PIN security updated",
+                    verification.IsLegacy
+                        ? $"{user} replaced a legacy login credential with a four-digit PIN"
+                        : $"{user} login hash work factor upgraded");
+            }
+
+            _activeUserRole = isManager ? UserRole.Manager : UserRole.Clerk;
+            _activeUserName = user;
+            StartupOverlay.Visibility = Visibility.Collapsed;
+            StatusText.Text = $"{user} logged in as {_activeUserRole} for {_storeState}.";
+            DashboardScannerModeText.Text = "Global scanner";
+            DashboardScannerStatusText.Text = "Ready for scanner input.";
+            DashboardPairingStatusText.Text = "Background capture: not paired";
+            ApplyRoleAccess();
+            RefreshOperationalPages();
+            TryRecordAudit("auth", "Login", $"{user} logged in as {_activeUserRole}");
+        }
+        finally
+        {
+            _loginInProgress = false;
+            StartupPrimaryButton.IsEnabled = true;
+            LoginUserComboBox.IsEnabled = true;
+            LoginPasswordBox.IsEnabled = true;
+            if (_startupStage == StartupStage.Login && StartupOverlay.Visibility == Visibility.Visible)
+                _ = LoginPasswordBox.Focus(FocusState.Programmatic);
+        }
+    }
+
+    private bool TrySaveUpgradedPinHash(bool isManager, string upgradedHash)
+    {
+        var settingKey = isManager ? "manager_password_hash" : "clerk_password_hash";
+        try
+        {
+            _store.SaveSetting(settingKey, upgradedHash);
+            if (isManager)
+                _managerPasswordHash = upgradedHash;
+            else
+                _clerkPasswordHash = upgradedHash;
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("PIN hash upgrade could not be saved.", ex);
+            return false;
+        }
+    }
+
+    private async Task<string?> PromptForFourDigitPinAsync(string user, string currentCredential)
+    {
+        var validationMessage = string.Empty;
+        while (true)
+        {
+            var pinBox = new PasswordBox
+            {
+                Header = "New 4-digit PIN",
+                MaxLength = 4
+            };
+            var confirmationBox = new PasswordBox
+            {
+                Header = "Confirm PIN",
+                MaxLength = 4
+            };
+            AutomationProperties.SetAutomationId(pinBox, "LegacyMigrationNewPin");
+            AutomationProperties.SetAutomationId(confirmationBox, "LegacyMigrationConfirmPin");
+            var content = new StackPanel { Spacing = 12 };
+            content.Children.Add(new TextBlock
+            {
+                Text = $"{user}'s existing login was verified. This update requires a new four-digit PIN before continuing.",
+                TextWrapping = TextWrapping.Wrap
+            });
+            if (!string.IsNullOrEmpty(validationMessage))
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = validationMessage,
+                    TextWrapping = TextWrapping.Wrap
+                });
+            }
+            content.Children.Add(pinBox);
+            content.Children.Add(confirmationBox);
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Password update required",
+                Content = content,
+                PrimaryButtonText = "Save PIN",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary
+            };
+
+            var result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary)
+                return null;
+
+            if (PinHashService.IsValidPin(pinBox.Password) &&
+                string.Equals(pinBox.Password, confirmationBox.Password, StringComparison.Ordinal) &&
+                !string.Equals(pinBox.Password, currentCredential, StringComparison.Ordinal))
+            {
+                return pinBox.Password;
+            }
+
+            validationMessage = "Enter four matching digits that differ from the current password or PIN.";
+        }
     }
 
     private void LogoutButton_Click(object sender, RoutedEventArgs e)
@@ -1173,7 +1292,7 @@ public sealed partial class MainWindow : Window
         LoginPanel.Visibility = Visibility.Collapsed;
         StartupBackButton.Visibility = Visibility.Collapsed;
         StartupPrimaryButton.Content = "Continue";
-        StartupStatusText.Text = "Select the store state and create the Manager password.";
+        StartupStatusText.Text = "Select the store state and create the Manager PIN.";
     }
 
     private void ShowImportStage()
@@ -1208,8 +1327,18 @@ public sealed partial class MainWindow : Window
         }
         LoginUserComboBox.SelectedIndex = 0;
         LoginPasswordBox.Password = string.Empty;
-        StartupStatusText.Text = "Enter the password for the selected user.";
+        ConfigureLoginPasswordEntry();
         _ = LoginPasswordBox.Focus(FocusState.Programmatic);
+    }
+
+    private void ConfigureLoginPasswordEntry()
+    {
+        if (LoginPasswordBox is null || StartupStatusText is null)
+            return;
+
+        LoginPasswordBox.Password = string.Empty;
+        LoginPasswordBox.Header = "Password";
+        StartupStatusText.Text = "Enter the password for the selected user.";
     }
 
     private void CompleteImportStage()
@@ -3825,6 +3954,7 @@ public sealed partial class MainWindow : Window
         SettingsBarcodeText.Text = string.IsNullOrWhiteSpace(_storeBarcodeLayout)
             ? "Barcode format: not selected"
             : $"Barcode format: {_storeBarcodeLayout}";
+        RefreshPinSettings();
         RefreshLicenseRegistrationStatus();
         RefreshVersionInformation();
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
@@ -3837,6 +3967,196 @@ public sealed partial class MainWindow : Window
         DisplayStatusText.Text = registered == 0
             ? $"Rdisplay API listening on port {RdisplayService.ApiPort}. No display registered."
             : $"Rdisplay API listening on port {RdisplayService.ApiPort}. {registered} display{(registered == 1 ? string.Empty : "s")} registered.";
+    }
+
+    private void RefreshPinSettings()
+    {
+        UserSettingsTab.Header = IsManager ? "Users" : "PIN";
+        PinSettingsTitleText.Text = IsManager ? "Users and PINs" : "My PIN";
+        PinSettingsDescriptionText.Text = IsManager
+            ? "Change your Manager PIN or reset the optional Clerk login. Every PIN contains exactly four digits."
+            : "Change your Clerk PIN. Every PIN contains exactly four digits.";
+        OwnPinTitleText.Text = IsManager ? "Manager PIN" : $"{_activeUserName} PIN";
+        OwnPinInstructionText.Text = "Confirm your current PIN before replacing it.";
+        CurrentUserPinBox.Password = string.Empty;
+        NewUserPinBox.Password = string.Empty;
+        ConfirmUserPinBox.Password = string.Empty;
+        OwnPinStatusText.Text = "Enter your current and new PINs.";
+
+        ClerkResetPanel.Visibility = IsManager ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetColumnSpan(OwnPinPanel, IsManager ? 1 : 2);
+
+        ClerkNameSettingsBox.Text = _clerkName;
+        NewClerkPinSettingsBox.Password = string.Empty;
+        ConfirmClerkPinSettingsBox.Password = string.Empty;
+        ClerkAccountStatusText.Text = string.IsNullOrWhiteSpace(_clerkName) ||
+            string.IsNullOrWhiteSpace(_clerkPasswordHash)
+                ? "No Clerk login is configured."
+                : $"Clerk login is configured for {_clerkName}.";
+        ClerkResetStatusText.Text = "Enter a Clerk name and matching four-digit PIN.";
+    }
+
+    private async void ChangeOwnPinButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeUserRole == UserRole.None)
+            return;
+
+        var changingRole = _activeUserRole;
+        var changingUser = _activeUserName;
+        var currentPin = CurrentUserPinBox.Password;
+        var newPin = NewUserPinBox.Password;
+        var confirmation = ConfirmUserPinBox.Password;
+        if (!PinHashService.IsValidPin(currentPin))
+        {
+            OwnPinStatusText.Text = "Enter your current four-digit PIN.";
+            return;
+        }
+
+        if (!PinHashService.IsValidPin(newPin))
+        {
+            OwnPinStatusText.Text = "Your new PIN must contain exactly four digits.";
+            return;
+        }
+
+        if (!string.Equals(newPin, confirmation, StringComparison.Ordinal))
+        {
+            OwnPinStatusText.Text = "Your new PIN and confirmation do not match.";
+            return;
+        }
+
+        if (string.Equals(currentPin, newPin, StringComparison.Ordinal))
+        {
+            OwnPinStatusText.Text = "Choose a new PIN that differs from your current PIN.";
+            return;
+        }
+
+        var expectedHash = changingRole == UserRole.Manager ? _managerPasswordHash : _clerkPasswordHash;
+        ChangeOwnPinButton.IsEnabled = false;
+        OwnPinStatusText.Text = "Verifying your current PIN...";
+        try
+        {
+            var verification = await Task.Run(() => PinHashService.Verify(currentPin, expectedHash));
+            if (!verification.IsValid)
+            {
+                OwnPinStatusText.Text = "Your current PIN is incorrect.";
+                return;
+            }
+
+            var newHash = await Task.Run(() => PinHashService.CreateHash(newPin));
+            if (_activeUserRole != changingRole ||
+                !string.Equals(_activeUserName, changingUser, StringComparison.Ordinal))
+            {
+                OwnPinStatusText.Text = "The active user changed. Sign in again before changing this PIN.";
+                return;
+            }
+
+            if (!TrySaveOwnPinHash(changingRole, newHash))
+            {
+                OwnPinStatusText.Text = "Your new PIN could not be saved. Try again.";
+                return;
+            }
+
+            CurrentUserPinBox.Password = string.Empty;
+            NewUserPinBox.Password = string.Empty;
+            ConfirmUserPinBox.Password = string.Empty;
+            OwnPinStatusText.Text = "Your PIN changed successfully.";
+            TryRecordAudit("auth", "User PIN changed", $"{changingUser} changed their own {changingRole} PIN");
+        }
+        finally
+        {
+            ChangeOwnPinButton.IsEnabled = true;
+        }
+    }
+
+    private async void ResetClerkPinButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireManagerAccess("Clerk PIN settings"))
+            return;
+
+        var clerkName = ClerkNameSettingsBox.Text.Trim();
+        var newPin = NewClerkPinSettingsBox.Password;
+        var confirmation = ConfirmClerkPinSettingsBox.Password;
+        if (string.IsNullOrWhiteSpace(clerkName))
+        {
+            ClerkResetStatusText.Text = "Enter a Clerk name.";
+            return;
+        }
+
+        if (!PinHashService.IsValidPin(newPin))
+        {
+            ClerkResetStatusText.Text = "The Clerk PIN must contain exactly four digits.";
+            return;
+        }
+
+        if (!string.Equals(newPin, confirmation, StringComparison.Ordinal))
+        {
+            ClerkResetStatusText.Text = "The Clerk PIN and confirmation do not match.";
+            return;
+        }
+
+        ResetClerkPinButton.IsEnabled = false;
+        ClerkResetStatusText.Text = "Saving the Clerk login...";
+        try
+        {
+            var newHash = await Task.Run(() => PinHashService.CreateHash(newPin));
+            if (!IsManager)
+            {
+                ClerkResetStatusText.Text = "Manager login changed. Sign in again before resetting the Clerk PIN.";
+                return;
+            }
+
+            if (!TrySaveClerkCredentials(clerkName, newHash))
+            {
+                ClerkResetStatusText.Text = "The Clerk login could not be saved. Try again.";
+                return;
+            }
+
+            NewClerkPinSettingsBox.Password = string.Empty;
+            ConfirmClerkPinSettingsBox.Password = string.Empty;
+            ClerkAccountStatusText.Text = $"Clerk login is configured for {_clerkName}.";
+            ClerkResetStatusText.Text = "Clerk login and PIN reset successfully.";
+            TryRecordAudit("auth", "Clerk PIN reset", $"Manager reset the Clerk login PIN for {_clerkName}");
+        }
+        finally
+        {
+            ResetClerkPinButton.IsEnabled = true;
+        }
+    }
+
+    private bool TrySaveOwnPinHash(UserRole role, string pinHash)
+    {
+        var settingKey = role == UserRole.Manager ? "manager_password_hash" : "clerk_password_hash";
+        try
+        {
+            _store.SaveSetting(settingKey, pinHash);
+            if (role == UserRole.Manager)
+                _managerPasswordHash = pinHash;
+            else
+                _clerkPasswordHash = pinHash;
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"{role} PIN could not be saved.", ex);
+            return false;
+        }
+    }
+
+    private bool TrySaveClerkCredentials(string clerkName, string clerkPinHash)
+    {
+        try
+        {
+            _store.SaveClerkCredentials(clerkName, clerkPinHash);
+            _clerkName = clerkName;
+            _clerkPasswordHash = clerkPinHash;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Clerk login could not be saved.", ex);
+            return false;
+        }
     }
 
     private void RefreshLicenseRegistrationStatus()
@@ -4179,19 +4499,23 @@ public sealed partial class MainWindow : Window
     {
         var managerVisibility = IsManager ? Visibility.Visible : Visibility.Collapsed;
         StoreSettingsTab.Visibility = managerVisibility;
+        UserSettingsTab.Visibility = _activeUserRole == UserRole.None
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         BackupSettingsTab.Visibility = managerVisibility;
         EmailSettingsTab.Visibility = managerVisibility;
         AuditSettingsTab.Visibility = managerVisibility;
         GameSettingsTab.Visibility = managerVisibility;
 
         SettingsSubtitleText.Text = IsManager
-            ? "Store, scanner, display, and game setup controls for the current installation."
-            : "Scanner and display settings available for Clerk access.";
+            ? "Store, users, scanner, display, and game setup controls for the current installation."
+            : "PIN, scanner, and display settings available for Clerk access.";
 
         if (!IsManager)
         {
             if (SettingsTabs.SelectedItem is not TabViewItem selectedSettingsTab ||
-                selectedSettingsTab != ScannerDisplaySettingsTab)
+                selectedSettingsTab != ScannerDisplaySettingsTab &&
+                selectedSettingsTab != UserSettingsTab)
             {
                 SettingsTabs.SelectedItem = ScannerDisplaySettingsTab;
             }

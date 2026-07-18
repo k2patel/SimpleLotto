@@ -92,6 +92,15 @@ public sealed class LocalStore
         tx.Commit();
     }
 
+    public void SaveClerkCredentials(string clerkName, string clerkPinHash)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        UpsertSetting(conn, tx, "clerk_name", clerkName);
+        UpsertSetting(conn, tx, "clerk_password_hash", clerkPinHash);
+        tx.Commit();
+    }
+
     public void InsertImport(StoredImportLine line)
     {
         using var conn = Open();

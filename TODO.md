@@ -64,9 +64,18 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - An unsigned build skips the certificate-import PowerShell step.
    - The existing firewall rule is refreshed without accumulating duplicate rules.
 14. Verify login keyboard behavior:
-   - Opening the login screen focuses the password field.
-   - Pressing Enter in the password field performs the same validation and login action as clicking Login.
-   - Invalid passwords remain on the login screen and show the existing validation message.
+   - The PIN migration release keeps the existing Password field, unrestricted input, focus behavior, and Enter-key login action.
+   - Opening the login screen focuses the Password field, and pressing Enter performs the same validation and login action as clicking Login.
+   - New setup limits Manager and optional Clerk PIN fields to four characters and accepts only values containing exactly four digits; letters and shorter values are rejected.
+   - Invalid passwords or PINs remain on the login screen and show the existing validation message without a retry delay or account lockout.
+   - Every correct legacy SHA-256 credential, including an existing four-digit value, requires creation and confirmation of a different four-digit PIN before login completes.
+   - Successful required migration atomically replaces only that user's stored hash with the versioned PBKDF2 format; cancelling the dialog or failing the write does not log in.
+   - A malformed hash or failed hash-upgrade write does not log in or replace the in-memory credential.
+   - Settings > Users/PIN lets Manager and Clerk change their own PIN. Each flow rejects an incorrect current PIN, a repeated current PIN, non-four-digit values, and mismatched confirmation.
+   - Clerk sees only PIN and Scanner and Display settings. The Clerk reset card and all other Manager-only settings remain hidden.
+   - Manager can create or reset the Clerk login using a name and matching four-digit PIN without knowing the previous Clerk PIN.
+   - Successful own-PIN changes and Manager-authorized Clerk resets take effect on the next login, preserve the current close interval, and write audit entries without recording a PIN or hash.
+   - The later strict PIN-enforcement release is separate: only after the migration version is deployed should login itself reject or prevent non-four-digit input.
 15. Verify manually published branch upgrades:
    - A manual Windows workflow run without `publish_update_manifest` builds/uploads the installer but does not replace the public latest manifest.
    - A manual run with `publish_update_manifest` enabled uploads the manifest and the installed app's Check for Upgrade action discovers that exact build.
