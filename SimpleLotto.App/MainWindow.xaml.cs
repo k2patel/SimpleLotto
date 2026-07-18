@@ -1210,61 +1210,86 @@ public sealed partial class MainWindow : Window
 
     private async Task<string?> PromptForFourDigitPinAsync(string user, string currentCredential)
     {
-        var validationMessage = string.Empty;
-        while (true)
+        var pinBox = new PasswordBox
         {
-            var pinBox = new PasswordBox
+            Header = "New 4-digit PIN",
+            MaxLength = 4
+        };
+        var confirmationBox = new PasswordBox
+        {
+            Header = "Confirm PIN",
+            MaxLength = 4
+        };
+        var validationText = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed
+        };
+        AutomationProperties.SetAutomationId(pinBox, "LegacyMigrationNewPin");
+        AutomationProperties.SetAutomationId(confirmationBox, "LegacyMigrationConfirmPin");
+        AutomationProperties.SetAutomationId(validationText, "LegacyMigrationValidation");
+
+        var content = new StackPanel { Spacing = 12 };
+        content.Children.Add(new TextBlock
+        {
+            Text = $"{user}'s existing login was verified. Create a different four-digit PIN before continuing.",
+            TextWrapping = TextWrapping.Wrap
+        });
+        content.Children.Add(validationText);
+        content.Children.Add(pinBox);
+        content.Children.Add(confirmationBox);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Password update required",
+            Content = content,
+            PrimaryButtonText = "Save PIN",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        string? selectedPin = null;
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            var newPin = pinBox.Password;
+            if (!PinHashService.IsValidPin(newPin))
             {
-                Header = "New 4-digit PIN",
-                MaxLength = 4
-            };
-            var confirmationBox = new PasswordBox
-            {
-                Header = "Confirm PIN",
-                MaxLength = 4
-            };
-            AutomationProperties.SetAutomationId(pinBox, "LegacyMigrationNewPin");
-            AutomationProperties.SetAutomationId(confirmationBox, "LegacyMigrationConfirmPin");
-            var content = new StackPanel { Spacing = 12 };
-            content.Children.Add(new TextBlock
-            {
-                Text = $"{user}'s existing login was verified. This update requires a new four-digit PIN before continuing.",
-                TextWrapping = TextWrapping.Wrap
-            });
-            if (!string.IsNullOrEmpty(validationMessage))
-            {
-                content.Children.Add(new TextBlock
-                {
-                    Text = validationMessage,
-                    TextWrapping = TextWrapping.Wrap
-                });
+                args.Cancel = true;
+                validationText.Text = "The new PIN must contain exactly four digits.";
+                validationText.Visibility = Visibility.Visible;
+                pinBox.Password = string.Empty;
+                confirmationBox.Password = string.Empty;
+                _ = pinBox.Focus(FocusState.Programmatic);
+                return;
             }
-            content.Children.Add(pinBox);
-            content.Children.Add(confirmationBox);
 
-            var dialog = new ContentDialog
+            if (!string.Equals(newPin, confirmationBox.Password, StringComparison.Ordinal))
             {
-                XamlRoot = Content.XamlRoot,
-                Title = "Password update required",
-                Content = content,
-                PrimaryButtonText = "Save PIN",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Primary
-            };
-
-            var result = await dialog.ShowAsync();
-            if (result != ContentDialogResult.Primary)
-                return null;
-
-            if (PinHashService.IsValidPin(pinBox.Password) &&
-                string.Equals(pinBox.Password, confirmationBox.Password, StringComparison.Ordinal) &&
-                !string.Equals(pinBox.Password, currentCredential, StringComparison.Ordinal))
-            {
-                return pinBox.Password;
+                args.Cancel = true;
+                validationText.Text = "The PIN and confirmation do not match.";
+                validationText.Visibility = Visibility.Visible;
+                confirmationBox.Password = string.Empty;
+                _ = confirmationBox.Focus(FocusState.Programmatic);
+                return;
             }
 
-            validationMessage = "Enter four matching digits that differ from the current password or PIN.";
-        }
+            if (string.Equals(newPin, currentCredential, StringComparison.Ordinal))
+            {
+                args.Cancel = true;
+                validationText.Text = "Choose a PIN that differs from the current password or PIN.";
+                validationText.Visibility = Visibility.Visible;
+                pinBox.Password = string.Empty;
+                confirmationBox.Password = string.Empty;
+                _ = pinBox.Focus(FocusState.Programmatic);
+                return;
+            }
+
+            selectedPin = newPin;
+        };
+
+        var result = await dialog.ShowAsync();
+        return result == ContentDialogResult.Primary ? selectedPin : null;
     }
 
     private void LogoutButton_Click(object sender, RoutedEventArgs e)

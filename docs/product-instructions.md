@@ -46,6 +46,7 @@ Login expectations:
 - The Password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
 - During the PIN migration release, keep the existing Password field and unrestricted login input so every installed legacy password remains usable for its required one-time migration.
 - After any legacy password verifies successfully, do not enter the application yet. Require the user to create and confirm a different four-digit ASCII PIN, persist its versioned PBKDF2 hash, and only then complete login.
+- Validate and capture the new PIN before the required `ContentDialog` closes. Invalid, mismatched, or unchanged values must keep the same dialog open with inline feedback; do not close and recreate the dialog or read cleared password controls after closing.
 - New setup credentials, user-initiated credential changes, and Manager-authorized Clerk resets must create exactly four-digit ASCII PINs.
 - Do not add password-composition rules beyond the four-digit PIN requirement, failed-login delays, or account lockouts.
 - Release a later strict PIN-enforcement version only after the migration release has given installed Manager and Clerk accounts the opportunity to convert. That later version may limit the login field itself to four digits.

@@ -69,6 +69,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - New setup limits Manager and optional Clerk PIN fields to four characters and accepts only values containing exactly four digits; letters and shorter values are rejected.
    - Invalid passwords or PINs remain on the login screen and show the existing validation message without a retry delay or account lockout.
    - Every correct legacy SHA-256 credential, including an existing four-digit value, requires creation and confirmation of a different four-digit PIN before login completes.
+   - The required PIN dialog captures valid values before closing. Invalid, mismatched, or unchanged values keep the same dialog open with a specific inline message and never reopen in a loop.
    - Successful required migration atomically replaces only that user's stored hash with the versioned PBKDF2 format; cancelling the dialog or failing the write does not log in.
    - A malformed hash or failed hash-upgrade write does not log in or replace the in-memory credential.
    - Settings > Users/PIN lets Manager and Clerk change their own PIN. Each flow rejects an incorrect current PIN, a repeated current PIN, non-four-digit values, and mismatched confirmation.
