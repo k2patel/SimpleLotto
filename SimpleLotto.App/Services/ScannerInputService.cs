@@ -3,10 +3,10 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
-using Microsoft.UI.Dispatching;
 using SimpleLotto.App.Models;
 using SimpleLotto.App.Services.Win32;
 using Windows.System;
+using DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue;
 
 namespace SimpleLotto.App.Services;
 
