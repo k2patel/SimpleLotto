@@ -181,6 +181,7 @@ Bundle price rules:
 
 - Bundle price is configured based on the game price.
 - Ticket count per bundle is calculated as: `bundle price / game price`.
+- New game setup defaults to a `$300` bundle, except a `$50` game defaults to a `$900` bundle. These are editable defaults: the saved per-game bundle price is the authoritative value.
 - Bundle price must produce a whole ticket count. If it does not, the system must reject the value or require correction before saving.
 - Bundle price options must be editable in Inventory game setup.
 - Bundle price is used for ticket range calculation, sold-out detection, and closing accountability.
@@ -196,7 +197,11 @@ Ticket numbering rules:
 Bundle completion rules:
 
 - A bundle is complete when its sold ticket count/value reaches the configured bundle price.
-- A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift.
+- When the final valid ticket is sold, keep the bundle assigned to its bin and mark it `Sold out`/grey in Bins and Rdisplay. Its displayed ticket remains the final valid ticket; it must never advance to a non-existent serial (for example, `$20`/`$300`, start `000`: `000`-`014`, never `015`).
+- The sales ledger records only the ticket or inclusive ticket range actually sold. The bin/Rdisplay current-ticket state is operational inventory state and is stored separately.
+- A ticket serial may be recorded only once for a placed bundle. Re-scanning a serial below the current ticket, including during a backfill or closing scan, must be rejected and must not change sales totals. SQLite must retain a unique per-bundle ticket claim so concurrent/repeated scan events cannot bypass this rule.
+- A sale can be voided once only. The void is an auditable reversing ledger entry; a second void of the same sale and a void of that correction are rejected.
+- A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift; retain that bin placement as grey `Sold out` after recording the closing gap-fill range.
 - Closing-generated sold-out handling must be recorded separately from normal scanned sales so reports can explain the difference.
 
 ## Required Main Menu
@@ -377,7 +382,7 @@ Inventory receiving is the normal recurring stock intake workflow for new unopen
 
 Inventory receiving is for unopened bundles. Because ticket `000` may be physically inaccessible, the dedicated receiving scan dialog may accept any valid ticket barcode from the bundle but must record only the parsed Game ID and Bundle ID. The ticket serial is ignored and must not create a sale, activation, or bin assignment.
 
-The top bar must provide a `Scan New Inventory` action beside `Close Shift` only while the Inventory menu is selected. Its visibility must follow the Inventory content visibility directly, and the Receiving tab should repeat the same action as a clearly visible entry point. The action must be hidden on Dashboard, Bins, Closing, and Settings. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides a `Close scanning` action that validates and finalizes the session.
+The top bar must provide a `Scan New Inventory` action beside `Close Shift` only while the Inventory menu is selected. Its visibility must follow the Inventory content visibility directly, and the Receiving tab should repeat the same action as a clearly visible entry point. The action must be hidden on Dashboard, Bins, Closing, and Settings. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides an `Update Inventory` action that validates and finalizes the session.
 
 If the same Game ID + Bundle ID is scanned more than once, is already in receiving inventory, or is already active in a bin, the app must speak `Duplicate`, take no action, and leave all receiving counts and records unchanged.
 
@@ -586,7 +591,7 @@ When a scanner is paired, SimpleLotto must monitor scanner input globally while 
 
 Scanner rules:
 
-- SimpleLotto should reuse the proven scanner input mechanism from `../windowsPOS` instead of inventing a new scanner stack.
+- SimpleLotto should reuse the proven HID/Raw Input capture mechanism from `../windowsPOS`, but must keep its own simpler product and routing behavior. Do not copy WindowsPOS placement, pending-state, or sale business logic.
 - Global scanner capture is the default during normal operation.
 - Focused/on-demand scan capture is used only inside explicit workflows that ask the user to scan, such as add bundle, inventory receiving, closing scan, setup/import, and correction dialogs.
 - Paired scanner input should be monitored regardless of which page is currently visible.
@@ -597,6 +602,18 @@ Scanner rules:
 - If scanner monitoring is unavailable or disconnected, show clear status on Dashboard and Settings.
 - Scanner status and pairing diagnostics belong under Settings.
 - Settings > Scanner and Display must include barcode scanner pairing and unpairing controls. Pairing should reuse the WindowsPOS HID keyboard-class scanner model: list candidate HID devices, store VID/PID/serial when available, and use that pairing as the prerequisite for background scanner capture.
+
+Capture, classification, and routing contract:
+
+- There is one scanner input layer. It captures raw barcode characters first, identifies the complete scan, classifies it, and only then routes the classified value to the active workflow. Receiving, Closing, startup import, activation, and normal sales must not implement separate scanner stacks.
+- A paired scanner uses a background Raw Input message window filtered to the selected HID device identity (VID/PID/serial). It remains active when the window is unfocused or minimized to the tray and must not capture ordinary keyboard text from another device.
+- An unpaired scanner is a focused fallback only. It accepts a barcode-shaped burst with a maximum 50 ms gap between characters and at least four characters. Enter/Tab completes the burst; a 400 ms idle period also completes a burst for scanners that do not send a terminator. An incomplete fragment is discarded after five seconds.
+- The five-second incomplete-raw-buffer cleanup is independent from the configurable bin/bundle activation scan-pair window. The default activation scan-pair window remains five seconds and groups valid bin, ticket/bundle, and price inputs for one placement workflow.
+- Unpaired fallback has no device identity. It may handle a scanner while the app is focused, but it must not be relied on for simultaneous/interleaved use of two scanners; pair the operating scanner for background and device-isolated capture.
+- The supported non-ticket command labels are `BIN-<1-4 digits>` and `PRICE-<1-5 digits>`. A price label payload is cents. Ticket scans must pass the configured state barcode parser. Any other character sequence is not a SimpleLotto barcode and must never be interpreted by stripping characters or extracting a numeric suffix.
+- Normal text fields, password fields, search fields, rich-text fields, and ordinary number entry are excluded from app-wide unpaired fallback capture. The activation and receiving game-price fields are the explicit exception: they may observe a fast valid `PRICE-...` label and place the resulting value in that same price field while preserving normal manual entry.
+- Workflow routing is determined after classification: receiving and closing accept ticket barcodes only; startup import accepts ticket and bin labels; normal sales/activation can use ticket, bin, and price labels according to the current placement state.
+- Every rejected captured scan must show a concise scan error, write an audit entry with the raw value and reason, and speak the short prompt `Scan again.` A workflow expecting a ticket may instead speak the equally short `Ticket only.` Duplicate bundle scans remain an audio-only `Duplicate` no-op.
 
 Audit rules:
 

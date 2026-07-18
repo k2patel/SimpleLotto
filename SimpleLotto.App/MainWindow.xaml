@@ -53,14 +53,6 @@
                             MinWidth="148"
                             Visibility="{Binding Visibility, ElementName=InventoryContent}"
                             Click="ScanNewInventoryButton_Click"/>
-                    <Button x:Name="CloseShiftButton"
-                            Content="Close Shift"
-                            MinWidth="108"
-                            Click="CloseShiftButton_Click"/>
-                    <Button x:Name="LogoutButton"
-                            Content="Logout"
-                            MinWidth="84"
-                            Click="LogoutButton_Click"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -97,8 +89,9 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                    <ColumnDefinition x:Name="NavColumn" Width="190"/>
+                <ColumnDefinition x:Name="NavColumn" Width="190"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="132"/>
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
@@ -831,7 +824,7 @@
                                           ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="280"/>
+                                            <ColumnDefinition Width="300"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
                                             <Grid RowSpacing="12">
@@ -1030,13 +1023,17 @@
                                                         <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="80"/>
+                                                        <ColumnDefinition Width="90"/>
+                                                        <ColumnDefinition Width="72"/>
                                                         <ColumnDefinition Width="140"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Image" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game ID" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Name" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="3" Text="Price" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="4" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="4" Text="Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="5" Text="Starts" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="6" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <ListView x:Name="GameCatalogListView"
                                                           Grid.Row="2"
@@ -1054,6 +1051,8 @@
                                                                     <ColumnDefinition Width="110"/>
                                                                     <ColumnDefinition Width="*"/>
                                                                     <ColumnDefinition Width="80"/>
+                                                                    <ColumnDefinition Width="90"/>
+                                                                    <ColumnDefinition Width="72"/>
                                                                     <ColumnDefinition Width="140"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <Border Width="44"
@@ -1082,6 +1081,14 @@
                                                                            Foreground="{ThemeResource SlTextBrush}"
                                                                            VerticalAlignment="Center"/>
                                                                 <TextBlock Grid.Column="4"
+                                                                           Text="{Binding BundlePriceText}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           VerticalAlignment="Center"/>
+                                                                <TextBlock Grid.Column="5"
+                                                                           Text="{Binding TicketStartText}"
+                                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                                           VerticalAlignment="Center"/>
+                                                                <TextBlock Grid.Column="6"
                                                                            Text="{Binding ImageStatus}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                                            VerticalAlignment="Center"/>
@@ -1108,6 +1115,17 @@
                                                            SmallChange="1"
                                                            LargeChange="5"
                                                            SpinButtonPlacementMode="Compact"/>
+                                                <NumberBox x:Name="GameBundlePriceEditBox"
+                                                           Header="Bundle price ($)"
+                                                           Minimum="1"
+                                                           SmallChange="5"
+                                                           LargeChange="25"
+                                                           SpinButtonPlacementMode="Compact"/>
+                                                <ComboBox x:Name="GameFirstTicketEditComboBox"
+                                                          Header="First ticket">
+                                                    <ComboBoxItem Content="000" Tag="0"/>
+                                                    <ComboBoxItem Content="001" Tag="1"/>
+                                                </ComboBox>
                                                 <Button Content="Save Game Details"
                                                         HorizontalAlignment="Stretch"
                                                         Click="SaveGameDetailsButton_Click"/>
@@ -2256,6 +2274,27 @@
                     </Grid>
                 </ScrollViewer>
             </Grid>
+
+            <Border Grid.Column="2"
+                    Background="{ThemeResource SlSurfaceBrush}"
+                    BorderBrush="{ThemeResource SlBorderBrush}"
+                    BorderThickness="1,0,0,0"
+                    Padding="12,16">
+                <StackPanel Spacing="10">
+                    <Button x:Name="CloseShiftButton"
+                            Content="Close Shift"
+                            Style="{StaticResource SlShiftActionButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            ToolTipService.ToolTip="Close the current shift"
+                            Click="CloseShiftButton_Click"/>
+                    <Button x:Name="LogoutButton"
+                            Content="Logout"
+                            Style="{StaticResource SlLogoutActionButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            ToolTipService.ToolTip="Log out of SimpleLotto"
+                            Click="LogoutButton_Click"/>
+                </StackPanel>
+            </Border>
         </Grid>
 
         <Border Grid.Row="3"
@@ -2296,7 +2335,7 @@
                                    VerticalAlignment="Center"/>
                         <Button x:Name="ClosingScanOverlayCloseButton"
                                 Grid.Column="1"
-                                Content="Close scanning"
+                                Content="Close Scanning"
                                 MinWidth="120"
                                 IsTabStop="False"/>
                     </Grid>

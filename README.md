@@ -2,14 +2,18 @@
 
 Simple WinUI 3 lottery counter app based on the `../windowsPOS` project shape.
 
-See [docs/product-instructions.md](docs/product-instructions.md) for the high-level product direction before implementation work.
+See [docs/product-instructions.md](docs/product-instructions.md) for the product direction, workflow rules, and first-deliverable architecture before implementation work.
 
 ## Current Scope
 
-- Add local lottery ticket sales
-- Track shift ticket count, revenue, average ticket value, and game summary
-- Void a selected sale
-- Close the current shift
+- Record local lottery ticket sales and shift totals
+- Receive unopened inventory and activate bundles into bins
+- Reconcile and close the current shift
+- Pair a HID barcode scanner for global background capture, with a focused fallback for an unpaired scanner
+
+## Architecture
+
+SimpleLotto is a modular WinUI 3 application with local SQLite storage. Scanner capture is an adapter boundary: it identifies the raw input source and complete barcode, centralizes barcode classification, then routes the classified scan to the current product workflow. The HID Raw Input capture model is reused from WindowsPOS; SimpleLotto retains its own sales, inventory, and placement rules. Each game stores its ticket price, bundle price, and first-ticket mode; those values calculate the valid ticket range and prevent a sold-out bundle from advancing past its last ticket. See the [scanner and runtime contract](docs/product-instructions.md#scanner-and-runtime-behavior) for the detailed behavior.
 
 ## Build
 

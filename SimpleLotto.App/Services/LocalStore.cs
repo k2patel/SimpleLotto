@@ -2,13 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using Microsoft.Data.Sqlite;
 
 namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 12;
+    private const int SchemaVersion = 15;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -56,6 +57,7 @@ public sealed class LocalStore
         state.ReceivedBundles.AddRange(QueryReceivedBundles(conn));
         state.Activations.AddRange(QueryActivations(conn));
         state.Sales.AddRange(QuerySales(conn));
+        state.VoidedSaleKeys.AddRange(QueryVoidedSaleKeys(conn));
         state.ManualGames.AddRange(QueryManualGames(conn));
         state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
         state.ClosingHistory.AddRange(QueryClosingHistory(conn));
@@ -95,14 +97,15 @@ public sealed class LocalStore
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO imports (game_id, bundle_id, ticket, bin, source, created_at_utc)
-            VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $created_at_utc)
+            INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
+            VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc)
             """;
         cmd.Parameters.AddWithValue("$game_id", line.GameId);
         cmd.Parameters.AddWithValue("$bundle_id", line.BundleId);
         cmd.Parameters.AddWithValue("$ticket", line.Ticket);
         cmd.Parameters.AddWithValue("$bin", line.Bin);
         cmd.Parameters.AddWithValue("$source", line.Source);
+        cmd.Parameters.AddWithValue("$is_sold_out", line.IsSoldOut ? 1 : 0);
         cmd.Parameters.AddWithValue("$created_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         cmd.ExecuteNonQuery();
     }
@@ -110,19 +113,24 @@ public sealed class LocalStore
     public void InsertSale(StoredSaleLine line)
     {
         using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        ClaimSaleTickets(conn, tx, line);
         using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
-            VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+            INSERT INTO sales (sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source)
+            VALUES ($sold_at_utc, $game_id, $bundle_id, $bin, $ticket, $quantity, $amount_cents, $source)
             """;
         cmd.Parameters.AddWithValue("$sold_at_utc", line.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$game_id", line.GameId);
+        cmd.Parameters.AddWithValue("$bundle_id", line.BundleId);
         cmd.Parameters.AddWithValue("$bin", line.Bin);
         cmd.Parameters.AddWithValue("$ticket", line.Ticket);
         cmd.Parameters.AddWithValue("$quantity", line.Quantity);
         cmd.Parameters.AddWithValue("$amount_cents", line.AmountCents);
         cmd.Parameters.AddWithValue("$source", line.Source);
         cmd.ExecuteNonQuery();
+        tx.Commit();
     }
 
     public void InsertImportAndSale(StoredImportLine import, StoredSaleLine sale)
@@ -134,27 +142,30 @@ public sealed class LocalStore
         {
             importCmd.Transaction = tx;
             importCmd.CommandText = """
-                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, created_at_utc)
-                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $created_at_utc)
+                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
+                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc)
                 """;
             importCmd.Parameters.AddWithValue("$game_id", import.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
             importCmd.Parameters.AddWithValue("$ticket", import.Ticket);
             importCmd.Parameters.AddWithValue("$bin", import.Bin);
             importCmd.Parameters.AddWithValue("$source", import.Source);
+            importCmd.Parameters.AddWithValue("$is_sold_out", import.IsSoldOut ? 1 : 0);
             importCmd.Parameters.AddWithValue("$created_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             importCmd.ExecuteNonQuery();
         }
 
+        ClaimSaleTickets(conn, tx, sale);
         using (var saleCmd = conn.CreateCommand())
         {
             saleCmd.Transaction = tx;
             saleCmd.CommandText = """
-                INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
-                VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                INSERT INTO sales (sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bundle_id, $bin, $ticket, $quantity, $amount_cents, $source)
                 """;
             saleCmd.Parameters.AddWithValue("$sold_at_utc", sale.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
             saleCmd.Parameters.AddWithValue("$game_id", sale.GameId);
+            saleCmd.Parameters.AddWithValue("$bundle_id", sale.BundleId);
             saleCmd.Parameters.AddWithValue("$bin", sale.Bin);
             saleCmd.Parameters.AddWithValue("$ticket", sale.Ticket);
             saleCmd.Parameters.AddWithValue("$quantity", sale.Quantity);
@@ -259,15 +270,17 @@ public sealed class LocalStore
         using var conn = Open();
         using var tx = conn.BeginTransaction();
 
+        ClaimSaleTickets(conn, tx, sale);
         using (var saleCmd = conn.CreateCommand())
         {
             saleCmd.Transaction = tx;
             saleCmd.CommandText = """
-                INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
-                VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                INSERT INTO sales (sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bundle_id, $bin, $ticket, $quantity, $amount_cents, $source)
                 """;
             saleCmd.Parameters.AddWithValue("$sold_at_utc", sale.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
             saleCmd.Parameters.AddWithValue("$game_id", sale.GameId);
+            saleCmd.Parameters.AddWithValue("$bundle_id", sale.BundleId);
             saleCmd.Parameters.AddWithValue("$bin", sale.Bin);
             saleCmd.Parameters.AddWithValue("$ticket", sale.Ticket);
             saleCmd.Parameters.AddWithValue("$quantity", sale.Quantity);
@@ -281,12 +294,14 @@ public sealed class LocalStore
             importCmd.Transaction = tx;
             importCmd.CommandText = """
                 UPDATE imports
-                SET ticket = $ticket
+                SET ticket = $ticket,
+                    is_sold_out = $is_sold_out
                 WHERE game_id = $game_id
                   AND bundle_id = $bundle_id
                   AND bin = $bin
                 """;
             importCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+            importCmd.Parameters.AddWithValue("$is_sold_out", bundle.IsSoldOut ? 1 : 0);
             importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
             importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
@@ -296,6 +311,26 @@ public sealed class LocalStore
         }
 
         tx.Commit();
+    }
+
+    public void MarkImportSoldOut(StoredImportLine bundle)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE imports
+            SET ticket = $ticket,
+                is_sold_out = 1
+            WHERE game_id = $game_id
+              AND bundle_id = $bundle_id
+              AND bin = $bin
+            """;
+        cmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+        cmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+        cmd.Parameters.AddWithValue("$bin", bundle.Bin);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Active bundle was not found.");
     }
 
     public void CompleteClosing(
@@ -352,14 +387,16 @@ public sealed class LocalStore
 
         foreach (var line in generated)
         {
+            ClaimSaleTickets(conn, tx, line);
             using var saleCmd = conn.CreateCommand();
             saleCmd.Transaction = tx;
             saleCmd.CommandText = """
-                INSERT INTO sales (sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source)
-                VALUES ($sold_at_utc, $game_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                INSERT INTO sales (sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bundle_id, $bin, $ticket, $quantity, $amount_cents, $source)
                 """;
             saleCmd.Parameters.AddWithValue("$sold_at_utc", line.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
             saleCmd.Parameters.AddWithValue("$game_id", line.GameId);
+            saleCmd.Parameters.AddWithValue("$bundle_id", line.BundleId);
             saleCmd.Parameters.AddWithValue("$bin", line.Bin);
             saleCmd.Parameters.AddWithValue("$ticket", line.Ticket);
             saleCmd.Parameters.AddWithValue("$quantity", line.Quantity);
@@ -390,12 +427,14 @@ public sealed class LocalStore
             importCmd.Transaction = tx;
             importCmd.CommandText = """
                 UPDATE imports
-                SET ticket = $ticket
+                SET ticket = $ticket,
+                    is_sold_out = $is_sold_out
                 WHERE game_id = $game_id
                   AND bundle_id = $bundle_id
                   AND bin = $bin
                 """;
             importCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+            importCmd.Parameters.AddWithValue("$is_sold_out", bundle.IsSoldOut ? 1 : 0);
             importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
             importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
@@ -407,14 +446,15 @@ public sealed class LocalStore
             using var importCmd = conn.CreateCommand();
             importCmd.Transaction = tx;
             importCmd.CommandText = """
-                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, created_at_utc)
-                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $created_at_utc)
+                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
+                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc)
                 """;
             importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
             importCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
             importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
             importCmd.Parameters.AddWithValue("$source", bundle.Source);
+            importCmd.Parameters.AddWithValue("$is_sold_out", bundle.IsSoldOut ? 1 : 0);
             importCmd.Parameters.AddWithValue("$created_at_utc", closedAtUtc.ToString("O", CultureInfo.InvariantCulture));
             importCmd.ExecuteNonQuery();
 
@@ -446,6 +486,45 @@ public sealed class LocalStore
         tx.Commit();
     }
 
+    public void InsertVoid(StoredSaleLine original, StoredSaleLine correction, string saleKey)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var voidCmd = conn.CreateCommand())
+        {
+            voidCmd.Transaction = tx;
+            voidCmd.CommandText = """
+                INSERT OR IGNORE INTO sale_voids (sale_key, voided_at_utc)
+                VALUES ($sale_key, $voided_at_utc)
+                """;
+            voidCmd.Parameters.AddWithValue("$sale_key", saleKey);
+            voidCmd.Parameters.AddWithValue("$voided_at_utc", correction.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            if (voidCmd.ExecuteNonQuery() == 0)
+                throw new InvalidOperationException("This sale has already been voided.");
+        }
+
+        using (var saleCmd = conn.CreateCommand())
+        {
+            saleCmd.Transaction = tx;
+            saleCmd.CommandText = """
+                INSERT INTO sales (sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source)
+                VALUES ($sold_at_utc, $game_id, $bundle_id, $bin, $ticket, $quantity, $amount_cents, $source)
+                """;
+            saleCmd.Parameters.AddWithValue("$sold_at_utc", correction.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            saleCmd.Parameters.AddWithValue("$game_id", correction.GameId);
+            saleCmd.Parameters.AddWithValue("$bundle_id", correction.BundleId);
+            saleCmd.Parameters.AddWithValue("$bin", correction.Bin);
+            saleCmd.Parameters.AddWithValue("$ticket", correction.Ticket);
+            saleCmd.Parameters.AddWithValue("$quantity", correction.Quantity);
+            saleCmd.Parameters.AddWithValue("$amount_cents", correction.AmountCents);
+            saleCmd.Parameters.AddWithValue("$source", correction.Source);
+            saleCmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
     public void DeleteSale(StoredSaleLine line)
     {
         using var conn = Open();
@@ -472,9 +551,20 @@ public sealed class LocalStore
     public void ClearSales()
     {
         using var conn = Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM sales";
-        cmd.ExecuteNonQuery();
+        using var tx = conn.BeginTransaction();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "DELETE FROM sales";
+            cmd.ExecuteNonQuery();
+        }
+        using (var voidCmd = conn.CreateCommand())
+        {
+            voidCmd.Transaction = tx;
+            voidCmd.CommandText = "DELETE FROM sale_voids";
+            voidCmd.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     public void UpsertManualGame(StoredGameRecord game)
@@ -482,11 +572,13 @@ public sealed class LocalStore
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO manual_games (game_id, name, price_cents, source, image_uri, image_status)
-            VALUES ($game_id, $name, $price_cents, $source, $image_uri, $image_status)
+            INSERT INTO manual_games (game_id, name, price_cents, bundle_price_cents, first_ticket_serial, source, image_uri, image_status)
+            VALUES ($game_id, $name, $price_cents, $bundle_price_cents, $first_ticket_serial, $source, $image_uri, $image_status)
             ON CONFLICT(game_id) DO UPDATE SET
                 name = excluded.name,
                 price_cents = excluded.price_cents,
+                bundle_price_cents = excluded.bundle_price_cents,
+                first_ticket_serial = excluded.first_ticket_serial,
                 source = excluded.source,
                 image_uri = excluded.image_uri,
                 image_status = excluded.image_status
@@ -494,6 +586,8 @@ public sealed class LocalStore
         cmd.Parameters.AddWithValue("$game_id", game.GameId);
         cmd.Parameters.AddWithValue("$name", game.Name);
         cmd.Parameters.AddWithValue("$price_cents", game.PriceCents);
+        cmd.Parameters.AddWithValue("$bundle_price_cents", game.BundlePriceCents);
+        cmd.Parameters.AddWithValue("$first_ticket_serial", game.FirstTicketSerial);
         cmd.Parameters.AddWithValue("$source", game.Source);
         cmd.Parameters.AddWithValue("$image_uri", game.ImageUri);
         cmd.Parameters.AddWithValue("$image_status", game.ImageStatus);
@@ -585,10 +679,12 @@ public sealed class LocalStore
                     ticket TEXT NOT NULL,
                     bin TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'initial_import',
+                    is_sold_out INTEGER NOT NULL DEFAULT 0,
                     created_at_utc TEXT NOT NULL
                 )
                 """);
             EnsureColumn(conn, "imports", "source", "TEXT NOT NULL DEFAULT 'initial_import'");
+            EnsureColumn(conn, "imports", "is_sold_out", "INTEGER NOT NULL DEFAULT 0");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bundle ON imports(game_id, bundle_id)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bin ON imports(bin)");
             Exec(conn, """
@@ -618,6 +714,7 @@ public sealed class LocalStore
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sold_at_utc TEXT NOT NULL,
                     game_id TEXT NOT NULL,
+                    bundle_id TEXT NOT NULL DEFAULT '',
                     bin TEXT NOT NULL,
                     ticket TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
@@ -626,9 +723,26 @@ public sealed class LocalStore
                 )
                 """);
             EnsureColumn(conn, "sales", "source", "TEXT NOT NULL DEFAULT 'normal_sale'");
+            EnsureColumn(conn, "sales", "bundle_id", "TEXT NOT NULL DEFAULT ''");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_game ON sales(game_id)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_bin ON sales(bin)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_sold_at ON sales(sold_at_utc)");
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sales_bundle ON sales(game_id, bundle_id)");
+            Exec(conn, """
+                CREATE TABLE IF NOT EXISTS sale_voids (
+                    sale_key TEXT PRIMARY KEY,
+                    voided_at_utc TEXT NOT NULL
+                )
+                """);
+            Exec(conn, """
+                CREATE TABLE IF NOT EXISTS sale_ticket_claims (
+                    game_id TEXT NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    ticket_serial INTEGER NOT NULL,
+                    claimed_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (game_id, bundle_id, ticket_serial)
+                )
+                """);
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS closing_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -685,11 +799,15 @@ public sealed class LocalStore
                     name TEXT NOT NULL,
                     source TEXT NOT NULL,
                     price_cents INTEGER NOT NULL DEFAULT 0,
+                    bundle_price_cents INTEGER NOT NULL DEFAULT 30000,
+                    first_ticket_serial INTEGER NOT NULL DEFAULT 0,
                     image_uri TEXT NOT NULL,
                     image_status TEXT NOT NULL
                 )
                 """);
             EnsureColumn(conn, "manual_games", "price_cents", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(conn, "manual_games", "bundle_price_cents", "INTEGER NOT NULL DEFAULT 30000");
+            EnsureColumn(conn, "manual_games", "first_ticket_serial", "INTEGER NOT NULL DEFAULT 0");
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS rdisplay_displays (
                     id INTEGER PRIMARY KEY,
@@ -710,7 +828,7 @@ public sealed class LocalStore
                 """);
             EnsureColumn(conn, "rdisplay_displays", "last_server_url", "TEXT NOT NULL DEFAULT ''");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_rdisplay_displays_token ON rdisplay_displays(auth_token)");
-            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Enforce unique physical bundles and repair duplicate active inventory");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Enforce one accounting claim per bundle ticket and persist one-time voids");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             _schemaReady = true;
         }
@@ -779,10 +897,10 @@ public sealed class LocalStore
     {
         var rows = new List<StoredImportLine>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT game_id, bundle_id, ticket, bin, source FROM imports ORDER BY id DESC";
+        cmd.CommandText = "SELECT game_id, bundle_id, ticket, bin, source, is_sold_out FROM imports ORDER BY id DESC";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            rows.Add(new StoredImportLine(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+            rows.Add(new StoredImportLine(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetInt32(5) != 0));
         return rows;
     }
 
@@ -830,7 +948,7 @@ public sealed class LocalStore
     {
         var rows = new List<StoredSaleLine>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT sold_at_utc, game_id, bin, ticket, quantity, amount_cents, source FROM sales ORDER BY id DESC";
+        cmd.CommandText = "SELECT sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source FROM sales ORDER BY id DESC";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -844,23 +962,94 @@ public sealed class LocalStore
             rows.Add(new StoredSaleLine(
                 soldAt,
                 reader.GetString(1),
-                reader.GetString(2),
                 reader.GetString(3),
-                reader.GetInt32(4),
-                reader.GetInt64(5),
-                reader.GetString(6)));
+                reader.GetString(4),
+                reader.GetInt32(5),
+                reader.GetInt64(6),
+                reader.GetString(7),
+                reader.GetString(2)));
         }
         return rows;
+    }
+
+    private static void ClaimSaleTickets(SqliteConnection conn, SqliteTransaction tx, StoredSaleLine sale)
+    {
+        if (sale.Quantity <= 0)
+            return;
+
+        if (string.IsNullOrWhiteSpace(sale.BundleId))
+            throw new InvalidOperationException("A sale must identify its bundle before it can be recorded.");
+
+        var serials = ParseSaleTicketSerials(sale.Ticket);
+        if (serials.Count != sale.Quantity)
+            throw new InvalidOperationException("Sale ticket range does not match its ticket quantity.");
+
+        foreach (var serial in serials)
+        {
+            using var claimCmd = conn.CreateCommand();
+            claimCmd.Transaction = tx;
+            claimCmd.CommandText = """
+                INSERT INTO sale_ticket_claims (game_id, bundle_id, ticket_serial, claimed_at_utc)
+                VALUES ($game_id, $bundle_id, $ticket_serial, $claimed_at_utc)
+                """;
+            claimCmd.Parameters.AddWithValue("$game_id", sale.GameId);
+            claimCmd.Parameters.AddWithValue("$bundle_id", sale.BundleId);
+            claimCmd.Parameters.AddWithValue("$ticket_serial", serial);
+            claimCmd.Parameters.AddWithValue("$claimed_at_utc", sale.SoldAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            try
+            {
+                claimCmd.ExecuteNonQuery();
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+            {
+                throw new InvalidOperationException($"Ticket {serial.ToString(CultureInfo.InvariantCulture)} was already recorded for this bundle.", ex);
+            }
+        }
+    }
+
+    private static List<int> ParseSaleTicketSerials(string ticket)
+    {
+        var parts = (ticket ?? string.Empty).Split('-', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length is < 1 or > 2 || !TryParseTicketSerial(parts[0], out var first))
+            throw new InvalidOperationException("Sale ticket is not a valid ticket serial or serial range.");
+
+        var last = first;
+        if (parts.Length == 2 && !TryParseTicketSerial(parts[1], out last))
+            throw new InvalidOperationException("Sale ticket range is not valid.");
+        if (last < first)
+            throw new InvalidOperationException("Sale ticket range is reversed.");
+
+        var serials = new List<int>();
+        for (var serial = first; serial <= last; serial++)
+            serials.Add(serial);
+        return serials;
+    }
+
+    private static bool TryParseTicketSerial(string value, out int serial)
+    {
+        var digits = new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+        return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out serial);
     }
 
     private static List<StoredGameRecord> QueryManualGames(SqliteConnection conn)
     {
         var rows = new List<StoredGameRecord>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT game_id, name, source, image_uri, image_status, price_cents FROM manual_games ORDER BY game_id";
+        cmd.CommandText = "SELECT game_id, name, source, image_uri, image_status, price_cents, bundle_price_cents, first_ticket_serial FROM manual_games ORDER BY game_id";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            rows.Add(new StoredGameRecord(reader.GetString(0), reader.GetString(1), reader.GetInt64(5), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+            rows.Add(new StoredGameRecord(reader.GetString(0), reader.GetString(1), reader.GetInt64(5), reader.GetInt64(6), reader.GetInt32(7), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+        return rows;
+    }
+
+    private static List<string> QueryVoidedSaleKeys(SqliteConnection conn)
+    {
+        var rows = new List<string>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT sale_key FROM sale_voids";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add(reader.GetString(0));
         return rows;
     }
 
@@ -1040,6 +1229,7 @@ public sealed class PersistedState
     public List<StoredReceivedBundle> ReceivedBundles { get; } = new();
     public List<StoredActivationRecord> Activations { get; } = new();
     public List<StoredSaleLine> Sales { get; } = new();
+    public List<string> VoidedSaleKeys { get; } = new();
     public List<StoredGameRecord> ManualGames { get; } = new();
     public List<StoredRdisplayDisplay> RdisplayDisplays { get; } = new();
     public List<StoredClosingRecord> ClosingHistory { get; } = new();
@@ -1059,7 +1249,7 @@ public sealed record StoreSetup(
     string ClerkName,
     string ClerkPasswordHash);
 
-public sealed record StoredImportLine(string GameId, string BundleId, string Ticket, string Bin, string Source);
+public sealed record StoredImportLine(string GameId, string BundleId, string Ticket, string Bin, string Source, bool IsSoldOut = false);
 
 public sealed record StoredReceivedBundle(string GameId, string BundleId, DateTime ReceivedAtUtc, string Source = "receiving");
 
@@ -1072,7 +1262,8 @@ public sealed record StoredSaleLine(
     string Ticket,
     int Quantity,
     long AmountCents,
-    string Source = "normal_sale");
+    string Source = "normal_sale",
+    string BundleId = "");
 
 public sealed record StoredClosingRecord(
     DateTime ClosedAtUtc,
@@ -1106,6 +1297,8 @@ public sealed record StoredGameRecord(
     string GameId,
     string Name,
     long PriceCents,
+    long BundlePriceCents,
+    int FirstTicketSerial,
     string Source,
     string ImageUri,
     string ImageStatus);

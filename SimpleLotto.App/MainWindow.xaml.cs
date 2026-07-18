@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI;
@@ -43,8 +44,10 @@ public sealed partial class MainWindow : Window
     private readonly LocalStore _store;
     private readonly AppUpdateService _updates;
     private readonly LicenseService _license;
+    private readonly ScannerInputService _scannerInput;
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<SaleLine> _allSales = new();
+    private readonly HashSet<string> _voidedSaleKeys = new(StringComparer.Ordinal);
     private readonly ObservableCollection<ImportLine> _imports = new();
     private readonly ObservableCollection<ReceivedBundleLine> _receivedBundles = new();
     private readonly List<ActivationLine> _activations = new();
@@ -131,12 +134,16 @@ public sealed partial class MainWindow : Window
     private int _auditLogPage = 1;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
+    private readonly ScanBurstState _startupScanBurst = new();
+    private readonly ScanBurstState _focusedScanBurst = new();
     private string _dashboardPendingBin = string.Empty;
     private ImportTicket? _dashboardPendingTicket;
+    private long? _dashboardPendingPriceCents;
     private DateTime? _dashboardPendingBinAtUtc;
     private DateTime? _dashboardPendingTicketAtUtc;
     private int? _selectedBinNumber;
     private bool _isWorkflowDialogOpen;
+    private Func<ClassifiedScan, bool>? _scannerScanOverride;
     private const string ScannerVidSettingKey = "barcode_scanner_vid";
     private const string ScannerPidSettingKey = "barcode_scanner_pid";
     private const string ScannerSerialSettingKey = "barcode_scanner_serial";
@@ -145,6 +152,10 @@ public sealed partial class MainWindow : Window
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
     private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
     private const int LicenseExpiryWarningDays = 7;
+    // WindowsPOS convention: $300 for ordinary games and $900 for $50 games.
+    // These are only defaults for a game record; its saved bundle price is authoritative.
+    private const long DefaultBundlePriceCents = 30_000;
+    private const long HighValueBundlePriceCents = 90_000;
     private const string EmailSendClosingSettingKey = "email_send_closing";
     private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
     private const string EmailIncludeInventorySettingKey = "email_include_inventory";
@@ -156,9 +167,46 @@ public sealed partial class MainWindow : Window
     private const string EmailIncludeInitializationSettingKey = "email_include_initialization";
     private const string EmailIncludeClosingAuditSettingKey = "email_include_closing_audit";
     private const string EmailIncludePdfSettingKey = "email_include_pdf";
+    private static readonly Regex BinCommandBarcode = new(
+        @"^BIN-(\d{1,4})$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PriceCommandBarcode = new(
+        @"^PRICE-(\d{1,5})$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hWnd);
+
+    private enum ScanKind
+    {
+        Bin,
+        Price,
+        Ticket
+    }
+
+    private sealed record ClassifiedScan(
+        ScanKind Kind,
+        string Raw,
+        ImportTicket? Ticket = null,
+        int? BinNumber = null,
+        long? PriceCents = null);
+
+    private sealed record ActivationBinSelection(int BinNumber, long? PriceCents);
+
+    private sealed class ScanBurstState
+    {
+        public DateTime LastCharacterAtUtc { get; set; } = DateTime.MinValue;
+
+        public int Version { get; private set; }
+
+        public int Advance() => ++Version;
+
+        public void Reset()
+        {
+            LastCharacterAtUtc = DateTime.MinValue;
+            Version++;
+        }
+    }
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -232,6 +280,9 @@ public sealed partial class MainWindow : Window
         _subclassProc = TraySubclassProc;
         InitializeComponent();
         _hwnd = WindowNative.GetWindowHandle(this);
+        _scannerInput = new ScannerInputService(DispatcherQueue);
+        _scannerInput.ScanReceived += ScannerInput_ScanReceived;
+        _scannerInput.CaptureAvailabilityChanged += ScannerInput_CaptureAvailabilityChanged;
         Title = "SimpleLotto";
         ResizeWindow(1120, 720);
         SetScannerPaired(false);
@@ -334,6 +385,7 @@ public sealed partial class MainWindow : Window
         EmailToBox.Text = ReadSetting(state, "email_to");
         ApplyClosingEmailSettings(state);
         SetScannerPaired(!string.IsNullOrWhiteSpace(_scannerVid) && !string.IsNullOrWhiteSpace(_scannerPid));
+        _scannerInput.Configure(_scannerVid, _scannerPid, _scannerSerial);
 
         var selectedState = StateOptions.FirstOrDefault(s => s.Code == _storeState);
         if (selectedState is not null)
@@ -343,7 +395,7 @@ public sealed partial class MainWindow : Window
 
         _imports.Clear();
         foreach (var line in state.Imports)
-            _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
+            _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source, line.IsSoldOut));
 
         _receivedBundles.Clear();
         foreach (var bundle in state.ReceivedBundles)
@@ -368,6 +420,9 @@ public sealed partial class MainWindow : Window
 
         _sales.Clear();
         _allSales.Clear();
+        _voidedSaleKeys.Clear();
+        foreach (var saleKey in state.VoidedSaleKeys)
+            _voidedSaleKeys.Add(saleKey);
         foreach (var line in state.Sales)
         {
             var saleLine = new SaleLine(
@@ -377,7 +432,8 @@ public sealed partial class MainWindow : Window
                 line.Ticket,
                 line.Quantity,
                 line.AmountCents / 100m,
-                line.Source);
+                line.Source,
+                line.BundleId);
             _allSales.Add(saleLine);
             if (line.SoldAtUtc > _lastCloseUtc)
                 _sales.Add(saleLine);
@@ -393,6 +449,8 @@ public sealed partial class MainWindow : Window
                 game.GameId,
                 string.IsNullOrWhiteSpace(game.Name) ? $"Game {game.GameId}" : game.Name,
                 game.PriceCents,
+                game.BundlePriceCents,
+                game.FirstTicketSerial,
                 string.IsNullOrWhiteSpace(game.Source) ? "Manual" : game.Source,
                 string.IsNullOrWhiteSpace(game.ImageUri) ? "ms-appx:///Assets/SimpleLottoLogo64.png" : game.ImageUri,
                 string.IsNullOrWhiteSpace(game.ImageStatus) ? "Image not cached" : game.ImageStatus));
@@ -407,6 +465,8 @@ public sealed partial class MainWindow : Window
         foreach (var audit in state.AuditLog)
             _auditLogRows.Add(AuditLogRow.From(audit));
         ApplyAuditLogPage();
+
+        RetireOutOfRangeActiveBundles();
 
         BuildImportBins(clearImports: false);
 
@@ -739,44 +799,258 @@ public sealed partial class MainWindow : Window
 
     private void OnGlobalKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (_scannerInput.IsActivelyCapturing)
+            return;
+
         if (_isWorkflowDialogOpen)
+            return;
+
+        if (FocusManager.GetFocusedElement(Content.XamlRoot) is TextBox or PasswordBox or AutoSuggestBox or RichEditBox or NumberBox)
             return;
 
         if (StartupOverlay.Visibility == Visibility.Visible)
         {
             if (_startupStage == StartupStage.Import)
-                CaptureScanKey(e, _startupScanBuffer, ProcessImportScanInput, ImportScanStatusText);
+                CaptureGlobalScanKey(e, _startupScanBuffer, _startupScanBurst, ProcessImportScanInput, ImportScanStatusText);
             return;
         }
 
-        CaptureScanKey(e, _focusedScanBuffer, ProcessFocusedScanInput, DashboardScannerStatusText);
+        CaptureGlobalScanKey(e, _focusedScanBuffer, _focusedScanBurst, ProcessFocusedScanInput, DashboardScannerStatusText);
     }
 
-    private static void CaptureScanKey(
+    private void ScannerInput_ScanReceived(string raw)
+    {
+        try
+        {
+            if (!TryClassifyScan(raw, out var scan))
+            {
+                RejectScannerInput(raw, "Barcode is not a recognized SimpleLotto scan.");
+                return;
+            }
+
+            if (_scannerScanOverride?.Invoke(scan) == true)
+                return;
+
+            if (StartupOverlay.Visibility == Visibility.Visible)
+            {
+                if (_startupStage == StartupStage.Import && scan.Kind is ScanKind.Bin or ScanKind.Ticket)
+                    ProcessImportScanSegment(scan.Raw);
+                else
+                    RejectScannerInput(scan.Raw, "Scanner input is not allowed at this startup stage.");
+                return;
+            }
+
+            if (_isWorkflowDialogOpen)
+            {
+                RejectScannerInput(scan.Raw, "No active scanner route for this dialog.");
+                return;
+            }
+
+            ProcessFocusedScan(scan);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Paired scanner input could not be routed.", ex);
+            RejectScannerInput(raw, $"Routing failure: {ex.Message}");
+        }
+    }
+
+    private bool TryClassifyScan(string raw, out ClassifiedScan scan)
+    {
+        scan = null!;
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (BinCommandBarcode.Match(trimmed) is { Success: true } binMatch &&
+            int.TryParse(binMatch.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber))
+        {
+            scan = new ClassifiedScan(ScanKind.Bin, trimmed, BinNumber: binNumber);
+            return true;
+        }
+
+        if (PriceCommandBarcode.Match(trimmed) is { Success: true } priceMatch &&
+            long.TryParse(priceMatch.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var priceCents) &&
+            priceCents > 0)
+        {
+            scan = new ClassifiedScan(ScanKind.Price, trimmed, PriceCents: priceCents);
+            return true;
+        }
+
+        if (!trimmed.All(c => char.IsDigit(c) || c == '-'))
+            return false;
+
+        var ticket = TryParseImportTicket(trimmed);
+        if (ticket is null)
+            return false;
+
+        scan = new ClassifiedScan(ScanKind.Ticket, trimmed, Ticket: ticket);
+        return true;
+    }
+
+    private void RejectScannerInput(string raw, string reason)
+    {
+        DashboardScannerStatusText.Text = "Scan error. Scan again.";
+        DashboardLastScanText.Text = string.IsNullOrWhiteSpace(raw)
+            ? "Last scan failed."
+            : $"Last scan failed: {raw}";
+        StatusText.Text = reason;
+        TryRecordAudit("scanner", "Scan rejected", $"{reason} Raw scan {raw}");
+        _ = SpeakAsync("Scan again.");
+    }
+
+    private void ScannerInput_CaptureAvailabilityChanged(bool isAvailable)
+    {
+        RefreshScannerPairingStatus();
+        if (isAvailable)
+            DashboardScannerStatusText.Text = "Paired scanner ready.";
+        else if (IsScannerPaired)
+            DashboardScannerStatusText.Text = "Paired scanner not detected. Reconnect it or pair again.";
+    }
+
+    private void CaptureGlobalScanKey(
         KeyRoutedEventArgs e,
         StringBuilder buffer,
+        ScanBurstState state,
         Action<string> processScan,
         TextBlock? statusText)
     {
+        const int maxInterCharacterMilliseconds = 50;
+        const int minimumBarcodeCharacters = 4;
+
         if (e.Key == VirtualKey.Enter)
         {
             if (buffer.Length == 0)
                 return;
 
-            e.Handled = true;
             var raw = buffer.ToString();
             buffer.Clear();
+            state.Reset();
+            if (raw.Length < minimumBarcodeCharacters)
+                return;
+
+            e.Handled = true;
             processScan(raw);
             return;
         }
 
-        if (TryMapScanKey(e.Key, out var c))
+        if (!TryMapScanKey(e.Key, out var character))
+            return;
+
+        var now = DateTime.UtcNow;
+        if (buffer.Length > 0 &&
+            (now - state.LastCharacterAtUtc).TotalMilliseconds > maxInterCharacterMilliseconds)
         {
-            e.Handled = true;
-            buffer.Append(c);
-            if (statusText is not null)
-                statusText.Text = "Scanning...";
+            buffer.Clear();
         }
+
+        state.LastCharacterAtUtc = now;
+        buffer.Append(character);
+        e.Handled = true;
+        if (buffer.Length >= minimumBarcodeCharacters && statusText is not null)
+            statusText.Text = "Scanning...";
+
+        ScheduleGlobalScanFlush(buffer, state, processScan, statusText, minimumBarcodeCharacters);
+    }
+
+    private void ScheduleGlobalScanFlush(
+        StringBuilder buffer,
+        ScanBurstState state,
+        Action<string> processScan,
+        TextBlock? statusText,
+        int minimumBarcodeCharacters)
+    {
+        const int idleFlushMilliseconds = 400;
+        const int staleDropMilliseconds = 5000;
+        var version = state.Advance();
+        _ = Task.Delay(idleFlushMilliseconds).ContinueWith(_ =>
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (version != state.Version || buffer.Length == 0)
+                    return;
+
+                if (buffer.Length >= minimumBarcodeCharacters)
+                {
+                    var raw = buffer.ToString();
+                    buffer.Clear();
+                    state.Reset();
+                    processScan(raw);
+                    return;
+                }
+
+                _ = Task.Delay(staleDropMilliseconds - idleFlushMilliseconds).ContinueWith(_ =>
+                {
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (version != state.Version || buffer.Length == 0)
+                            return;
+
+                        var droppedLength = buffer.Length;
+                        buffer.Clear();
+                        state.Reset();
+                        AppLog.Info($"Discarded incomplete unpaired scanner input after {staleDropMilliseconds} ms (length {droppedLength}).");
+                        if (statusText is not null)
+                            statusText.Text = "Ready to scan.";
+                    });
+                });
+            });
+        });
+    }
+
+    private void ObserveFocusedCommandScanKey(
+        KeyRoutedEventArgs e,
+        StringBuilder buffer,
+        ScanBurstState state,
+        Func<ClassifiedScan, bool> routeScan)
+    {
+        const int maxInterCharacterMilliseconds = 50;
+        const int minimumBarcodeCharacters = 4;
+
+        if (e.Key is VirtualKey.Enter or VirtualKey.Tab)
+        {
+            if (buffer.Length < minimumBarcodeCharacters)
+            {
+                buffer.Clear();
+                state.Reset();
+                return;
+            }
+
+            var raw = buffer.ToString();
+            buffer.Clear();
+            state.Reset();
+            if (TryClassifyScan(raw, out var scan) && routeScan(scan))
+                e.Handled = true;
+            return;
+        }
+
+        if (!TryMapScanKey(e.Key, out var character))
+            return;
+
+        var now = DateTime.UtcNow;
+        if (buffer.Length > 0 &&
+            (now - state.LastCharacterAtUtc).TotalMilliseconds > maxInterCharacterMilliseconds)
+        {
+            buffer.Clear();
+        }
+
+        state.LastCharacterAtUtc = now;
+        buffer.Append(character);
+        var version = state.Advance();
+        _ = Task.Delay(400).ContinueWith(_ =>
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (version != state.Version || buffer.Length < minimumBarcodeCharacters)
+                    return;
+
+                var raw = buffer.ToString();
+                buffer.Clear();
+                state.Reset();
+                if (TryClassifyScan(raw, out var scan))
+                    routeScan(scan);
+            });
+        });
     }
 
     private void ImportBinsGridView_ItemClick(object sender, ItemClickEventArgs e)
@@ -789,6 +1063,7 @@ public sealed partial class MainWindow : Window
     {
         ClearImportFailure();
         _startupScanBuffer.Clear();
+        _startupScanBurst.Reset();
         StartupStatusText.Text = "Failure resolved. Scan the corrected bin or ticket.";
         ImportScanStatusText.Text = "Scan BIN barcode and ticket barcode in either order.";
         _ = SpeakAsync("Failure resolved.");
@@ -885,6 +1160,8 @@ public sealed partial class MainWindow : Window
         DashboardScannerStatusText.Text = "Login required before scanner input.";
         _focusedScanBuffer.Clear();
         _startupScanBuffer.Clear();
+        _focusedScanBurst.Reset();
+        _startupScanBurst.Reset();
     }
 
     private void ShowSetupStage()
@@ -1017,20 +1294,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var segments = SplitImportScanInput(raw).ToArray();
-        if (segments.Length == 0)
+        if (!TryClassifyScan(raw, out var scan) || scan.Kind is ScanKind.Price)
         {
             UpdateImportStatusText("Scan a bin barcode or ticket barcode.");
-            ImportScanStatusText.Text = "No scan data received.";
+            ImportScanStatusText.Text = "Scan was not recognized.";
+            TryRecordAudit("scanner", "Opening scan rejected", $"Unrecognized scan {raw}");
+            _ = SpeakAsync("Scan again.");
             return;
         }
 
-        foreach (var segment in segments)
-        {
-            ProcessImportScanSegment(segment);
-            if (_hasImportFailure)
-                break;
-        }
+        ProcessImportScanSegment(scan.Raw);
     }
 
     private void ProcessImportScanSegment(string raw)
@@ -1054,7 +1327,7 @@ public sealed partial class MainWindow : Window
         if (ticket is null)
         {
             TryRecordAudit("scanner", "Opening scan rejected", $"Unrecognized scan {raw}");
-            FailImport("Scan was not recognized as a configured-state ticket or a BIN barcode.", "Import failure.");
+            FailImport("Scan was not recognized as a configured-state ticket or a BIN barcode.", "Scan again.");
             return;
         }
 
@@ -1073,15 +1346,34 @@ public sealed partial class MainWindow : Window
         if (!EnsureLicenseAllowsOperation("using scanner input"))
             return;
 
-        var segments = SplitImportScanInput(raw).ToArray();
-        if (segments.Length == 0)
+        if (!TryClassifyScan(raw, out var scan))
         {
-            DashboardScannerStatusText.Text = "No scan data received.";
+            RejectScannerInput(raw, "Barcode is not a recognized SimpleLotto scan.");
             return;
         }
 
-        foreach (var segment in segments)
-            ProcessFocusedScanSegment(segment);
+        ProcessFocusedScan(scan);
+    }
+
+    private void ProcessFocusedScan(ClassifiedScan scan)
+    {
+        if (scan.Kind == ScanKind.Price)
+        {
+            if (string.IsNullOrWhiteSpace(_dashboardPendingBin))
+            {
+                RejectScannerInput(scan.Raw, "Scan a bin and ticket before setting a price.");
+                return;
+            }
+
+            _dashboardPendingPriceCents = scan.PriceCents;
+            DashboardScannerStatusText.Text = $"Price {MoneyText(scan.PriceCents ?? 0)} captured. Scan ticket.";
+            DashboardLastScanText.Text = $"Last scan: {scan.Raw}";
+            StatusText.Text = "Price captured for the pending placement.";
+            TryRecordAudit("scanner", "Price scan captured", $"Price {MoneyText(scan.PriceCents ?? 0)} pending for bin {_dashboardPendingBin}");
+            return;
+        }
+
+        ProcessFocusedScanSegment(scan.Raw);
     }
 
     private void ProcessFocusedScanSegment(string raw)
@@ -1106,7 +1398,7 @@ public sealed partial class MainWindow : Window
             TryRecordAudit("bin", "Bin scan captured", $"Bin {_dashboardPendingBin}");
             if (_dashboardPendingTicket is not null)
             {
-                PlaceDashboardBundle(_dashboardPendingBin, _dashboardPendingTicket);
+                PlaceDashboardBundle(_dashboardPendingBin, _dashboardPendingTicket, _dashboardPendingPriceCents);
                 return;
             }
 
@@ -1123,18 +1415,30 @@ public sealed partial class MainWindow : Window
             DashboardLastScanText.Text = $"Last scan failed: {raw}";
             StatusText.Text = "Scanner input was not recognized.";
             TryRecordAudit("scanner", "Scan rejected", $"Unrecognized scan {raw}");
+            _ = SpeakAsync("Scan again.");
             return;
         }
 
         if (!string.IsNullOrWhiteSpace(_dashboardPendingBin))
         {
-            PlaceDashboardBundle(_dashboardPendingBin, ticket);
+            PlaceDashboardBundle(_dashboardPendingBin, ticket, _dashboardPendingPriceCents);
             return;
         }
 
         var activeBundle = FindActiveBundle(ticket);
         if (activeBundle is null)
         {
+            var placedBundle = FindPlacedBundle(ticket);
+            if (placedBundle?.IsSoldOut == true)
+            {
+                DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} is sold out.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold out | Bin {placedBundle.Bin}";
+                StatusText.Text = $"Bundle {ticket.BundleId} in bin {placedBundle.Bin} is sold out.";
+                TryRecordAudit("scanner", "Scan rejected", $"Sold-out bundle scanned: game {ticket.GameId}, bundle {ticket.BundleId}, bin {placedBundle.Bin}");
+                _ = SpeakAsync("Bundle sold out.");
+                return;
+            }
+
             _ = PromptForActivationBinAsync(ticket);
             return;
         }
@@ -1165,7 +1469,18 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            var backfill = BuildTicketBackfillSale(DateTime.Now, activeBundle, ticket.Ticket, "normal_sale");
+            if (!TryBuildTicketBackfillSale(
+                    DateTime.Now,
+                    activeBundle,
+                    ticket.Ticket,
+                    "normal_sale",
+                    out var backfill,
+                    out var rangeError))
+            {
+                RejectScannerInput(ticket.Ticket, rangeError);
+                return;
+            }
+
             var line = backfill.Sale;
             if (line.Amount <= 0)
             {
@@ -1180,9 +1495,14 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var updatedBundle = activeBundle with { Ticket = backfill.NextTicket };
             _sales.Insert(0, line);
-            if (!SaveSaleLineAndUpdateImportTicket(line, updatedBundle))
+            var updatedBundle = activeBundle with
+            {
+                Ticket = backfill.IsBundleComplete ? ticket.Ticket : backfill.NextTicket,
+                IsSoldOut = backfill.IsBundleComplete
+            };
+            var persisted = SaveSaleLineAndUpdateImportTicket(line, updatedBundle);
+            if (!persisted)
             {
                 _sales.Remove(line);
                 return;
@@ -1190,13 +1510,23 @@ public sealed partial class MainWindow : Window
 
             ReplaceImportLine(updatedBundle);
             SalesListView.SelectedItem = line;
-            DashboardScannerStatusText.Text = $"Ticket captured for game {ticket.GameId}.";
-            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {line.Ticket} | Next {backfill.NextTicket} | Bin {activeBundle.Bin}";
-            StatusText.Text = $"Scanner sale captured for game {ticket.GameId}, {line.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(line.Quantity == 1 ? string.Empty : "s")}.";
+            DashboardScannerStatusText.Text = backfill.IsBundleComplete
+                ? $"Bundle {ticket.BundleId} sold out."
+                : $"Ticket captured for game {ticket.GameId}.";
+            DashboardLastScanText.Text = backfill.IsBundleComplete
+                ? $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold out | Bin {activeBundle.Bin}"
+                : $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {line.Ticket} | Next {backfill.NextTicket} | Bin {activeBundle.Bin}";
+            StatusText.Text = backfill.IsBundleComplete
+                ? $"Bundle {ticket.BundleId} sold out after ticket {ticket.Ticket}."
+                : $"Scanner sale captured for game {ticket.GameId}, {line.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(line.Quantity == 1 ? string.Empty : "s")}.";
             TryRecordAudit(
                 "sale",
-                "Ticket sale recorded",
-                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {activeBundle.Bin}, sold {line.Ticket}, quantity {line.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {line.AmountText}, next {backfill.NextTicket}");
+                backfill.IsBundleComplete ? "Bundle sold out" : "Ticket sale recorded",
+                backfill.IsBundleComplete
+                    ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {activeBundle.Bin}, sold {line.Ticket}, quantity {line.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {line.AmountText}; placement retained as sold out"
+                    : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {activeBundle.Bin}, sold {line.Ticket}, quantity {line.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {line.AmountText}, next {backfill.NextTicket}");
+            if (backfill.IsBundleComplete)
+                _ = SpeakAsync("Bundle sold out.");
             RefreshTotals();
             RefreshOperationalPages();
         }
@@ -1216,19 +1546,19 @@ public sealed partial class MainWindow : Window
         StatusText.Text = "Bundle is not placed. Enter a bin number or scan a bin barcode.";
         _ = SpeakAsync("Enter bin number or scan bin.");
 
-        var binNumber = await ShowActivationBinDialogAsync(ticket);
-        if (binNumber is null)
+        var selection = await ShowActivationBinDialogAsync(ticket);
+        if (selection is null)
         {
             DashboardScannerStatusText.Text = "Bundle activation cancelled.";
             StatusText.Text = "Bundle activation cancelled.";
             return;
         }
 
-        var bin = binNumber.Value.ToString(CultureInfo.InvariantCulture);
-        await ActivateBundleInBinAsync(bin, ticket, updateDashboardStatus: true);
+        var bin = selection.BinNumber.ToString(CultureInfo.InvariantCulture);
+        await ActivateBundleInBinAsync(bin, ticket, updateDashboardStatus: true, selection.PriceCents);
     }
 
-    private async Task<int?> ShowActivationBinDialogAsync(ImportTicket ticket)
+    private async Task<ActivationBinSelection?> ShowActivationBinDialogAsync(ImportTicket ticket)
     {
         var binBox = new TextBox
         {
@@ -1241,6 +1571,9 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap
         };
         int? selectedBin = null;
+        long? scannedPriceCents = null;
+        var commandScanBuffer = new StringBuilder();
+        var commandScanBurst = new ScanBurstState();
 
         var dialog = new ContentDialog
         {
@@ -1284,8 +1617,26 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
+        binBox.AddHandler(
+            UIElement.KeyDownEvent,
+            new KeyEventHandler((_, args) =>
+            {
+                if (_scannerInput.IsActivelyCapturing)
+                    return;
+
+                ObserveFocusedCommandScanKey(args, commandScanBuffer, commandScanBurst, scan =>
+                {
+                    if (scan.Kind == ScanKind.Price)
+                        binBox.Text = string.Empty;
+                    return _scannerScanOverride?.Invoke(scan) == true;
+                });
+            }),
+            handledEventsToo: true);
         binBox.KeyDown += (_, e) =>
         {
+            if (e.Handled)
+                return;
+
             if (e.Key != VirtualKey.Enter)
                 return;
 
@@ -1306,26 +1657,57 @@ public sealed partial class MainWindow : Window
         };
 
         _isWorkflowDialogOpen = true;
+        var previousScannerOverride = _scannerScanOverride;
+        _scannerScanOverride = scan =>
+        {
+            if (scan.Kind == ScanKind.Bin)
+            {
+                binBox.Text = scan.BinNumber!.Value.ToString(CultureInfo.InvariantCulture);
+                if (TryAcceptBin())
+                    dialog.Hide();
+                return true;
+            }
+
+            if (scan.Kind == ScanKind.Price)
+            {
+                scannedPriceCents = scan.PriceCents;
+                statusText.Text = $"Price {MoneyText(scan.PriceCents ?? 0)} captured. Scan bin.";
+                TryRecordAudit("scanner", "Price scan captured", $"Price {MoneyText(scan.PriceCents ?? 0)} pending for game {ticket.GameId}");
+                return true;
+            }
+
+            statusText.Text = "Scan a bin barcode or price label.";
+            TryRecordAudit("scanner", "Scan rejected", $"Expected bin or price command: {scan.Raw}");
+            _ = SpeakAsync("Scan again.");
+            return true;
+        };
         try
         {
             var result = await dialog.ShowAsync();
             if (result == ContentDialogResult.Primary || selectedBin is not null)
-                return selectedBin;
+                return selectedBin is null ? null : new ActivationBinSelection(selectedBin.Value, scannedPriceCents);
 
             return null;
         }
         finally
         {
+            commandScanBuffer.Clear();
+            commandScanBurst.Reset();
+            _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
         }
     }
 
-    private async void PlaceDashboardBundle(string bin, ImportTicket ticket)
+    private async void PlaceDashboardBundle(string bin, ImportTicket ticket, long? scannedPriceCents = null)
     {
-        await ActivateBundleInBinAsync(bin, ticket, updateDashboardStatus: true);
+        await ActivateBundleInBinAsync(bin, ticket, updateDashboardStatus: true, scannedPriceCents);
     }
 
-    private async Task<bool> ActivateBundleInBinAsync(string bin, ImportTicket ticket, bool updateDashboardStatus)
+    private async Task<bool> ActivateBundleInBinAsync(
+        string bin,
+        ImportTicket ticket,
+        bool updateDashboardStatus,
+        long? scannedPriceCents = null)
     {
         if (!EnsureLicenseAllowsOperation("activating bundles"))
             return false;
@@ -1360,9 +1742,17 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
+        var placedBundle = FindPlacedBundle(ticket);
+        if (placedBundle?.IsSoldOut == true)
+        {
+            StatusText.Text = $"Bundle {ticket.BundleId} in bin {placedBundle.Bin} is sold out.";
+            _ = SpeakAsync("Bundle sold out.");
+            return false;
+        }
+
         if (GamePriceCents(ticket.GameId) <= 0)
         {
-            var priceSaved = await ShowActivationPriceDialogAsync(bin, ticket);
+            var priceSaved = await ShowActivationPriceDialogAsync(bin, ticket, scannedPriceCents);
             if (!priceSaved)
             {
                 if (updateDashboardStatus)
@@ -1379,7 +1769,13 @@ public sealed partial class MainWindow : Window
         }
 
         var activationSale = BuildActivationGapFillSale(DateTime.Now, ticket, bin);
-        var line = new ImportLine(ticket.GameId, ticket.BundleId, activationSale.NextTicket, bin, "activation");
+        var line = new ImportLine(
+            ticket.GameId,
+            ticket.BundleId,
+            activationSale.IsBundleComplete ? ticket.Ticket : activationSale.NextTicket,
+            bin,
+            "activation",
+            activationSale.IsBundleComplete);
         _imports.Insert(0, line);
         _sales.Insert(0, activationSale.Sale);
         if (!SaveImportLineAndSale(line, activationSale.Sale))
@@ -1399,15 +1795,15 @@ public sealed partial class MainWindow : Window
         TryRecordAudit(
             "activation",
             "Bundle activated",
-            $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned ticket {ticket.Ticket}, next {activationSale.NextTicket}, bin {bin}");
+            $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned ticket {ticket.Ticket}, {(activationSale.IsBundleComplete ? "sold out" : $"next {activationSale.NextTicket}")}, bin {bin}");
         TryRecordAudit(
             "sale",
             "Activation sale recorded",
-            $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {bin}, sold {activationSale.Sale.Ticket}, quantity {activationSale.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {activationSale.Sale.AmountText}, next {activationSale.NextTicket}");
+            $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {bin}, sold {activationSale.Sale.Ticket}, quantity {activationSale.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {activationSale.Sale.AmountText}, {(activationSale.IsBundleComplete ? "sold out" : $"next {activationSale.NextTicket}")}");
         TryRecordAudit(
             "bin",
             "Bin placement recorded",
-            $"Bin {bin}, game {ticket.GameId}, bundle {ticket.BundleId}, next ticket {activationSale.NextTicket}");
+            $"Bin {bin}, game {ticket.GameId}, bundle {ticket.BundleId}, {(activationSale.IsBundleComplete ? "sold out" : $"next ticket {activationSale.NextTicket}")}");
         if (updateDashboardStatus)
         {
             DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
@@ -1443,11 +1839,15 @@ public sealed partial class MainWindow : Window
     {
         _dashboardPendingBin = string.Empty;
         _dashboardPendingTicket = null;
+        _dashboardPendingPriceCents = null;
         _dashboardPendingBinAtUtc = null;
         _dashboardPendingTicketAtUtc = null;
     }
 
-    private async Task<bool> ShowActivationPriceDialogAsync(string bin, ImportTicket ticket)
+    private async Task<bool> ShowActivationPriceDialogAsync(
+        string bin,
+        ImportTicket ticket,
+        long? scannedPriceCents = null)
     {
         var existingGame = FindKnownGame(ticket.GameId);
         if (existingGame is { PriceCents: > 0 } &&
@@ -1468,7 +1868,9 @@ public sealed partial class MainWindow : Window
         var priceBox = new NumberBox
         {
             Header = "Game price ($)",
-            Value = existingGame?.PriceCents > 0 ? existingGame.PriceCents / 100d : double.NaN,
+            Value = scannedPriceCents is > 0
+                ? scannedPriceCents.Value / 100d
+                : existingGame?.PriceCents > 0 ? existingGame.PriceCents / 100d : double.NaN,
             Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
@@ -1479,6 +1881,17 @@ public sealed partial class MainWindow : Window
             Text = "Enter the ticket price, or scan the price while the game price box is focused.",
             TextWrapping = TextWrapping.Wrap
         };
+        var priceScanBuffer = new StringBuilder();
+        var priceScanBurst = new ScanBurstState();
+        priceBox.AddHandler(
+            UIElement.KeyDownEvent,
+            new KeyEventHandler((_, args) =>
+            {
+                if (!_scannerInput.IsActivelyCapturing)
+                    ObserveFocusedCommandScanKey(args, priceScanBuffer, priceScanBurst, scan =>
+                        _scannerScanOverride?.Invoke(scan) == true);
+            }),
+            handledEventsToo: true);
         var imageUri = existingGame?.ImageUri ?? string.Empty;
         var image = string.IsNullOrWhiteSpace(imageUri)
             ? null
@@ -1527,6 +1940,22 @@ public sealed partial class MainWindow : Window
         };
 
         _isWorkflowDialogOpen = true;
+        var previousScannerOverride = _scannerScanOverride;
+        _scannerScanOverride = scan =>
+        {
+            if (scan.Kind != ScanKind.Price)
+            {
+                statusText.Text = "Scan a price label, or enter the game price.";
+                TryRecordAudit("scanner", "Scan rejected", $"Expected price command: {scan.Raw}");
+                _ = SpeakAsync("Scan again.");
+                return true;
+            }
+
+            priceBox.Value = (scan.PriceCents ?? 0) / 100d;
+            statusText.Text = $"Price {MoneyText(scan.PriceCents ?? 0)} captured.";
+            TryRecordAudit("scanner", "Price scan captured", $"Price {MoneyText(scan.PriceCents ?? 0)} for game {ticket.GameId}");
+            return true;
+        };
         try
         {
             _ = priceBox.Focus(FocusState.Programmatic);
@@ -1536,6 +1965,9 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            priceScanBuffer.Clear();
+            priceScanBurst.Reset();
+            _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
         }
 
@@ -1550,6 +1982,8 @@ public sealed partial class MainWindow : Window
             ticket.GameId,
             name,
             priceCents,
+            existingGame?.BundlePriceCents > 0 ? existingGame.BundlePriceCents : DefaultBundlePriceFor(priceCents),
+            existingGame?.FirstTicketSerial is 1 ? 1 : 0,
             "Activation",
             existingGame?.ImageUri ?? "ms-appx:///Assets/SimpleLottoLogo64.png",
             existingGame?.ImageStatus ?? "Image not uploaded");
@@ -2087,6 +2521,9 @@ public sealed partial class MainWindow : Window
     private void DisposeLifetimeResources()
     {
         RemoveTrayIcon();
+        _scannerInput.ScanReceived -= ScannerInput_ScanReceived;
+        _scannerInput.CaptureAvailabilityChanged -= ScannerInput_CaptureAvailabilityChanged;
+        _scannerInput.Dispose();
         _speechPlayer.Dispose();
         _speechSynthesizer.Dispose();
         _speechGate.Dispose();
@@ -2284,6 +2721,19 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (string.Equals(sale.Source, "undo", StringComparison.OrdinalIgnoreCase))
+        {
+            StatusText.Text = "A correction cannot be voided. Use the manager correction workflow for a new adjustment.";
+            return;
+        }
+
+        var saleKey = SaleIdentity(sale);
+        if (_voidedSaleKeys.Contains(saleKey))
+        {
+            StatusText.Text = "This sale was already voided.";
+            return;
+        }
+
         var correction = new SaleLine(
             DateTime.Now,
             sale.GameId,
@@ -2291,13 +2741,12 @@ public sealed partial class MainWindow : Window
             sale.Ticket,
             -sale.Quantity,
             -sale.Amount,
-            "undo");
-        _sales.Insert(0, correction);
-        if (!SaveSaleLine(correction))
-        {
-            _sales.Remove(correction);
+            "undo",
+            sale.BundleId);
+        if (!SaveVoid(sale, correction, saleKey))
             return;
-        }
+
+        _sales.Insert(0, correction);
 
         TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
         StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
@@ -2328,7 +2777,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            _store.InsertImport(new StoredImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source));
+            _store.InsertImport(new StoredImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source, line.IsSoldOut));
             return true;
         }
         catch (Exception ex)
@@ -2348,7 +2797,8 @@ public sealed partial class MainWindow : Window
                     importLine.BundleId,
                     importLine.Ticket,
                     importLine.Bin,
-                    importLine.Source),
+                    importLine.Source,
+                    importLine.IsSoldOut),
                 ToStoredSaleLine(saleLine));
             _allSales.Insert(0, saleLine);
             return true;
@@ -2375,6 +2825,24 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private bool SaveVoid(SaleLine original, SaleLine correction, string saleKey)
+    {
+        try
+        {
+            _store.InsertVoid(ToStoredSaleLine(original), ToStoredSaleLine(correction), saleKey);
+            _allSales.Insert(0, correction);
+            _voidedSaleKeys.Add(saleKey);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = ex.Message.Contains("already been voided", StringComparison.OrdinalIgnoreCase)
+                ? "This sale was already voided."
+                : $"Unable to void sale in SQLite: {ex.Message}";
+            return false;
+        }
+    }
+
     private bool SaveSaleLineAndUpdateImportTicket(SaleLine line, ImportLine updatedBundle)
     {
         try
@@ -2386,13 +2854,24 @@ public sealed partial class MainWindow : Window
                     updatedBundle.BundleId,
                     updatedBundle.Ticket,
                     updatedBundle.Bin,
-                    updatedBundle.Source));
+                    updatedBundle.Source,
+                    updatedBundle.IsSoldOut));
             _allSales.Insert(0, line);
             return true;
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Unable to save sale and ticket state to SQLite: {ex.Message}";
+            if (ex.Message.Contains("already recorded", StringComparison.OrdinalIgnoreCase))
+            {
+                DashboardScannerStatusText.Text = "Scan error. Ticket already recorded.";
+                StatusText.Text = "Ticket already recorded. Scan again.";
+                TryRecordAudit("sale", "Sale rejected", ex.Message);
+                _ = SpeakAsync("Scan again.");
+            }
+            else
+            {
+                StatusText.Text = $"Unable to save sale and ticket state to SQLite: {ex.Message}";
+            }
             return false;
         }
     }
@@ -2430,6 +2909,8 @@ public sealed partial class MainWindow : Window
                 game.GameId,
                 game.Name,
                 game.PriceCents,
+                game.BundlePriceCents,
+                game.FirstTicketSerial,
                 game.Source,
                 game.ImageUri,
                 game.ImageStatus));
@@ -2495,6 +2976,17 @@ public sealed partial class MainWindow : Window
             line.Ticket,
             line.Quantity,
             (long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero),
+            line.Source,
+            line.BundleId);
+
+    private static string SaleIdentity(SaleLine line) =>
+        string.Join("|",
+            line.SoldAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            line.GameId,
+            line.Bin,
+            line.Ticket,
+            line.Quantity.ToString(CultureInfo.InvariantCulture),
+            ((long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture),
             line.Source);
 
     private static string SaleSourceLabel(string source) =>
@@ -2560,7 +3052,8 @@ public sealed partial class MainWindow : Window
         instantTicketSalesCents += _closingScanSales.Sum(s =>
             (long)Math.Round(s.Sale.Amount * 100m, MidpointRounding.AwayFromZero));
         if (_closingScanCaptured && _closingScanIssues.Count == 0 && _closingUnmatchedTickets.Count == 0)
-            instantTicketSalesCents += ClosingSoldOutBundles().Sum(bundle => GamePriceCents(bundle.GameId));
+            instantTicketSalesCents += BuildClosingGeneratedSales(ClosingSoldOutBundles(), DateTime.UtcNow)
+                .Sum(sale => (long)Math.Round(sale.Amount * 100m, MidpointRounding.AwayFromZero));
 
         TryReadMoneyCentsOrZero(ClosingOnlineSaleBox, out var onlineSaleCents);
         TryReadMoneyCentsOrZero(ClosingOnlineCashoutBox, out var onlineCashoutCents);
@@ -3265,12 +3758,18 @@ public sealed partial class MainWindow : Window
                 x.Current,
                 Game = gamesById.TryGetValue(x.Current.GameId, out var game) ? game : null
             })
-            .Select(x => new RdisplayTileState(
-                x.Bin,
-                x.Current.GameId,
-                x.Game?.Name ?? $"Game {x.Current.GameId}",
-                x.Current.Ticket,
-                PriceCentsForDisplay(x.Game?.PriceCents ?? 0)));
+            .Select(x =>
+            {
+                var remaining = TicketsRemainingForDisplay(x.Current, x.Game);
+                return new RdisplayTileState(
+                    x.Bin,
+                    x.Current.GameId,
+                    x.Game?.Name ?? $"Game {x.Current.GameId}",
+                    x.Current.Ticket,
+                    PriceCentsForDisplay(x.Game?.PriceCents ?? 0),
+                    remaining,
+                    x.Current.IsSoldOut);
+            });
 
         _rdisplay.UpdateTiles(tiles);
     }
@@ -3288,7 +3787,7 @@ public sealed partial class MainWindow : Window
             var bin = i.ToString(CultureInfo.InvariantCulture);
             grouped.TryGetValue(bin, out var bundles);
             var current = bundles?.FirstOrDefault();
-            if (current is not null)
+            if (current is not null && !current.IsSoldOut)
                 activeBinCount++;
 
             _closingBinCards.Add(ClosingBinCard.From(
@@ -3652,10 +4151,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        ScannerPairingStatusText.Text = "Scanner paired";
+        ScannerPairingStatusText.Text = _scannerInput.IsActivelyCapturing
+            ? "Scanner paired and listening"
+            : "Scanner paired, but not detected";
         ScannerPairingDetailText.Text = string.IsNullOrWhiteSpace(_scannerSerial)
             ? $"VID {_scannerVid} / PID {_scannerPid} / no serial"
             : $"VID {_scannerVid} / PID {_scannerPid} / SN {_scannerSerial}";
+        if (!_scannerInput.IsActivelyCapturing)
+            ScannerPairingDetailText.Text += " / reconnect the scanner or pair it again";
         UnpairScannerButton.IsEnabled = true;
     }
 
@@ -3836,6 +4339,12 @@ public sealed partial class MainWindow : Window
     private ImportLine? FindActiveBundle(ImportTicket ticket) =>
         _imports.FirstOrDefault(i =>
             string.Equals(i.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(i.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase) &&
+            !i.IsSoldOut);
+
+    private ImportLine? FindPlacedBundle(ImportTicket ticket) =>
+        _imports.FirstOrDefault(i =>
+            string.Equals(i.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(i.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
 
     private bool PhysicalBundleExists(string gameId, string bundleId) =>
@@ -3854,6 +4363,8 @@ public sealed partial class MainWindow : Window
         var stagedRows = new ObservableCollection<ReceivingScanRow>();
         var stagedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var dialogScanBuffer = new StringBuilder();
+        var dialogScanBurst = new ScanBurstState();
+        var finishing = false;
         var statusText = new TextBlock
         {
             Text = "Ready. Scan any ticket barcode from each delivered bundle.",
@@ -3878,13 +4389,22 @@ public sealed partial class MainWindow : Window
 
         void AcceptScan(string raw)
         {
-            foreach (var segment in SplitImportScanInput(raw.Trim()))
+            if (!TryClassifyScan(raw, out var scan) || scan.Kind != ScanKind.Ticket)
+            {
+                statusText.Text = "Scan error: scan a configured-state ticket barcode.";
+                TryRecordAudit("scanner", "Receiving scan rejected", $"Unrecognized scan {raw}");
+                _ = SpeakAsync("Scan again.");
+                return;
+            }
+
+            foreach (var segment in new[] { scan.Raw })
             {
                 var ticket = TryParseImportTicket(segment);
                 if (ticket is null)
                 {
-                    statusText.Text = "Scan was not recognized as a ticket barcode for the configured state.";
+                    statusText.Text = "Scan error: barcode was not recognized for the configured state.";
                     TryRecordAudit("scanner", "Receiving scan rejected", $"Unrecognized scan {segment}");
+                    _ = SpeakAsync("Scan error.");
                     continue;
                 }
 
@@ -3922,7 +4442,11 @@ public sealed partial class MainWindow : Window
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         content.AddHandler(
             UIElement.KeyDownEvent,
-            new KeyEventHandler((_, args) => CaptureScanKey(args, dialogScanBuffer, AcceptScan, statusText)),
+            new KeyEventHandler((_, args) =>
+            {
+                if (!_scannerInput.IsActivelyCapturing)
+                    CaptureGlobalScanKey(args, dialogScanBuffer, dialogScanBurst, AcceptScan, statusText);
+            }),
             handledEventsToo: true);
 
         var promptText = new TextBlock
@@ -4037,7 +4561,6 @@ public sealed partial class MainWindow : Window
         }
 
         var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var finishing = false;
         RoutedEventHandler finishHandler = async (_, _) =>
         {
             if (finishing)
@@ -4150,11 +4673,33 @@ public sealed partial class MainWindow : Window
         cancelButton.Click += cancelHandler;
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
         _isWorkflowDialogOpen = true;
+        var previousScannerOverride = _scannerScanOverride;
+        _scannerScanOverride = scan =>
+        {
+            if (finishing)
+            {
+                statusText.Text = "Scan error: inventory update is in progress.";
+                TryRecordAudit("scanner", "Receiving scan rejected", $"Received while finalizing: {scan.Raw}");
+                _ = SpeakAsync("Scan again.");
+                return true;
+            }
+
+            if (scan.Kind != ScanKind.Ticket)
+            {
+                statusText.Text = "Receiving accepts ticket barcodes only.";
+                TryRecordAudit("scanner", "Receiving scan rejected", $"Expected ticket barcode: {scan.Raw}");
+                _ = SpeakAsync("Ticket only.");
+                return true;
+            }
+
+            AcceptScan(scan.Raw);
+            return true;
+        };
         try
         {
             TryRecordAudit("inventory", "Receiving scan started", "Focused receiving session opened");
             ClosingScanOverlayTitleText.Text = "Receive New Inventory";
-            ClosingScanOverlayCloseButton.Content = "Close scanning";
+            ClosingScanOverlayCloseButton.Content = "Update Inventory";
             ClosingScanOverlayContent.Children.Clear();
             ClosingScanOverlayContent.Children.Add(content);
             ClosingScanOverlay.Visibility = Visibility.Visible;
@@ -4177,8 +4722,11 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlay.SizeChanged -= overlaySizeChanged;
             ClosingScanOverlay.Visibility = Visibility.Collapsed;
             ClosingScanOverlayContent.Children.Clear();
-            ClosingScanOverlayCloseButton.Content = "Close scanning";
+            ClosingScanOverlayCloseButton.Content = "Close Scanning";
             ClosingScanOverlayCloseButton.IsEnabled = true;
+            dialogScanBuffer.Clear();
+            dialogScanBurst.Reset();
+            _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
         }
     }
@@ -4206,6 +4754,17 @@ public sealed partial class MainWindow : Window
             Text = "Confirm a positive ticket price before receiving this game.",
             TextWrapping = TextWrapping.Wrap
         };
+        var priceScanBuffer = new StringBuilder();
+        var priceScanBurst = new ScanBurstState();
+        priceBox.AddHandler(
+            UIElement.KeyDownEvent,
+            new KeyEventHandler((_, args) =>
+            {
+                if (!_scannerInput.IsActivelyCapturing)
+                    ObserveFocusedCommandScanKey(args, priceScanBuffer, priceScanBurst, scan =>
+                        _scannerScanOverride?.Invoke(scan) == true);
+            }),
+            handledEventsToo: true);
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
@@ -4239,8 +4798,33 @@ public sealed partial class MainWindow : Window
         };
         dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-            return false;
+        var previousScannerOverride = _scannerScanOverride;
+        _scannerScanOverride = scan =>
+        {
+            if (scan.Kind != ScanKind.Price)
+            {
+                statusText.Text = "Scan a price label, or enter the game price.";
+                TryRecordAudit("scanner", "Receiving price scan rejected", $"Expected price command: {scan.Raw}");
+                _ = SpeakAsync("Scan again.");
+                return true;
+            }
+
+            priceBox.Value = (scan.PriceCents ?? 0) / 100d;
+            statusText.Text = $"Price {MoneyText(scan.PriceCents ?? 0)} captured.";
+            TryRecordAudit("scanner", "Receiving price scan captured", $"Price {MoneyText(scan.PriceCents ?? 0)} for game {bundle.GameId}");
+            return true;
+        };
+        try
+        {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                return false;
+        }
+        finally
+        {
+            priceScanBuffer.Clear();
+            priceScanBurst.Reset();
+            _scannerScanOverride = previousScannerOverride;
+        }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
         if (priceCents <= 0)
@@ -4250,6 +4834,8 @@ public sealed partial class MainWindow : Window
             bundle.GameId,
             string.IsNullOrWhiteSpace(nameBox.Text) ? $"Game {bundle.GameId}" : nameBox.Text.Trim(),
             priceCents,
+            existingGame?.BundlePriceCents > 0 ? existingGame.BundlePriceCents : DefaultBundlePriceFor(priceCents),
+            existingGame?.FirstTicketSerial is 1 ? 1 : 0,
             "Receiving",
             existingGame?.ImageUri ?? DefaultGameImageUri,
             existingGame?.ImageStatus ?? "Image not uploaded"));
@@ -4280,6 +4866,7 @@ public sealed partial class MainWindow : Window
         _ = SpeakAsync("Start scanning.");
 
         var dialogScanBuffer = new StringBuilder();
+        var dialogScanBurst = new ScanBurstState();
         var scanPromptText = new TextBlock
         {
             Text = "Ready for ticket scans",
@@ -4318,22 +4905,19 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                raw = raw.Trim();
-                if (string.IsNullOrWhiteSpace(raw))
-                    return;
-
-                AppLog.Info($"Closing scan received: {raw}");
-                _closingScanCaptured = true;
-                var processed = false;
-                foreach (var segment in SplitImportScanInput(raw))
+                if (!TryClassifyScan(raw, out var scan) || scan.Kind != ScanKind.Ticket)
                 {
-                    processed = true;
-                    AppLog.Info($"Closing scan segment: {segment}");
-                    ProcessClosingScanSegment(segment, statusText);
+                    statusText.Text = "Scan error: closing accepts ticket barcodes only.";
+                    TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
+                    _ = SpeakAsync("Ticket only.");
+                    return;
                 }
 
-                if (!processed)
-                    statusText.Text = "Scan was empty.";
+                raw = scan.Raw;
+                AppLog.Info($"Closing scan received: {raw}");
+                _closingScanCaptured = true;
+                AppLog.Info($"Closing scan segment: {raw}");
+                ProcessClosingScanSegment(raw, statusText);
 
                 RefreshDialogTotals();
                 RefreshClosingBins();
@@ -4385,7 +4969,10 @@ public sealed partial class MainWindow : Window
         content.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
-                CaptureScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText)),
+            {
+                if (!_scannerInput.IsActivelyCapturing)
+                    CaptureGlobalScanKey(args, dialogScanBuffer, dialogScanBurst, AcceptDialogScan, statusText);
+            }),
             handledEventsToo: true);
 
         var totalView = new Viewbox
@@ -4579,6 +5166,20 @@ public sealed partial class MainWindow : Window
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
 
         _isWorkflowDialogOpen = true;
+        var previousScannerOverride = _scannerScanOverride;
+        _scannerScanOverride = scan =>
+        {
+            if (scan.Kind != ScanKind.Ticket)
+            {
+                statusText.Text = "Closing accepts ticket barcodes only.";
+                TryRecordAudit("closing", "Closing scan rejected", $"Expected ticket barcode: {scan.Raw}");
+                _ = SpeakAsync("Ticket only.");
+                return true;
+            }
+
+            AcceptDialogScan(scan.Raw);
+            return true;
+        };
         try
         {
             AppLog.Info("Closing scan overlay opened.");
@@ -4621,6 +5222,9 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlay.SizeChanged -= overlaySizeChanged;
             ClosingScanOverlay.Visibility = Visibility.Collapsed;
             ClosingScanOverlayContent.Children.Clear();
+            dialogScanBuffer.Clear();
+            dialogScanBurst.Reset();
+            _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
             RefreshClosingBins();
             RefreshClosingActionState();
@@ -4642,6 +5246,7 @@ public sealed partial class MainWindow : Window
 
     private int ActiveClosingBinCount() =>
         _imports
+            .Where(i => !i.IsSoldOut)
             .Select(i => i.Bin)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count(bin => int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
@@ -4653,6 +5258,15 @@ public sealed partial class MainWindow : Window
         if (ticket is not null)
         {
             var activeBundle = FindActiveBundle(ticket);
+            if (activeBundle is null && FindPlacedBundle(ticket)?.IsSoldOut == true)
+            {
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Sold out"));
+                TryRecordAudit("closing", "Closing scan rejected", $"Sold-out bundle scanned: game {ticket.GameId}, bundle {ticket.BundleId}");
+                statusText.Text = "Scan error: this bundle is already sold out.";
+                _ = SpeakAsync("Bundle sold out.");
+                return;
+            }
+
             if (activeBundle is null ||
                 !int.TryParse(activeBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
                 !IsConfiguredBin(binNumber))
@@ -4673,19 +5287,55 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            var closingBundle = _closingCurrentPlacements.FirstOrDefault(placement =>
+                string.Equals(placement.GameId, activeBundle.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(placement.BundleId, activeBundle.BundleId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(placement.Bin, activeBundle.Bin, StringComparison.OrdinalIgnoreCase)) ?? activeBundle;
+            if (closingBundle.IsSoldOut)
+            {
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Sold out"));
+                TryRecordAudit("closing", "Closing scan rejected", $"Sold-out bundle scanned: game {ticket.GameId}, bundle {ticket.BundleId}");
+                statusText.Text = "Scan error: this bundle is already sold out.";
+                _ = SpeakAsync("Bundle sold out.");
+                return;
+            }
+
+            if (!TryBuildTicketBackfillSale(
+                    DateTime.Now,
+                    closingBundle,
+                    ticket.Ticket,
+                    "closing_gap_fill_sold",
+                    out var backfill,
+                    out var rangeError))
+            {
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Outside bundle range"));
+                AddClosingScanIssue("Ticket outside bundle range", rangeError);
+                TryRecordAudit("closing", "Closing scan rejected", rangeError);
+                statusText.Text = "Scan error: ticket is outside the configured bundle range.";
+                _ = SpeakAsync("Scan again.");
+                return;
+            }
+
             _closingScannedBins.Add(binNumber);
             _closingScannedBundleKeys.Add(BundleKey(activeBundle));
-            var backfill = BuildTicketBackfillSale(DateTime.Now, activeBundle, ticket.Ticket, "closing_gap_fill_sold");
             UpsertClosingScanSale(BundleKey(activeBundle), backfill.Sale);
-            ReplaceClosingCurrentPlacement(activeBundle with { Ticket = backfill.NextTicket });
+            ReplaceClosingCurrentPlacement(activeBundle with
+            {
+                Ticket = backfill.IsBundleComplete ? ticket.Ticket : backfill.NextTicket,
+                IsSoldOut = backfill.IsBundleComplete
+            });
             _closingScanRows.Insert(0, new ClosingScanRow(
                 $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {backfill.Sale.Ticket}",
                 "Scanned"));
             TryRecordAudit(
                 "closing",
                 "Closing scan captured",
-                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned ticket {ticket.Ticket}, reconciled range {backfill.Sale.Ticket}, quantity {backfill.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {backfill.Sale.AmountText}, next {backfill.NextTicket}");
-            statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. {backfill.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(backfill.Sale.Quantity == 1 ? string.Empty : "s")} captured.";
+                backfill.IsBundleComplete
+                    ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned final ticket {ticket.Ticket}, reconciled range {backfill.Sale.Ticket}, quantity {backfill.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {backfill.Sale.AmountText}; bundle completed"
+                    : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned ticket {ticket.Ticket}, reconciled range {backfill.Sale.Ticket}, quantity {backfill.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {backfill.Sale.AmountText}, next {backfill.NextTicket}");
+            statusText.Text = backfill.IsBundleComplete
+                ? $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Bundle is sold out."
+                : $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. {backfill.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(backfill.Sale.Quantity == 1 ? string.Empty : "s")} captured.";
             return;
         }
 
@@ -4694,6 +5344,7 @@ public sealed partial class MainWindow : Window
             _closingScanRows.Insert(0, new ClosingScanRow(raw, "Ignored bin scan"));
             TryRecordAudit("closing", "Closing bin scan ignored", $"Bin {directBin.ToString(CultureInfo.InvariantCulture)}; closing accepts ticket barcodes only");
             statusText.Text = "Closing scan accepts ticket barcodes only. Bin scan ignored.";
+            _ = SpeakAsync("Ticket only.");
             return;
         }
 
@@ -4703,6 +5354,7 @@ public sealed partial class MainWindow : Window
             $"Scan {raw} was not recognized as a ticket barcode. Re-scan the ticket or resolve before finalizing.");
         TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
         statusText.Text = $"Scan was not recognized: {raw}";
+        _ = SpeakAsync("Scan again.");
     }
 
     private void AddClosingScanIssue(string title, string detail) =>
@@ -4766,7 +5418,7 @@ public sealed partial class MainWindow : Window
 
     private List<ImportLine> ClosingSoldOutBundles() =>
         _imports
-            .Where(i => !_closingScannedBundleKeys.Contains(BundleKey(i)))
+            .Where(i => !i.IsSoldOut && !_closingScannedBundleKeys.Contains(BundleKey(i)))
             .GroupBy(i => BundleKey(i), StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
@@ -4955,11 +5607,19 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var closedBundles = ClosingSoldOutBundles();
+        var unscannedSoldOutBundles = ClosingSoldOutBundles();
+        var soldOutPlacements = unscannedSoldOutBundles
+            .Select(BuildSoldOutPlacement)
+            .ToList();
+        var currentBundlesForClosing = _closingCurrentPlacements
+            .Concat(soldOutPlacements)
+            .GroupBy(BundleKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToList();
         var closedAtUtc = DateTime.UtcNow;
         var generatedSales = _closingScanSales
             .Select(s => s.Sale)
-            .Concat(BuildClosingGeneratedSales(closedBundles, closedAtUtc))
+            .Concat(BuildClosingGeneratedSales(unscannedSoldOutBundles, closedAtUtc))
             .ToList();
         var instantTicketSalesCents = (long)Math.Round(
             (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
@@ -4975,7 +5635,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Finalize shift closing?",
-            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {closedBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedBundles.Count == 1 ? string.Empty : "s")} will be closed out as closing gap-fill sold.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {unscannedSoldOutBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(unscannedSoldOutBundles.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. Sold-out bundles remain assigned and grey in their bins/Rdisplay.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Finalize Closing",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -5003,8 +5663,8 @@ public sealed partial class MainWindow : Window
                 intervalStartUtc,
                 closedAtUtc,
                 reportSales,
-                closedBundles,
-                _closingCurrentPlacements,
+                Array.Empty<ImportLine>(),
+                currentBundlesForClosing,
                 _closingResolvedPlacements,
                 instantTicketSalesCents,
                 onlineSaleCents,
@@ -5038,14 +5698,14 @@ public sealed partial class MainWindow : Window
             onlineCashoutCents,
             instantCashoutCents,
             expectedCashCents,
-            closedBundles.Count,
-            _closingCurrentPlacements.Count,
+            unscannedSoldOutBundles.Count,
+            currentBundlesForClosing.Count,
             _closingResolvedPlacements.Count,
             activatedBundles);
         var auditRecord = NewAuditRecord(
             "closing",
             "Shift closed",
-            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundles.Count.ToString(CultureInfo.InvariantCulture)} closed bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
+            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {unscannedSoldOutBundles.Count.ToString(CultureInfo.InvariantCulture)} closing-sold-out bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
         try
         {
             _store.CompleteClosing(
@@ -5053,9 +5713,9 @@ public sealed partial class MainWindow : Window
                 closingRecord,
                 auditRecord,
                 generatedSales.Select(ToStoredSaleLine),
-                closedBundles.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
-                _closingCurrentPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)),
-                _closingResolvedPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source)));
+                Array.Empty<StoredImportLine>(),
+                currentBundlesForClosing.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut)),
+                _closingResolvedPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut)));
         }
         catch (Exception ex)
         {
@@ -5066,9 +5726,7 @@ public sealed partial class MainWindow : Window
         }
 
         _lastCloseUtc = closedAtUtc;
-        foreach (var bundle in closedBundles)
-            _imports.Remove(bundle);
-        foreach (var placement in _closingCurrentPlacements)
+        foreach (var placement in currentBundlesForClosing)
             ReplaceImportLine(placement);
         foreach (var placement in _closingResolvedPlacements)
         {
@@ -5098,17 +5756,49 @@ public sealed partial class MainWindow : Window
         RefreshOperationalPages();
     }
 
-    private List<SaleLine> BuildClosingGeneratedSales(IEnumerable<ImportLine> closedBundles, DateTime closedAtUtc) =>
-        closedBundles
-            .Select(bundle => new SaleLine(
+    private List<SaleLine> BuildClosingGeneratedSales(IEnumerable<ImportLine> soldOutBundles, DateTime closedAtUtc)
+    {
+        var sales = new List<SaleLine>();
+        foreach (var bundle in soldOutBundles)
+        {
+            if (TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _) &&
+                TryBuildTicketBackfillSale(
+                    closedAtUtc.ToLocalTime(),
+                    bundle,
+                    FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket)),
+                    "closing_gap_fill_sold",
+                    out var backfill,
+                    out _))
+            {
+                sales.Add(backfill.Sale);
+                continue;
+            }
+
+            sales.Add(new SaleLine(
                 closedAtUtc.ToLocalTime(),
                 bundle.GameId,
                 bundle.Bin,
                 bundle.Ticket,
                 1,
                 GamePriceCents(bundle.GameId) / 100m,
-                "closing_gap_fill_sold"))
-            .ToList();
+                "closing_gap_fill_sold",
+                bundle.BundleId));
+        }
+
+        return sales;
+    }
+
+    private ImportLine BuildSoldOutPlacement(ImportLine bundle)
+    {
+        if (!TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _))
+            return bundle with { IsSoldOut = true };
+
+        return bundle with
+        {
+            Ticket = FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket)),
+            IsSoldOut = true
+        };
+    }
 
     private ClosingReportTarget BuildClosingReportTarget(DateTime closedAtUtc)
     {
@@ -5651,11 +6341,45 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private TicketBackfillSale BuildTicketBackfillSale(DateTime soldAt, ImportLine activeBundle, string scannedTicket, string source)
+    private bool TryBuildTicketBackfillSale(
+        DateTime soldAt,
+        ImportLine activeBundle,
+        string scannedTicket,
+        string source,
+        out TicketBackfillSale backfill,
+        out string error)
     {
+        backfill = null!;
+        error = string.Empty;
+        if (!TryGetBundleTicketRange(activeBundle.GameId, out var firstTicket, out var lastTicket, out error))
+            return false;
+
+        if (!TryParseTicketSerial(scannedTicket, out var scannedSerial) ||
+            scannedSerial < firstTicket ||
+            scannedSerial > lastTicket)
+        {
+            error = $"Ticket {scannedTicket} is outside the configured {FormatTicketSerial(firstTicket, TicketSerialWidth(scannedTicket))}-{FormatTicketSerial(lastTicket, TicketSerialWidth(scannedTicket))} bundle range.";
+            return false;
+        }
+
+        if (TryParseTicketSerial(activeBundle.Ticket, out var currentSerial) &&
+            (currentSerial < firstTicket || currentSerial > lastTicket))
+        {
+            error = $"Current ticket {activeBundle.Ticket} is outside the configured bundle range. The bundle was retired from the active bin.";
+            return false;
+        }
+
+        if (TryParseTicketSerial(activeBundle.Ticket, out currentSerial) &&
+            scannedSerial < currentSerial)
+        {
+            error = $"Ticket {scannedTicket} was already recorded for bundle {activeBundle.BundleId}. Current ticket is {activeBundle.Ticket}.";
+            return false;
+        }
+
         var range = BuildTicketBackfillRange(activeBundle.Ticket, scannedTicket);
         var price = GamePriceCents(activeBundle.GameId) / 100m;
-        return new TicketBackfillSale(
+        var isComplete = TryParseTicketSerial(range.NextTicket, out var nextSerial) && nextSerial > lastTicket;
+        backfill = new TicketBackfillSale(
             new SaleLine(
                 soldAt,
                 activeBundle.GameId,
@@ -5663,8 +6387,11 @@ public sealed partial class MainWindow : Window
                 range.SoldTicketText,
                 range.Quantity,
                 range.Quantity * price,
-                source),
-            range.NextTicket);
+                source,
+                activeBundle.BundleId),
+            range.NextTicket,
+            isComplete);
+        return true;
     }
 
     private TicketBackfillSale BuildActivationGapFillSale(DateTime soldAt, ImportTicket ticket, string bin)
@@ -5673,12 +6400,15 @@ public sealed partial class MainWindow : Window
         var width = TicketSerialWidth(scannedText);
         var price = GamePriceCents(ticket.GameId) / 100m;
 
-        if (TryParseTicketSerial(scannedText, out var scannedSerial))
+        if (TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var lastTicket, out _) &&
+            TryParseTicketSerial(scannedText, out var scannedSerial) &&
+            scannedSerial >= firstTicket && scannedSerial <= lastTicket)
         {
-            var quantity = scannedSerial + 1;
-            var startText = FormatTicketSerial(0, width);
+            var quantity = scannedSerial - firstTicket + 1;
+            var startText = FormatTicketSerial(firstTicket, width);
             var endText = FormatTicketSerial(scannedSerial, width);
             var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
+            var isComplete = scannedSerial == lastTicket;
             return new TicketBackfillSale(
                 new SaleLine(
                     soldAt,
@@ -5687,8 +6417,10 @@ public sealed partial class MainWindow : Window
                     soldText,
                     quantity,
                     quantity * price,
-                    "activation_gap_fill"),
-                FormatTicketSerial(scannedSerial + 1, width));
+                    "activation_gap_fill",
+                    ticket.BundleId),
+                isComplete ? endText : FormatTicketSerial(scannedSerial + 1, width),
+                isComplete);
         }
 
         return new TicketBackfillSale(
@@ -5699,8 +6431,10 @@ public sealed partial class MainWindow : Window
                 scannedText,
                 1,
                 price,
-                "activation_gap_fill"),
-            scannedText);
+                "activation_gap_fill",
+                ticket.BundleId),
+            scannedText,
+            false);
     }
 
     private static TicketBackfillRange BuildTicketBackfillRange(string currentTicket, string scannedTicket)
@@ -5774,6 +6508,29 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
+        var bundlePriceBox = new NumberBox
+        {
+            Header = "Bundle price ($)",
+            Value = DefaultBundlePriceCents / 100d,
+            Minimum = 1,
+            SmallChange = 5,
+            LargeChange = 25,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
+        priceBox.ValueChanged += (_, _) =>
+        {
+            if (bundlePriceBox.Value == DefaultBundlePriceCents / 100d &&
+                PriceCentsFromNumberBox(priceBox) == 5_000)
+            {
+                bundlePriceBox.Value = HighValueBundlePriceCents / 100d;
+            }
+        };
+        var firstTicketBox = new ComboBox
+        {
+            Header = "First ticket",
+            SelectedIndex = 0,
+            ItemsSource = new[] { "000", "001" }
+        };
         var content = new StackPanel
         {
             Spacing = 12,
@@ -5781,7 +6538,9 @@ public sealed partial class MainWindow : Window
             {
                 gameIdBox,
                 nameBox,
-                priceBox
+                priceBox,
+                bundlePriceBox,
+                firstTicketBox
             }
         };
 
@@ -5810,9 +6569,10 @@ public sealed partial class MainWindow : Window
             ? $"Game {gameId}"
             : nameBox.Text.Trim();
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        if (priceCents <= 0)
+        var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
+        if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
-            GameCatalogStatusText.Text = $"Enter a positive price before adding game {gameId}.";
+            GameCatalogStatusText.Text = configurationError;
             return;
         }
 
@@ -5820,6 +6580,8 @@ public sealed partial class MainWindow : Window
             gameId,
             name,
             priceCents,
+            bundlePriceCents,
+            firstTicketBox.SelectedIndex == 1 ? 1 : 0,
             "Manual",
             "ms-appx:///Assets/SimpleLottoLogo64.png",
             "Image not uploaded");
@@ -5835,12 +6597,16 @@ public sealed partial class MainWindow : Window
             GameIdEditBox.Text = string.Empty;
             GameNameEditBox.Text = string.Empty;
             GamePriceEditBox.Value = 0;
+            GameBundlePriceEditBox.Value = 0;
+            GameFirstTicketEditComboBox.SelectedIndex = 0;
             return;
         }
 
         GameIdEditBox.Text = game.GameId;
         GameNameEditBox.Text = game.Name;
         GamePriceEditBox.Value = game.PriceCents / 100d;
+        GameBundlePriceEditBox.Value = game.BundlePriceCents / 100d;
+        GameFirstTicketEditComboBox.SelectedIndex = game.FirstTicketSerial == 1 ? 1 : 0;
         GameCatalogStatusText.Text = $"Selected game {game.GameId}.";
     }
 
@@ -5863,9 +6629,10 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(GamePriceEditBox);
-        if (priceCents <= 0)
+        var bundlePriceCents = PriceCentsFromNumberBox(GameBundlePriceEditBox);
+        if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
-            GameCatalogStatusText.Text = $"Enter a positive price before saving game {game.GameId}.";
+            GameCatalogStatusText.Text = configurationError;
             return;
         }
 
@@ -5873,6 +6640,8 @@ public sealed partial class MainWindow : Window
         {
             Name = name,
             PriceCents = priceCents,
+            BundlePriceCents = bundlePriceCents,
+            FirstTicketSerial = GameFirstTicketEditComboBox.SelectedIndex == 1 ? 1 : 0,
             Source = "Manual"
         };
         UpsertManualGameRecord(updated);
@@ -6304,8 +7073,8 @@ public sealed partial class MainWindow : Window
         SaveSetting(ScannerVidSettingKey, _scannerVid);
         SaveSetting(ScannerPidSettingKey, _scannerPid);
         SaveSetting(ScannerSerialSettingKey, _scannerSerial);
+        _scannerInput.Configure(_scannerVid, _scannerPid, _scannerSerial);
         RefreshScannerPairingStatus();
-        ScannerPairingStatusText.Text = $"Scanner paired: {picked.DisplayLabel}";
         StatusText.Text = $"Scanner paired: {picked.DisplayLabel}.";
     }
 
@@ -6317,6 +7086,7 @@ public sealed partial class MainWindow : Window
         SaveSetting(ScannerVidSettingKey, string.Empty);
         SaveSetting(ScannerPidSettingKey, string.Empty);
         SaveSetting(ScannerSerialSettingKey, string.Empty);
+        _scannerInput.Configure(string.Empty, string.Empty, string.Empty);
         RefreshScannerPairingStatus();
         ScannerPairingStatusText.Text = "Scanner unpaired.";
         StatusText.Text = "Scanner unpaired. Focused scan capture remains available.";
@@ -6709,12 +7479,116 @@ public sealed partial class MainWindow : Window
         return game?.PriceCents ?? 0;
     }
 
+    private static long DefaultBundlePriceFor(long ticketPriceCents) =>
+        ticketPriceCents == 5_000 ? HighValueBundlePriceCents : DefaultBundlePriceCents;
+
+    private static bool TryValidateGameTicketConfiguration(long ticketPriceCents, long bundlePriceCents, out string error)
+    {
+        error = string.Empty;
+        if (ticketPriceCents <= 0)
+        {
+            error = "Enter a positive ticket price.";
+            return false;
+        }
+
+        if (bundlePriceCents <= 0)
+        {
+            error = "Enter a positive bundle price.";
+            return false;
+        }
+
+        if (bundlePriceCents % ticketPriceCents != 0)
+        {
+            error = "Bundle price must divide evenly by the ticket price.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryGetBundleTicketRange(string gameId, out int firstTicket, out int lastTicket, out string error)
+    {
+        firstTicket = 0;
+        lastTicket = 0;
+        error = string.Empty;
+        var game = FindKnownGame(gameId);
+        if (game is null || !TryValidateGameTicketConfiguration(game.PriceCents, game.BundlePriceCents, out error))
+        {
+            error = string.IsNullOrWhiteSpace(error)
+                ? $"Game {gameId} needs ticket and bundle price setup."
+                : $"Game {gameId}: {error}";
+            return false;
+        }
+
+        var ticketCount = game.BundlePriceCents / game.PriceCents;
+        if (ticketCount > int.MaxValue)
+        {
+            error = $"Game {gameId} bundle ticket count is too large.";
+            return false;
+        }
+
+        firstTicket = game.FirstTicketSerial == 1 ? 1 : 0;
+        lastTicket = checked(firstTicket + (int)ticketCount - 1);
+        return true;
+    }
+
+    private void RetireOutOfRangeActiveBundles()
+    {
+        foreach (var bundle in _imports.ToList())
+        {
+            if (bundle.IsSoldOut ||
+                !TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _) ||
+                !TryParseTicketSerial(bundle.Ticket, out var currentTicket) ||
+                currentTicket <= lastTicket)
+            {
+                continue;
+            }
+
+            try
+            {
+                var normalized = bundle with
+                {
+                    Ticket = FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket)),
+                    IsSoldOut = true
+                };
+                _store.MarkImportSoldOut(new StoredImportLine(
+                    normalized.GameId,
+                    normalized.BundleId,
+                    normalized.Ticket,
+                    normalized.Bin,
+                    normalized.Source,
+                    true));
+                ReplaceImportLine(normalized);
+                TryRecordAudit(
+                    "inventory",
+                    "Completed bundle normalized",
+                    $"Game {bundle.GameId}, bundle {bundle.BundleId}, bin {bundle.Bin}, invalid next ticket {bundle.Ticket} normalized to sold out at {normalized.Ticket}");
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error($"Unable to normalize completed bundle {bundle.GameId}/{bundle.BundleId}.", ex);
+            }
+        }
+    }
+
     private static int PriceCentsForDisplay(long priceCents) =>
         priceCents <= 0
             ? 0
             : priceCents > int.MaxValue
                 ? int.MaxValue
                 : (int)priceCents;
+
+    private int TicketsRemainingForDisplay(ImportLine bundle, GameCatalogRecord? game)
+    {
+        if (bundle.IsSoldOut || game is null ||
+            !TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _) ||
+            !TryParseTicketSerial(bundle.Ticket, out var currentTicket))
+        {
+            return 0;
+        }
+
+        return Math.Max(0, lastTicket - currentTicket + 1);
+    }
 
     private static string PlacementSourceLabel(string source) =>
         source switch
@@ -6747,14 +7621,15 @@ public sealed partial class MainWindow : Window
         int Number,
         int BundleCount,
         string GameName,
-        BinActivity Activity)
+        BinActivity Activity,
+        bool IsSoldOut)
     {
         public string BinText => Number.ToString(CultureInfo.InvariantCulture);
         public string GameTextShort => BundleCount == 0 ? string.Empty : CompactGameName(GameName);
         public Visibility GameTextVisibility => BundleCount == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
-        public Brush BackgroundBrush => BundleCount == 0
+        public Brush BackgroundBrush => BundleCount == 0 || IsSoldOut
             ? EmptyTileBrush
             : Activity switch
             {
@@ -6762,7 +7637,7 @@ public sealed partial class MainWindow : Window
                 BinActivity.Medium => BundleCount > 1 ? MediumTileStackedBrush : MediumTileBrush,
                 _ => BundleCount > 1 ? LowTileStackedBrush : LowTileBrush
             };
-        public Brush BorderBrush => BundleCount == 0
+        public Brush BorderBrush => BundleCount == 0 || IsSoldOut
             ? EmptyTileBorderBrush
             : Activity switch
             {
@@ -6779,8 +7654,8 @@ public sealed partial class MainWindow : Window
             string gameName,
             BinActivity activity) =>
             current is null
-                ? new BinCard(number, 0, string.Empty, BinActivity.Low)
-                : new BinCard(number, bundleCount, gameName, activity);
+                ? new BinCard(number, 0, string.Empty, BinActivity.Low, false)
+                : new BinCard(number, bundleCount, gameName, activity, current.IsSoldOut);
 
         private static string CompactGameName(string gameName)
         {
@@ -6803,28 +7678,33 @@ public sealed partial class MainWindow : Window
         string BundleId,
         string Ticket,
         string Bin,
-        bool IsCurrent)
+        bool IsCurrent,
+        bool IsSoldOut)
     {
-        public string SummaryText => $"{(IsCurrent ? "Current" : "Dormant")} | Game {GameId} | Bundle {BundleId}";
-        public string DetailText => $"Bin {Bin} | Current ticket {Ticket}";
-        public string StatusText => IsCurrent ? "Current" : "Dormant";
+        public string SummaryText => $"{(IsSoldOut ? "Sold out" : IsCurrent ? "Current" : "Dormant")} | Game {GameId} | Bundle {BundleId}";
+        public string DetailText => IsSoldOut ? $"Bin {Bin} | Sold out at ticket {Ticket}" : $"Bin {Bin} | Current ticket {Ticket}";
+        public string StatusText => IsSoldOut ? "Sold out" : IsCurrent ? "Current" : "Dormant";
         public string GameIdText => $"Game ID {GameId}";
         public string GameNameText => $"Game Name {GameName}";
         public string BundleText => $"Bundle ID {BundleId}";
         public string TicketText => $"Ticket Number {Ticket}";
         public string BinText => $"Bin {Bin}";
-        public Brush CardBackgroundBrush => IsCurrent
+        public Brush CardBackgroundBrush => IsSoldOut
+            ? EmptyTileBrush
+            : IsCurrent
             ? MediumTileBrush
             : ThemeBrush("SlSurfaceAltBrush", ColorBrush(247, 248, 250));
-        public Brush CardBorderBrush => IsCurrent
+        public Brush CardBorderBrush => IsSoldOut
+            ? EmptyTileBorderBrush
+            : IsCurrent
             ? MediumTileStackedBrush
             : ThemeBrush("SlBorderBrush", ColorBrush(198, 204, 214));
-        public Brush CardForegroundBrush => IsCurrent
+        public Brush CardForegroundBrush => IsCurrent && !IsSoldOut
             ? DarkTileTextBrush
             : ThemeBrush("SlTextBrush", ColorBrush(21, 23, 26));
 
         public static BundleDetailLine From(ImportLine line, string gameName, bool isCurrent) =>
-            new(line.GameId, gameName, line.BundleId, line.Ticket, line.Bin, isCurrent);
+            new(line.GameId, gameName, line.BundleId, line.Ticket, line.Bin, isCurrent, line.IsSoldOut);
     }
 
     private sealed record InventoryRecord(
@@ -6861,6 +7741,8 @@ public sealed partial class MainWindow : Window
         string GameId,
         string Name,
         long PriceCents,
+        long BundlePriceCents,
+        int FirstTicketSerial,
         string Source,
         string ImageUri,
         string ImageStatus)
@@ -6870,10 +7752,18 @@ public sealed partial class MainWindow : Window
             ? "Not set"
             : (PriceCents / 100m).ToString("C0", CultureInfo.CurrentCulture);
 
+        public string BundlePriceText => BundlePriceCents <= 0
+            ? "Not set"
+            : (BundlePriceCents / 100m).ToString("C0", CultureInfo.CurrentCulture);
+
+        public string TicketStartText => FirstTicketSerial == 1 ? "001" : "000";
+
         public static GameCatalogRecord FromImport(string gameId) =>
             new(
                 gameId,
                 "Name not set",
+                0,
+                DefaultBundlePriceCents,
                 0,
                 "Initial import",
                 "ms-appx:///Assets/SimpleLottoLogo64.png",
@@ -6885,13 +7775,18 @@ public sealed partial class MainWindow : Window
         string Status,
         string Detail,
         bool Scanned,
-        bool HasBundle)
+        bool HasBundle,
+        bool IsSoldOut)
     {
         public string BinText => Number.ToString(CultureInfo.InvariantCulture);
-        public Brush BackgroundBrush => Scanned
+        public Brush BackgroundBrush => IsSoldOut
+            ? EmptyTileBrush
+            : Scanned
             ? MediumTileBrush
             : EmptyTileBrush;
-        public Brush BorderBrush => Scanned
+        public Brush BorderBrush => IsSoldOut
+            ? EmptyTileBorderBrush
+            : Scanned
             ? MediumTileStackedBrush
             : EmptyTileBorderBrush;
         public Brush ForegroundBrush => DarkTileTextBrush;
@@ -6900,13 +7795,15 @@ public sealed partial class MainWindow : Window
         {
             var detail = current is null
                 ? $"Bin {number.ToString(CultureInfo.CurrentCulture)} is empty."
-                : $"Bin {number.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}Expected game ID: {current.GameId}{Environment.NewLine}Bundle ID: {current.BundleId}{Environment.NewLine}Current ticket: {current.Ticket}{Environment.NewLine}Scan status: {(scanned ? "Scanned" : "Needs scan")}";
+                : $"Bin {number.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}Expected game ID: {current.GameId}{Environment.NewLine}Bundle ID: {current.BundleId}{Environment.NewLine}{(current.IsSoldOut ? "Sold out at ticket" : "Current ticket")}: {current.Ticket}{Environment.NewLine}Scan status: {(current.IsSoldOut ? "Sold out" : scanned ? "Scanned" : "Needs scan")}";
             var status = scanned
                 ? "Scanned"
                 : current is null
                     ? "Empty"
+                    : current.IsSoldOut
+                        ? "Sold out"
                     : "Need scan";
-            return new ClosingBinCard(number, status, detail, scanned, current is not null);
+            return new ClosingBinCard(number, status, detail, scanned, current is not null, current?.IsSoldOut == true);
         }
     }
 
@@ -6916,7 +7813,7 @@ public sealed partial class MainWindow : Window
 
     private sealed record ClosingScanSale(string BundleKey, SaleLine Sale);
 
-    private sealed record TicketBackfillSale(SaleLine Sale, string NextTicket);
+    private sealed record TicketBackfillSale(SaleLine Sale, string NextTicket, bool IsBundleComplete);
 
     private sealed record TicketBackfillRange(string SoldTicketText, int Quantity, string NextTicket);
 
@@ -7140,7 +8037,8 @@ public sealed partial class MainWindow : Window
         string Ticket,
         int Quantity,
         decimal Amount,
-        string Source = "normal_sale")
+        string Source = "normal_sale",
+        string BundleId = "")
     {
         public string TimeText => SoldAt.ToString("h:mm tt", CultureInfo.CurrentCulture);
         public string AmountText => Amount.ToString("C", CultureInfo.CurrentCulture);
@@ -7153,9 +8051,12 @@ public sealed partial class MainWindow : Window
         string BundleId,
         string Ticket,
         string Bin,
-        string Source)
+        string Source,
+        bool IsSoldOut = false)
     {
-        public string SummaryText => $"Game {GameId} | Bundle {BundleId} | Ticket {Ticket} | Bin {Bin}";
+        public string SummaryText => IsSoldOut
+            ? $"Game {GameId} | Bundle {BundleId} | Sold out at {Ticket} | Bin {Bin}"
+            : $"Game {GameId} | Bundle {BundleId} | Ticket {Ticket} | Bin {Bin}";
     }
 
     private sealed class ImportBin : INotifyPropertyChanged

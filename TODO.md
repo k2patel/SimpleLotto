@@ -19,6 +19,8 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - After setup completes, regular scanning of any ticket serial in a new bundle, then bin, then missing game price/name records activation gap-fill from the bundle's first ticket through the scanned ticket; for example `001` records `000-001`, quantity `2`, next `002`, and `008` records `000-008`, quantity `9`, next `009`.
    - With active current ticket `002`, scanning `003` records sale range `002-003`, quantity `2`, amount `2 * game price`, and next available ticket `004`.
    - If a placed bundle has no positive game price, scanning a ticket must require game price setup and must not record a `$0.00` sale.
+   - Verify bundle-range completion: a `$20` game with a `$300` bundle and first ticket `000` permits `000`-`014`; scanning `014` records the final sale, keeps the bundle in the bin/Rdisplay as grey `Sold out`, and never creates ticket `015`. Verify `$50` games default to a `$900` bundle but their saved bundle price remains editable.
+   - Verify ledger integrity: scan ticket `003` twice and confirm only the first scan records revenue; repeat in a closing backfill. Void a sale twice and confirm the second attempt is rejected, including after restarting the app.
    - Scanner input, rejected scans, ticket sales, bundle activations, opening placements, and bin placements appear in Audit.
 7. Verify license workflow:
    - Store > Registration shows the 64-character registration ID before first check.
@@ -42,7 +44,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - `Scan New Inventory` is visible in the top bar only while Inventory is selected, is also available inside the Receiving tab, opens the focused receiving overlay, and normal sales/activation scanner routing does not run underneath it.
    - Scanning any valid ticket barcode records only Game ID + Bundle ID; the ticket serial is not stored.
    - Scanning the same staged, already-received, or already-active bundle speaks `Duplicate` and does not change counts, inventory, sales, activation, or audit state.
-   - Closing scanning validates missing game prices and commits all staged bundles to unopened receiving inventory.
+   - Updating inventory validates missing game prices and commits all staged bundles to unopened receiving inventory.
    - Activating a received bundle removes it from Receiving in the same transaction that creates the active bin placement and activation sale.
    - Closing shows the current-shift activated bundle count; closing history, `shift_summary.csv`, text report, and PDF report preserve the count after finalization.
 11. Verify physical bundle uniqueness and correction:
@@ -73,6 +75,14 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - `Cancel Closing Scan` with evidence asks whether to discard or keep scanning.
    - Discard clears closing rows, matched bins, issues, unmatched scans, reconciliation changes, and generated closing sales without changing persisted shift data.
    - Cancellation is audited with discarded counts.
+17. Verify scanner capture and routing:
+   - A paired HID scanner records valid scans while the app is unfocused and while it is minimized to the tray; normal keyboard typing from a different device does not create a scan or audit row.
+   - Reconnecting the paired scanner changes Settings and Dashboard status to listening; unplugging it shows a clear not-detected status.
+   - An unpaired scanner completes a valid fast barcode both with Enter/Tab and after 400 ms idle; ordinary typing in text, password, search, rich-text, and number fields does not become a scan.
+   - An incomplete unpaired or paired fragment is discarded after five seconds without affecting the separate configurable activation bin/bundle pairing window.
+   - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
+   - Receiving and Closing reject bin and price commands with `Ticket only.` Receiving finalizes through `Update Inventory`; Closing retains `Close Scanning`.
+   - A price label can populate the activation and receiving game-price field while normal manual price entry remains possible.
 
 ## Missing Follow-Up Work
 
