@@ -1260,7 +1260,7 @@ public sealed partial class MainWindow : Window
                 validationText.Visibility = Visibility.Visible;
                 pinBox.Password = string.Empty;
                 confirmationBox.Password = string.Empty;
-                _ = pinBox.Focus(FocusState.Programmatic);
+                pinBox.Focus(FocusState.Programmatic);
                 return;
             }
 
@@ -1270,7 +1270,7 @@ public sealed partial class MainWindow : Window
                 validationText.Text = "The PIN and confirmation do not match.";
                 validationText.Visibility = Visibility.Visible;
                 confirmationBox.Password = string.Empty;
-                _ = confirmationBox.Focus(FocusState.Programmatic);
+                confirmationBox.Focus(FocusState.Programmatic);
                 return;
             }
 
@@ -1281,7 +1281,7 @@ public sealed partial class MainWindow : Window
                 validationText.Visibility = Visibility.Visible;
                 pinBox.Password = string.Empty;
                 confirmationBox.Password = string.Empty;
-                _ = pinBox.Focus(FocusState.Programmatic);
+                pinBox.Focus(FocusState.Programmatic);
                 return;
             }
 
