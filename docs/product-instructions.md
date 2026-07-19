@@ -49,7 +49,7 @@ Login expectations:
 - Only one user is actively operating the application at a time.
 - The active user can access the operational workflow allowed for their role.
 - The active user can run closing at any time.
-- Shift closing is primarily financial separation by time, not a hard user handoff.
+- Shift closing is primarily financial separation by the persistent closing-to-closing interval, not a hard user handoff.
 - The same logged-in user may close multiple times in the same day.
 - Manager access is required for sensitive system settings and user management.
 - Clerk access, when configured, should support normal sales, bin, inventory, and shift-closing workflows unless a specific action is manager-sensitive.
@@ -67,12 +67,12 @@ First-install workflow:
 
 SimpleLotto closes from shift to shift. There is no separate daily closing model by default.
 
-In SimpleLotto, a shift is an always-running financial close interval. Login is not the start of a shift. The business boundary is the time between the previous successful close and the current successful close.
+In SimpleLotto, a shift is an always-running financial close interval. Login is not the start of a shift. The business boundary is the persistent interval opened by the previous successful close and closed by the current successful close; its timestamps describe that span but do not determine row membership.
 
 - Sales and inventory movement occur inside the currently open close interval.
-- The current close interval starts at the previous successful close time. On first install, it starts from the first operational use after setup/import.
+- The current close-interval record is opened by the previous successful close. On first install, the first interval is created during database/setup initialization before operational activity.
 - Any active authorized user can close the current interval at any time.
-- Closing records the current close time and creates the financial summary for activity between the previous close and the current close.
+- Closing records the current close time and creates the financial summary for rows assigned to that explicit interval.
 - After closing succeeds, the next close interval begins immediately; no logout or user handoff is required.
 - The same logged-in user may close multiple intervals in one day.
 - Cash summaries are shift-to-shift only.
@@ -645,8 +645,11 @@ SimpleLotto is single-computer software. Use SQLite as the primary local backend
 Storage rules:
 
 - Use one primary SQLite database for active records.
-- The accounting boundary is previous successful close time to current successful close time.
-- A stored `shift_id`, `shift_number`, or close interval ID may be used for SQL performance, joins, and labels, but it must represent a close interval and must not be derived from login.
+- The accounting boundary is an explicit close-interval record created by the previous successful close and closed by the current successful close. Timestamps describe when events occurred; they must not be used to reconstruct interval membership.
+- Every interval has a persistent ID and status. SQLite must enforce that exactly one interval is open during normal operation.
+- A stored `shift_id`, `shift_number`, or close interval ID must represent that close interval and must not be derived from login.
+- Sales, activation events, closing history, report outbox jobs, and other financial/reportable rows must reference their interval ID directly. A Windows clock rollback must not move a committed row into or out of the current interval.
+- Manager, Clerk, System, and legacy-migration actors have stable IDs independent of display names. Financial rows retain both the stable actor ID and the recorded display name where a human-readable snapshot is useful.
 - The user-facing shift reference should use local closing date plus an incremental number for that date.
 - Do not partition the primary database by month because close intervals can cross calendar boundaries.
 - Calendar month/year filters are reporting views, not storage boundaries.
@@ -658,9 +661,13 @@ Storage rules:
 
 Close-interval storage rule:
 
-- Closing creates the immutable financial summary for the interval from previous close to current close.
+- Closing creates the immutable financial summary for the explicitly open interval.
+- The closing transaction records its closing history/outbox rows, closes that interval, and creates the next open interval atomically.
 - Once a close interval is closed, it is closed and should not be edited.
 - Fixes after close happen only in a later/current open interval as corrective actions.
+- Every sale has a persistent sale ID, interval ID, actor ID, actor-name snapshot, timestamp, and source. Sale rows are append-only; they are never deleted or updated to correct accounting.
+- Undo/void creates one negative correction row in the current open interval that references the original sale ID. The original sale remains unchanged, and each original sale can have at most one correction.
+- A physical ticket claim references the persistent sale ID that first claimed it. Voiding a sale does not release or delete that claim, so the same ticket cannot later be sold again.
 - Cash summary data comes from sales/payment activity.
 - Each closing record must persist the user-facing shift label and the report folder path created for that close.
 - The shift label sequence resets by local closing date, for example `2026-07-08 #1`, `2026-07-08 #2`, not by lifetime application closing count.
@@ -742,11 +749,15 @@ Transaction and consistency rules:
 SQLite/schema requirements for first deliverable:
 
 - Schema migrations must be versioned.
+- A migration that assigns ledger identities to an existing database must first create an online SQLite backup beside the active database in a migration-backup folder.
+- Historical interval inference may use stored timestamps only during migration and must verify each inferred group against its saved closing row count, ticket count, and sales cents. Exact matches become verified closed-interval history; mismatches are preserved in a `legacy_unresolved` interval and written to both a structured migration-conflict table and Audit.
+- Historical ticket claims must be rebuilt from persistent sale rows. Duplicate, malformed, quantity-mismatched, missing-bundle, orphan-claim, and ambiguous-void history must be preserved and reported as migration conflicts rather than silently rewritten or discarded.
 - Use explicit tables for users, close intervals/shifts, games, bundle price rules, bundles, bins, bin bundle state, scan events, sales ledger, inventory ledger, closing records, closing reconciliation issues, reports, settings, display registrations, and audit log.
 - Use cents/integer money values, not floating point, for all prices and totals.
 - Store timestamps in UTC and display in local time.
 - Add indexes for `shift_id`/`close_interval_id`, `game_id`, `bundle_id`, `bin_id`, `closed_at`, and scan timestamp.
 - Keep sales ledger and inventory ledger separate.
+- Enforce append-only sales, ticket claims, activation events, closing history, and closed intervals at the SQLite boundary, not only in UI code.
 - Record source for generated rows, such as normal sale, undo, closing gap-fill sold, closing correction, and inventory removal.
 - Store unopened receiving records separately from active bin placement records, or use explicit movement/source types that cannot be confused. Initial import, regular activation, receiving, movement, and closing reconciliation must remain queryable as distinct inventory sources.
 

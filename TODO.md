@@ -96,6 +96,15 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Restart after a committed close with a pending report job and confirm the exact shift report is regenerated, the outbox row becomes completed, and no sale, closing, or inventory row is duplicated.
    - Interrupt report generation after some artifacts are written, restart, and confirm partial output is replaced by the complete report set.
    - Create a backup while the active database has committed WAL frames, restore/open the zipped `simplelotto.db`, and confirm the latest committed closing, sales, inventory, and outbox data are present.
+19. Verify schema-v17 ledger identities and migration on copies of real store databases:
+   - Before opening an older database, confirm `migration-backups/simplelotto-pre-ledger-v17-from-v<version>.db` is created through SQLite online backup and can be opened independently.
+   - For history whose inferred sale rows exactly match each saved closing's row count, ticket count, and cents, confirm sales and activations receive the verified closed interval ID and the current rows receive the one open interval ID.
+   - Move the Windows clock backward, record a sale, restart the app, and confirm the sale remains in the current interval because membership uses `interval_id`, not `sold_at_utc`.
+   - Close the interval and confirm closing history, generated gap-fill sales, report outbox, closer actor, closed interval, and newly opened interval commit together. Confirm an old interval ID cannot accept a later sale.
+   - Confirm every new sale has a stable sale ID, actor ID/name, interval ID, and source; every activation has actor and interval identity; and report CSV rows preserve these IDs.
+   - Void one sale and confirm the negative correction references the original sale ID, a second void is rejected, and the original physical ticket claims remain attached to the original sale.
+   - Attempt direct update/delete of a sale, ticket claim, activation event, closing-history row, and closed interval and confirm SQLite rejects it.
+   - Seed duplicate historical ticket claims, malformed ranges, missing Bundle IDs, summary mismatches, and ambiguous legacy voids. Confirm no financial rows are deleted or rewritten, unresolved data is quarantined in `legacy_unresolved`, structured conflicts are stored, and matching Audit entries are visible after login.
 
 ## Missing Follow-Up Work
 

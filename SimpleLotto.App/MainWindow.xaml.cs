@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<SaleLine> _allSales = new();
     private readonly HashSet<string> _voidedSaleKeys = new(StringComparer.Ordinal);
+    private readonly HashSet<long> _voidedSaleIds = new();
     private readonly ObservableCollection<ImportLine> _imports = new();
     private readonly ObservableCollection<ReceivedBundleLine> _receivedBundles = new();
     private readonly List<ActivationLine> _activations = new();
@@ -98,6 +99,9 @@ public sealed partial class MainWindow : Window
     private string _clerkPasswordHash = string.Empty;
     private UserRole _activeUserRole = UserRole.None;
     private string _activeUserName = string.Empty;
+    private string _activeActorId = string.Empty;
+    private string _managerActorId = string.Empty;
+    private string _clerkActorId = string.Empty;
     private string _storeState = string.Empty;
     private string? _storeBarcodeLayout;
     private string _storeName = string.Empty;
@@ -113,6 +117,9 @@ public sealed partial class MainWindow : Window
     private string _scannerPid = string.Empty;
     private string _scannerSerial = string.Empty;
     private DateTime _lastCloseUtc = DateTime.MinValue;
+    private long _openIntervalId;
+    private int _ledgerConflictCount;
+    private int _blockingLedgerConflictCount;
     private bool _setupComplete;
     private bool _initialImportComplete;
     private bool _isWindowInitialized;
@@ -335,6 +342,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        _managerActorId = ReadSetting(state, "manager_actor_id");
+        _clerkActorId = ReadSetting(state, "clerk_actor_id");
+        _openIntervalId = state.OpenIntervalId;
+        _ledgerConflictCount = state.LedgerMigrationConflicts.Count;
+        _blockingLedgerConflictCount = state.LedgerMigrationConflicts.Count(conflict =>
+            string.Equals(conflict.Severity, "blocking", StringComparison.OrdinalIgnoreCase));
+
         if (!ReadBoolSetting(state, "setup_complete") ||
             string.IsNullOrWhiteSpace(ReadSetting(state, "manager_password_hash")))
         {
@@ -364,9 +378,15 @@ public sealed partial class MainWindow : Window
         _scannerSerial = ReadSetting(state, ScannerSerialSettingKey);
         _lastAutomaticUpgradeCheckDate = ReadSetting(state, AutomaticUpgradeLastCheckDateSettingKey);
         _managerPasswordHash = ReadSetting(state, "manager_password_hash");
+        _managerActorId = ReadSetting(state, "manager_actor_id");
         _clerkName = ReadSetting(state, "clerk_name");
         _clerkPasswordHash = ReadSetting(state, "clerk_password_hash");
+        _clerkActorId = ReadSetting(state, "clerk_actor_id");
         _lastCloseUtc = ReadDateTimeSetting(state, "last_close_utc");
+        _openIntervalId = state.OpenIntervalId;
+        _ledgerConflictCount = state.LedgerMigrationConflicts.Count;
+        _blockingLedgerConflictCount = state.LedgerMigrationConflicts.Count(conflict =>
+            string.Equals(conflict.Severity, "blocking", StringComparison.OrdinalIgnoreCase));
 
         StoreNameBox.Text = _storeName;
         StoreStreetBox.Text = _storeStreet;
@@ -417,14 +437,20 @@ public sealed partial class MainWindow : Window
                 activation.GameId,
                 activation.BundleId,
                 activation.Bin,
-                activation.Source));
+                activation.Source,
+                activation.IntervalId,
+                activation.ActorId,
+                activation.ActorName));
         }
 
         _sales.Clear();
         _allSales.Clear();
         _voidedSaleKeys.Clear();
+        _voidedSaleIds.Clear();
         foreach (var saleKey in state.VoidedSaleKeys)
             _voidedSaleKeys.Add(saleKey);
+        foreach (var saleId in state.VoidedSaleIds)
+            _voidedSaleIds.Add(saleId);
         foreach (var line in state.Sales)
         {
             var saleLine = new SaleLine(
@@ -435,9 +461,15 @@ public sealed partial class MainWindow : Window
                 line.Quantity,
                 line.AmountCents / 100m,
                 line.Source,
-                line.BundleId);
+                line.BundleId,
+                line.Id,
+                line.IntervalId,
+                line.ActorId,
+                line.ActorName,
+                line.CorrectsSaleId,
+                line.MigrationState);
             _allSales.Add(saleLine);
-            if (line.SoldAtUtc > _lastCloseUtc)
+            if (line.IntervalId == _openIntervalId)
                 _sales.Add(saleLine);
         }
 
@@ -496,7 +528,9 @@ public sealed partial class MainWindow : Window
                 _configuredBinCount,
                 _managerPasswordHash,
                 _clerkName,
-                _clerkPasswordHash));
+                _clerkPasswordHash,
+                _managerActorId,
+                _clerkActorId));
         }
         catch (Exception ex)
         {
@@ -549,7 +583,8 @@ public sealed partial class MainWindow : Window
             category,
             action,
             string.IsNullOrWhiteSpace(_activeUserName) ? "system" : _activeUserName,
-            detail);
+            detail,
+            string.IsNullOrWhiteSpace(_activeActorId) ? "system" : _activeActorId);
 
     private void SaveSecretSetting(string key, string value)
     {
@@ -1112,6 +1147,8 @@ public sealed partial class MainWindow : Window
         _storeStreet = storeStreet;
         _storeCity = storeCity;
         _configuredBinCount = Math.Min(500, binCount);
+        _managerActorId = string.IsNullOrWhiteSpace(_managerActorId) ? $"actor-{Guid.NewGuid():N}" : _managerActorId;
+        _clerkActorId = string.IsNullOrWhiteSpace(_clerkActorId) ? $"actor-{Guid.NewGuid():N}" : _clerkActorId;
         _managerPasswordHash = HashPassword(ManagerPasswordBox.Password);
         _clerkName = ClerkNameBox.Text.Trim();
         _clerkPasswordHash = string.IsNullOrWhiteSpace(ClerkPasswordBox.Password)
@@ -1143,6 +1180,7 @@ public sealed partial class MainWindow : Window
 
         _activeUserRole = isManager ? UserRole.Manager : UserRole.Clerk;
         _activeUserName = user;
+        _activeActorId = isManager ? _managerActorId : _clerkActorId;
         StartupOverlay.Visibility = Visibility.Collapsed;
         StatusText.Text = $"{user} logged in as {_activeUserRole} for {_storeState}.";
         DashboardScannerModeText.Text = "Global scanner";
@@ -1151,6 +1189,12 @@ public sealed partial class MainWindow : Window
         ApplyRoleAccess();
         RefreshOperationalPages();
         TryRecordAudit("auth", "Login", $"{user} logged in as {_activeUserRole}");
+        if (_ledgerConflictCount > 0)
+        {
+            StatusText.Text = _blockingLedgerConflictCount > 0
+                ? $"Ledger migration requires manager review: {_blockingLedgerConflictCount.ToString(CultureInfo.CurrentCulture)} blocking and {(_ledgerConflictCount - _blockingLedgerConflictCount).ToString(CultureInfo.CurrentCulture)} warning conflict(s). Current-interval sales remain explicit."
+                : $"Ledger migration recorded {_ledgerConflictCount.ToString(CultureInfo.CurrentCulture)} historical warning conflict(s) for manager review.";
+        }
     }
 
     private void LogoutButton_Click(object sender, RoutedEventArgs e)
@@ -1158,6 +1202,7 @@ public sealed partial class MainWindow : Window
         TryRecordAudit("auth", "Logout", "User logged out");
         _activeUserRole = UserRole.None;
         _activeUserName = string.Empty;
+        _activeActorId = string.Empty;
         LoginPasswordBox.Password = string.Empty;
         StartupOverlay.Visibility = Visibility.Visible;
         ShowLoginStage();
@@ -1506,12 +1551,14 @@ public sealed partial class MainWindow : Window
                 Ticket = backfill.IsBundleComplete ? ticket.Ticket : backfill.NextTicket,
                 IsSoldOut = backfill.IsBundleComplete
             };
-            var persisted = SaveSaleLineAndUpdateImportTicket(line, updatedBundle);
-            if (!persisted)
+            var persistedLine = SaveSaleLineAndUpdateImportTicket(line, updatedBundle);
+            if (persistedLine is null)
             {
                 _sales.Remove(line);
                 return;
             }
+
+            line = persistedLine;
 
             ReplaceImportLine(updatedBundle);
             SalesListView.SelectedItem = line;
@@ -1819,7 +1866,15 @@ public sealed partial class MainWindow : Window
             string.Equals(received.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
         if (receivedBundle is not null)
             _receivedBundles.Remove(receivedBundle);
-        _activations.Insert(0, new ActivationLine(DateTime.Now, ticket.GameId, ticket.BundleId, bin, "activation"));
+        _activations.Insert(0, new ActivationLine(
+            DateTime.Now,
+            ticket.GameId,
+            ticket.BundleId,
+            bin,
+            "activation",
+            _openIntervalId,
+            _activeActorId,
+            _activeUserName));
 
         TryRecordAudit(
             "activation",
@@ -2781,7 +2836,7 @@ public sealed partial class MainWindow : Window
         }
 
         var saleKey = SaleIdentity(sale);
-        if (_voidedSaleKeys.Contains(saleKey))
+        if ((sale.Id > 0 && _voidedSaleIds.Contains(sale.Id)) || _voidedSaleKeys.Contains(saleKey))
         {
             StatusText.Text = "This sale was already voided.";
             return;
@@ -2796,10 +2851,11 @@ public sealed partial class MainWindow : Window
             -sale.Amount,
             "undo",
             sale.BundleId);
-        if (!SaveVoid(sale, correction, saleKey))
+        var persistedCorrection = SaveVoid(sale, correction, saleKey);
+        if (persistedCorrection is null)
             return;
 
-        _sales.Insert(0, correction);
+        _sales.Insert(0, persistedCorrection);
 
         TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
         StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
@@ -2844,7 +2900,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            _store.InsertImportAndSale(
+            var inserted = _store.InsertImportAndSale(
                 new StoredImportLine(
                     importLine.GameId,
                     importLine.BundleId,
@@ -2853,7 +2909,9 @@ public sealed partial class MainWindow : Window
                     importLine.Source,
                     importLine.IsSoldOut),
                 ToStoredSaleLine(saleLine));
-            _allSales.Insert(0, saleLine);
+            var persisted = FromStoredSaleLine(inserted);
+            ReplaceSaleLine(_sales, saleLine, persisted);
+            _allSales.Insert(0, persisted);
             return true;
         }
         catch (Exception ex)
@@ -2863,44 +2921,31 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private bool SaveSaleLine(SaleLine line)
+    private SaleLine? SaveVoid(SaleLine original, SaleLine correction, string saleKey)
     {
         try
         {
-            _store.InsertSale(ToStoredSaleLine(line));
-            _allSales.Insert(0, line);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Unable to save sale to SQLite: {ex.Message}";
-            return false;
-        }
-    }
-
-    private bool SaveVoid(SaleLine original, SaleLine correction, string saleKey)
-    {
-        try
-        {
-            _store.InsertVoid(ToStoredSaleLine(original), ToStoredSaleLine(correction), saleKey);
-            _allSales.Insert(0, correction);
+            var inserted = _store.InsertVoid(ToStoredSaleLine(original), ToStoredSaleLine(correction), saleKey);
+            var persisted = FromStoredSaleLine(inserted);
+            _allSales.Insert(0, persisted);
             _voidedSaleKeys.Add(saleKey);
-            return true;
+            _voidedSaleIds.Add(original.Id);
+            return persisted;
         }
         catch (Exception ex)
         {
             StatusText.Text = ex.Message.Contains("already been voided", StringComparison.OrdinalIgnoreCase)
                 ? "This sale was already voided."
                 : $"Unable to void sale in SQLite: {ex.Message}";
-            return false;
+            return null;
         }
     }
 
-    private bool SaveSaleLineAndUpdateImportTicket(SaleLine line, ImportLine updatedBundle)
+    private SaleLine? SaveSaleLineAndUpdateImportTicket(SaleLine line, ImportLine updatedBundle)
     {
         try
         {
-            _store.InsertSaleAndUpdateImportTicket(
+            var inserted = _store.InsertSaleAndUpdateImportTicket(
                 ToStoredSaleLine(line),
                 new StoredImportLine(
                     updatedBundle.GameId,
@@ -2909,8 +2954,10 @@ public sealed partial class MainWindow : Window
                     updatedBundle.Bin,
                     updatedBundle.Source,
                     updatedBundle.IsSoldOut));
-            _allSales.Insert(0, line);
-            return true;
+            var persisted = FromStoredSaleLine(inserted);
+            ReplaceSaleLine(_sales, line, persisted);
+            _allSales.Insert(0, persisted);
+            return persisted;
         }
         catch (Exception ex)
         {
@@ -2925,32 +2972,7 @@ public sealed partial class MainWindow : Window
             {
                 StatusText.Text = $"Unable to save sale and ticket state to SQLite: {ex.Message}";
             }
-            return false;
-        }
-    }
-
-    private void DeleteSaleLine(SaleLine line)
-    {
-        try
-        {
-            _store.DeleteSale(ToStoredSaleLine(line));
-            _allSales.Remove(line);
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Unable to delete sale from SQLite: {ex.Message}";
-        }
-    }
-
-    private void ClearStoredSales()
-    {
-        try
-        {
-            _store.ClearSales();
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Unable to clear SQLite sales: {ex.Message}";
+            return null;
         }
     }
 
@@ -3022,7 +3044,7 @@ public sealed partial class MainWindow : Window
             GameCatalogListView.SelectedItem = match;
     }
 
-    private static StoredSaleLine ToStoredSaleLine(SaleLine line) =>
+    private StoredSaleLine ToStoredSaleLine(SaleLine line) =>
         new(
             line.SoldAt.ToUniversalTime(),
             line.GameId,
@@ -3031,10 +3053,45 @@ public sealed partial class MainWindow : Window
             line.Quantity,
             (long)Math.Round(line.Amount * 100m, MidpointRounding.AwayFromZero),
             line.Source,
-            line.BundleId);
+            line.BundleId,
+            line.Id,
+            line.IntervalId > 0 ? line.IntervalId : _openIntervalId,
+            string.IsNullOrWhiteSpace(line.ActorId) ? _activeActorId : line.ActorId,
+            string.IsNullOrWhiteSpace(line.ActorName) ? _activeUserName : line.ActorName,
+            line.CorrectsSaleId,
+            line.MigrationState);
+
+    private static SaleLine FromStoredSaleLine(StoredSaleLine line) =>
+        new(
+            line.SoldAtUtc.ToLocalTime(),
+            line.GameId,
+            line.Bin,
+            line.Ticket,
+            line.Quantity,
+            line.AmountCents / 100m,
+            line.Source,
+            line.BundleId,
+            line.Id,
+            line.IntervalId,
+            line.ActorId,
+            line.ActorName,
+            line.CorrectsSaleId,
+            line.MigrationState);
+
+    private static void ReplaceSaleLine(
+        ObservableCollection<SaleLine> rows,
+        SaleLine original,
+        SaleLine replacement)
+    {
+        var index = rows.IndexOf(original);
+        if (index >= 0)
+            rows[index] = replacement;
+    }
 
     private static string SaleIdentity(SaleLine line) =>
-        string.Join("|",
+        line.Id > 0
+            ? $"sale:{line.Id.ToString(CultureInfo.InvariantCulture)}"
+            : string.Join("|",
             line.SoldAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
             line.GameId,
             line.Bin,
@@ -3097,8 +3154,7 @@ public sealed partial class MainWindow : Window
     }
 
     private int CurrentShiftActivationCount() =>
-        _activations.Count(activation =>
-            _lastCloseUtc == DateTime.MinValue || activation.ActivatedAt.ToUniversalTime() > _lastCloseUtc);
+        _activations.Count(activation => activation.IntervalId == _openIntervalId);
 
     private long CurrentClosingExpectedCashCents()
     {
@@ -4151,7 +4207,7 @@ public sealed partial class MainWindow : Window
             ? "Not initialized"
             : _databaseSchemaVersion;
         SettingsWindowsAppSdkVersionText.Text = windowsAppSdkAssembly.GetName().Version?.ToString() ?? "Unavailable";
-        SettingsDatabasePathText.Text = LocalStore.DbPath;
+        SettingsDatabasePathText.Text = _store.DatabasePath;
         SettingsLogPathText.Text = AppLog.LogDirectory;
         RefreshUpgradeStatus(_updates.Current);
     }
@@ -5760,7 +5816,10 @@ public sealed partial class MainWindow : Window
             unscannedSoldOutBundles.Count,
             currentBundlesForClosing.Count,
             _closingResolvedPlacements.Count,
-            activatedBundles);
+            activatedBundles,
+            _openIntervalId,
+            _activeActorId,
+            _activeUserName);
         var storedCurrentBundles = currentBundlesForClosing
             .Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut))
             .ToList();
@@ -5778,10 +5837,10 @@ public sealed partial class MainWindow : Window
             "closing",
             "Shift closed",
             $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {unscannedSoldOutBundles.Count.ToString(CultureInfo.InvariantCulture)} closing-sold-out bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
-        long reportJobId;
+        CompleteClosingResult closingResult;
         try
         {
-            reportJobId = _store.CompleteClosing(
+            closingResult = _store.CompleteClosing(
                 closedAtUtc,
                 closingRecord,
                 auditRecord,
@@ -5799,6 +5858,7 @@ public sealed partial class MainWindow : Window
         }
 
         _lastCloseUtc = closedAtUtc;
+        _openIntervalId = closingResult.OpenIntervalId;
         foreach (var placement in currentBundlesForClosing)
             ReplaceImportLine(placement);
         foreach (var placement in _closingResolvedPlacements)
@@ -5810,8 +5870,8 @@ public sealed partial class MainWindow : Window
             if (received is not null)
                 _receivedBundles.Remove(received);
         }
-        foreach (var generated in generatedSales)
-            _allSales.Insert(0, generated);
+        foreach (var generated in closingResult.GeneratedSales)
+            _allSales.Insert(0, FromStoredSaleLine(generated));
         _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
         ApplyClosingHistoryPage(resetPage: true);
         ClosingHistoryListView.SelectedItem = _pagedClosingHistoryRows.FirstOrDefault();
@@ -5828,7 +5888,7 @@ public sealed partial class MainWindow : Window
         RefreshTotals();
         RefreshOperationalPages();
         _ = ProcessClosingReportJobAsync(
-            new StoredClosingReportJob(reportJobId, "pending", 0, string.Empty, reportRequest),
+            new StoredClosingReportJob(closingResult.ReportJobId, "pending", 0, string.Empty, closingResult.ReportRequest),
             announceResult: true);
     }
 
@@ -5921,7 +5981,13 @@ public sealed partial class MainWindow : Window
                 sale.Quantity,
                 sale.AmountCents / 100m,
                 sale.Source,
-                sale.BundleId))
+                sale.BundleId,
+                sale.Id,
+                sale.IntervalId,
+                sale.ActorId,
+                sale.ActorName,
+                sale.CorrectsSaleId,
+                sale.MigrationState))
             .ToList();
         var closedBundles = request.ClosedBundles.Select(FromStoredImportLine).ToList();
         var currentBundles = request.CurrentBundles.Select(FromStoredImportLine).ToList();
@@ -5942,7 +6008,10 @@ public sealed partial class MainWindow : Window
             closing.ActivatedBundles,
             request.SelectedEmailAttachments,
             closing.ScannedBins,
-            closing.ActiveBins);
+            closing.ActiveBins,
+            closing.IntervalId,
+            closing.ClosedByActorId,
+            closing.ClosedByActorName);
     }
 
     private static ImportLine FromStoredImportLine(StoredImportLine line) =>
@@ -5964,7 +6033,10 @@ public sealed partial class MainWindow : Window
         int activatedBundleCount,
         IReadOnlyList<string> selectedEmailAttachments,
         int scannedBinCount,
-        int activeBinCount)
+        int activeBinCount,
+        long intervalId,
+        string closedByActorId,
+        string closedByActorName)
     {
         Directory.CreateDirectory(target.Folder);
         var formula = "instant_ticket_sales + online_sale - instant_cashout - online_cashout";
@@ -5977,8 +6049,8 @@ public sealed partial class MainWindow : Window
             Path.Combine(target.Folder, "shift_summary.csv"),
             new[]
             {
-                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles", "activated_bundles"),
-                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, scannedBinCount.ToString(CultureInfo.InvariantCulture), activeBinCount.ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture))
+                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles", "activated_bundles", "interval_id", "closed_by_actor_id", "closed_by_actor"),
+                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, scannedBinCount.ToString(CultureInfo.InvariantCulture), activeBinCount.ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture), intervalId.ToString(CultureInfo.InvariantCulture), closedByActorId, closedByActorName)
             },
             Encoding.UTF8);
 
@@ -6004,6 +6076,7 @@ public sealed partial class MainWindow : Window
                 CsvLine("cash_formula", formula),
                 CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}"),
                 CsvLine("activated_bundles", activatedBundleCount.ToString(CultureInfo.InvariantCulture)),
+                CsvLine("ledger_identity", $"interval_id={intervalId.ToString(CultureInfo.InvariantCulture)}; closed_by_actor_id={closedByActorId}; closed_by={closedByActorName}"),
                 CsvLine("email_attachments", string.Join(";", selectedEmailAttachments)),
                 CsvLine("pdf_report", Path.Combine(target.Folder, "closing_report.pdf"))
             },
@@ -6339,12 +6412,18 @@ public sealed partial class MainWindow : Window
     {
         var lines = new List<string>
         {
-            CsvLine("sold_at", "source", "game_id", "bin", "ticket", "quantity", "amount")
+            CsvLine("sale_id", "interval_id", "actor_id", "actor", "corrects_sale_id", "sold_at", "source", "game_id", "bundle_id", "bin", "ticket", "quantity", "amount")
         };
         lines.AddRange(sales.Select(s => CsvLine(
+            s.Id.ToString(CultureInfo.InvariantCulture),
+            s.IntervalId.ToString(CultureInfo.InvariantCulture),
+            s.ActorId,
+            s.ActorName,
+            s.CorrectsSaleId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
             s.SoldAt.ToString("O", CultureInfo.InvariantCulture),
             s.Source,
             s.GameId,
+            s.BundleId,
             s.Bin,
             s.Ticket,
             s.Quantity.ToString(CultureInfo.InvariantCulture),
@@ -7544,7 +7623,7 @@ public sealed partial class MainWindow : Window
                     using var writer = new StreamWriter(entry.Open());
                     writer.Write($"created_at_utc={DateTime.UtcNow:O}{Environment.NewLine}");
                     writer.Write($"store_name={_storeName}{Environment.NewLine}");
-                    writer.Write($"database={LocalStore.DbPath}{Environment.NewLine}");
+                    writer.Write($"database={_store.DatabasePath}{Environment.NewLine}");
                     writer.Write($"backup_method=sqlite_online_backup{Environment.NewLine}");
                 }
 
@@ -7970,7 +8049,10 @@ public sealed partial class MainWindow : Window
         string GameId,
         string BundleId,
         string Bin,
-        string Source);
+        string Source,
+        long IntervalId = 0,
+        string ActorId = "",
+        string ActorName = "");
 
     private sealed record GameCatalogRecord(
         string GameId,
@@ -8056,7 +8138,8 @@ public sealed partial class MainWindow : Window
 
     private static List<ClosingHistoryRow> BuildClosingHistoryRows(IEnumerable<StoredClosingRecord> records) =>
         records
-            .OrderByDescending(record => record.ClosedAtUtc)
+            .OrderByDescending(record => record.IntervalId)
+            .ThenByDescending(record => record.ClosedAtUtc)
             .Select(ClosingHistoryRow.From)
             .ToList();
 
@@ -8273,7 +8356,13 @@ public sealed partial class MainWindow : Window
         int Quantity,
         decimal Amount,
         string Source = "normal_sale",
-        string BundleId = "")
+        string BundleId = "",
+        long Id = 0,
+        long IntervalId = 0,
+        string ActorId = "",
+        string ActorName = "",
+        long? CorrectsSaleId = null,
+        string MigrationState = "native")
     {
         public string TimeText => SoldAt.ToString("h:mm tt", CultureInfo.CurrentCulture);
         public string AmountText => Amount.ToString("C", CultureInfo.CurrentCulture);
