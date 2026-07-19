@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
-    private const int SchemaVersion = 15;
+    private const int SchemaVersion = 16;
     private static readonly object SchemaLock = new();
     private static bool _schemaReady;
 
@@ -61,6 +62,7 @@ public sealed class LocalStore
         state.ManualGames.AddRange(QueryManualGames(conn));
         state.RdisplayDisplays.AddRange(QueryRdisplayDisplays(conn));
         state.ClosingHistory.AddRange(QueryClosingHistory(conn));
+        state.PendingClosingReports.AddRange(QueryPendingClosingReports(conn));
         state.AuditLog.AddRange(QueryAuditLog(conn));
         return state;
     }
@@ -333,19 +335,24 @@ public sealed class LocalStore
             throw new InvalidOperationException("Active bundle was not found.");
     }
 
-    public void CompleteClosing(
+    public long CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,
         StoredAuditRecord auditRecord,
         IEnumerable<StoredSaleLine> generatedSales,
         IEnumerable<StoredImportLine> closedBundles,
         IEnumerable<StoredImportLine> currentBundles,
-        IEnumerable<StoredImportLine> resolvedBundles)
+        IEnumerable<StoredImportLine> resolvedBundles,
+        StoredClosingReportRequest reportRequest)
     {
         var generated = new List<StoredSaleLine>(generatedSales);
         var closed = new List<StoredImportLine>(closedBundles);
         var current = new List<StoredImportLine>(currentBundles);
         var resolved = new List<StoredImportLine>(resolvedBundles);
+        if (reportRequest.Closing != closingRecord)
+            throw new InvalidOperationException("Closing report request does not match the closing record.");
+
+        var reportPayloadJson = JsonSerializer.Serialize(reportRequest);
         using var conn = Open();
         using var tx = conn.BeginTransaction();
         using (var closingCmd = conn.CreateCommand())
@@ -475,7 +482,96 @@ public sealed class LocalStore
         UpsertSetting(conn, tx, "last_close_closed_bundles", closed.Count.ToString(CultureInfo.InvariantCulture));
         UpsertSetting(conn, tx, "last_close_current_bundles", current.Count.ToString(CultureInfo.InvariantCulture));
         UpsertSetting(conn, tx, "last_close_resolved_bundles", resolved.Count.ToString(CultureInfo.InvariantCulture));
+
+        using var reportCmd = conn.CreateCommand();
+        reportCmd.Transaction = tx;
+        reportCmd.CommandText = """
+            INSERT INTO closing_report_outbox (
+                business_date, shift_sequence, report_folder, status, payload_json,
+                attempt_count, last_error, created_at_utc, updated_at_utc, completed_at_utc)
+            VALUES (
+                $business_date, $shift_sequence, $report_folder, 'pending', $payload_json,
+                0, '', $created_at_utc, $updated_at_utc, NULL)
+            """;
+        reportCmd.Parameters.AddWithValue("$business_date", closingRecord.BusinessDate);
+        reportCmd.Parameters.AddWithValue("$shift_sequence", closingRecord.ShiftSequence);
+        reportCmd.Parameters.AddWithValue("$report_folder", closingRecord.ReportFolder);
+        reportCmd.Parameters.AddWithValue("$payload_json", reportPayloadJson);
+        reportCmd.Parameters.AddWithValue("$created_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        reportCmd.Parameters.AddWithValue("$updated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        reportCmd.ExecuteNonQuery();
+        using var reportIdCmd = conn.CreateCommand();
+        reportIdCmd.Transaction = tx;
+        reportIdCmd.CommandText = "SELECT last_insert_rowid()";
+        var reportJobId = Convert.ToInt64(reportIdCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
         tx.Commit();
+        return reportJobId;
+    }
+
+    public void MarkClosingReportCompleted(long reportJobId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE closing_report_outbox
+            SET status = 'completed',
+                attempt_count = attempt_count + 1,
+                last_error = '',
+                updated_at_utc = $updated_at_utc,
+                completed_at_utc = $completed_at_utc
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$updated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$completed_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$id", reportJobId);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Closing report job was not found.");
+    }
+
+    public void MarkClosingReportFailed(long reportJobId, string error)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE closing_report_outbox
+            SET status = 'failed',
+                attempt_count = attempt_count + 1,
+                last_error = $last_error,
+                updated_at_utc = $updated_at_utc,
+                completed_at_utc = NULL
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$last_error", error ?? string.Empty);
+        cmd.Parameters.AddWithValue("$updated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$id", reportJobId);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Closing report job was not found.");
+    }
+
+    public void BackupDatabase(string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(destinationPath))
+            throw new ArgumentException("Backup destination is required.", nameof(destinationPath));
+
+        var fullDestinationPath = Path.GetFullPath(destinationPath);
+        if (string.Equals(fullDestinationPath, Path.GetFullPath(DbPath), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Backup destination must be different from the active database.");
+        if (File.Exists(fullDestinationPath))
+            throw new IOException("Backup destination already exists.");
+
+        var destinationFolder = Path.GetDirectoryName(fullDestinationPath);
+        if (!string.IsNullOrWhiteSpace(destinationFolder))
+            Directory.CreateDirectory(destinationFolder);
+
+        var destinationBuilder = new SqliteConnectionStringBuilder
+        {
+            DataSource = fullDestinationPath,
+            Mode = SqliteOpenMode.ReadWriteCreate
+        };
+        using var source = Open();
+        using var destination = new SqliteConnection(destinationBuilder.ToString());
+        destination.Open();
+        source.BackupDatabase(destination);
     }
 
     public void InsertAudit(StoredAuditRecord record)
@@ -781,6 +877,23 @@ public sealed class LocalStore
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_history_business_date ON closing_history(business_date)");
             Exec(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_closing_history_business_shift ON closing_history(business_date, shift_sequence) WHERE business_date <> '' AND shift_sequence > 0");
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS closing_report_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    business_date TEXT NOT NULL,
+                    shift_sequence INTEGER NOT NULL,
+                    report_folder TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payload_json TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    completed_at_utc TEXT NULL,
+                    UNIQUE(business_date, shift_sequence)
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closing_report_outbox_status ON closing_report_outbox(status, updated_at_utc)");
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     occurred_at_utc TEXT NOT NULL,
@@ -828,7 +941,7 @@ public sealed class LocalStore
                 """);
             EnsureColumn(conn, "rdisplay_displays", "last_server_url", "TEXT NOT NULL DEFAULT ''");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_rdisplay_displays_token ON rdisplay_displays(auth_token)");
-            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Enforce one accounting claim per bundle ticket and persist one-time voids");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Persist retryable closing report jobs");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             _schemaReady = true;
         }
@@ -1030,6 +1143,7 @@ public sealed class LocalStore
 
     private static bool TryParseTicketSerial(string value, out int serial)
     {
+        serial = 0;
         var ticket = (value ?? string.Empty).Trim();
         return ticket.Length > 0 &&
             ticket.All(char.IsAsciiDigit) &&
@@ -1097,6 +1211,60 @@ public sealed class LocalStore
                 reader.GetInt32(16),
                 reader.GetInt32(17),
                 reader.GetInt32(18)));
+        }
+
+        return rows;
+    }
+
+    private static List<StoredClosingReportJob> QueryPendingClosingReports(SqliteConnection conn)
+    {
+        var rows = new List<StoredClosingReportJob>();
+        var invalidRows = new List<(long Id, string Error)>();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT id, status, attempt_count, last_error, payload_json
+                FROM closing_report_outbox
+                WHERE status IN ('pending', 'failed')
+                ORDER BY id
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                try
+                {
+                    var request = JsonSerializer.Deserialize<StoredClosingReportRequest>(reader.GetString(4)) ??
+                        throw new InvalidOperationException("Closing report payload is empty.");
+                    rows.Add(new StoredClosingReportJob(
+                        id,
+                        reader.GetString(1),
+                        reader.GetInt32(2),
+                        reader.GetString(3),
+                        request));
+                }
+                catch (Exception ex)
+                {
+                    invalidRows.Add((id, ex.Message));
+                    AppLog.Error($"Closing report job {id.ToString(CultureInfo.InvariantCulture)} has an invalid payload.", ex);
+                }
+            }
+        }
+
+        foreach (var invalid in invalidRows)
+        {
+            using var update = conn.CreateCommand();
+            update.CommandText = """
+                UPDATE closing_report_outbox
+                SET status = 'invalid',
+                    last_error = $last_error,
+                    updated_at_utc = $updated_at_utc
+                WHERE id = $id
+                """;
+            update.Parameters.AddWithValue("$last_error", invalid.Error);
+            update.Parameters.AddWithValue("$updated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            update.Parameters.AddWithValue("$id", invalid.Id);
+            update.ExecuteNonQuery();
         }
 
         return rows;
@@ -1238,6 +1406,7 @@ public sealed class PersistedState
     public List<StoredGameRecord> ManualGames { get; } = new();
     public List<StoredRdisplayDisplay> RdisplayDisplays { get; } = new();
     public List<StoredClosingRecord> ClosingHistory { get; } = new();
+    public List<StoredClosingReportJob> PendingClosingReports { get; } = new();
     public List<StoredAuditRecord> AuditLog { get; } = new();
 }
 
@@ -1290,6 +1459,21 @@ public sealed record StoredClosingRecord(
     int CurrentBundles,
     int ResolvedBundles,
     int ActivatedBundles);
+
+public sealed record StoredClosingReportRequest(
+    StoredClosingRecord Closing,
+    List<StoredSaleLine> Sales,
+    List<StoredImportLine> ClosedBundles,
+    List<StoredImportLine> CurrentBundles,
+    List<StoredImportLine> ResolvedBundles,
+    List<string> SelectedEmailAttachments);
+
+public sealed record StoredClosingReportJob(
+    long Id,
+    string Status,
+    int AttemptCount,
+    string LastError,
+    StoredClosingReportRequest Request);
 
 public sealed record StoredAuditRecord(
     DateTime OccurredAtUtc,

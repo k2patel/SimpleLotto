@@ -735,6 +735,7 @@ Transaction and consistency rules:
 - Closing finalization must be transactional.
 - Closing finalization should either complete all sale gap-fill, inventory state changes, report records, and audit rows, or fail without partial finalization.
 - Report/email sending must not be part of the critical transaction. If email fails, the close interval remains closed and the email failure is recorded.
+- The closing transaction must persist a pending report/outbox job containing an immutable snapshot of the report inputs. Report files are generated only after that transaction commits; generation failure must leave the shift closed and the job retryable after restart.
 - Scan capture can be append-only during the dialog. Reconciliation applies business changes after scan collection.
 - Closed intervals are immutable; later fixes are corrective actions in a later/current open interval.
 
@@ -761,6 +762,7 @@ Reliability and recovery rules:
 - On startup, recover cleanly from an app crash while minimized, during scanner monitoring, or after a failed email.
 - If the app crashes during a closing scan dialog before final submit, captured scan evidence may be discarded or recovered, but it must not partially close the interval.
 - If the app crashes after final closing transaction commits but before reports/email finish, the close interval remains closed and reports/email can be retried.
+- Database backups must use SQLite's online backup API against the live connection. Do not rely on a passive WAL checkpoint followed by copying only the main database file, because committed WAL frames must be included in the backup snapshot.
 - Backups should be created at close or immediately after a successful close.
 - Backup/restore behavior should be part of Settings or a manager-only maintenance surface.
 

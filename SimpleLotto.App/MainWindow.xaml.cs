@@ -476,6 +476,9 @@ public sealed partial class MainWindow : Window
             ShowLoginStage();
         else
             ShowImportStage();
+
+        if (state.PendingClosingReports.Count > 0)
+            _ = RetryPendingClosingReportsAsync(state.PendingClosingReports);
     }
 
     private void SaveSetupState()
@@ -5737,32 +5740,6 @@ public sealed partial class MainWindow : Window
             .ThenBy(s => s.GameId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(s => s.Ticket, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        try
-        {
-            WriteClosingReports(
-                reportTarget,
-                intervalStartUtc,
-                closedAtUtc,
-                reportSales,
-                Array.Empty<ImportLine>(),
-                currentBundlesForClosing,
-                _closingResolvedPlacements,
-                instantTicketSalesCents,
-                onlineSaleCents,
-                onlineCashoutCents,
-                instantCashoutCents,
-                expectedCashCents,
-                activatedBundles,
-                selectedEmailAttachments);
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Closing report generation failed.", ex);
-            ClosingStatusText.Text = $"Closing report generation failed: {ex.Message}";
-            StatusText.Text = "Closing report generation failed. Shift was not closed.";
-            return;
-        }
-
         var closingRecord = new StoredClosingRecord(
             closedAtUtc,
             intervalStartUtc,
@@ -5783,25 +5760,39 @@ public sealed partial class MainWindow : Window
             currentBundlesForClosing.Count,
             _closingResolvedPlacements.Count,
             activatedBundles);
+        var storedCurrentBundles = currentBundlesForClosing
+            .Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut))
+            .ToList();
+        var storedResolvedBundles = _closingResolvedPlacements
+            .Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut))
+            .ToList();
+        var reportRequest = new StoredClosingReportRequest(
+            closingRecord,
+            reportSales.Select(ToStoredSaleLine).ToList(),
+            new List<StoredImportLine>(),
+            storedCurrentBundles,
+            storedResolvedBundles,
+            selectedEmailAttachments.ToList());
         var auditRecord = NewAuditRecord(
             "closing",
             "Shift closed",
             $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {unscannedSoldOutBundles.Count.ToString(CultureInfo.InvariantCulture)} closing-sold-out bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
+        long reportJobId;
         try
         {
-            _store.CompleteClosing(
+            reportJobId = _store.CompleteClosing(
                 closedAtUtc,
                 closingRecord,
                 auditRecord,
                 generatedSales.Select(ToStoredSaleLine),
                 Array.Empty<StoredImportLine>(),
-                currentBundlesForClosing.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut)),
-                _closingResolvedPlacements.Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut)));
+                storedCurrentBundles,
+                storedResolvedBundles,
+                reportRequest);
         }
         catch (Exception ex)
         {
             AppLog.Error("Closing finalization failed.", ex);
-            TryDeleteReportFolder(reportTarget.Folder);
             ClosingStatusText.Text = $"Closing finalization failed: {ex.Message}";
             return;
         }
@@ -5830,11 +5821,14 @@ public sealed partial class MainWindow : Window
         ClosingOnlineCashoutBox.Value = 0;
         ClosingInstantCashoutBox.Value = 0;
         ResetClosingScanState();
-        StatusText.Text = $"Shift closed. Reports saved to {reportTarget.Folder}.";
-        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Reports saved to {reportTarget.ShiftLabel}.";
+        StatusText.Text = $"Shift closed. Generating reports for {reportTarget.ShiftLabel}.";
+        ClosingStatusText.Text = $"Closed at {_lastCloseUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Report generation is pending.";
         _ = SpeakAsync("Shift closed. New sales count toward the next close.");
         RefreshTotals();
         RefreshOperationalPages();
+        _ = ProcessClosingReportJobAsync(
+            new StoredClosingReportJob(reportJobId, "pending", 0, string.Empty, reportRequest),
+            announceResult: true);
     }
 
     private bool TryBuildClosingSoldOutChanges(
@@ -5909,6 +5903,50 @@ public sealed partial class MainWindow : Window
         return new ClosingReportTarget(businessDate, shiftSequence, shiftLabel, folder);
     }
 
+    private void WriteClosingReports(StoredClosingReportRequest request)
+    {
+        var closing = request.Closing;
+        var target = new ClosingReportTarget(
+            closing.BusinessDate,
+            closing.ShiftSequence,
+            closing.ShiftLabel,
+            closing.ReportFolder);
+        var sales = request.Sales
+            .Select(sale => new SaleLine(
+                sale.SoldAtUtc.ToLocalTime(),
+                sale.GameId,
+                sale.Bin,
+                sale.Ticket,
+                sale.Quantity,
+                sale.AmountCents / 100m,
+                sale.Source,
+                sale.BundleId))
+            .ToList();
+        var closedBundles = request.ClosedBundles.Select(FromStoredImportLine).ToList();
+        var currentBundles = request.CurrentBundles.Select(FromStoredImportLine).ToList();
+        var resolvedBundles = request.ResolvedBundles.Select(FromStoredImportLine).ToList();
+        WriteClosingReports(
+            target,
+            closing.IntervalStartUtc,
+            closing.ClosedAtUtc,
+            sales,
+            closedBundles,
+            currentBundles,
+            resolvedBundles,
+            closing.SalesCents,
+            closing.OnlineSaleCents,
+            closing.OnlineCashoutCents,
+            closing.InstantCashoutCents,
+            closing.ExpectedCashCents,
+            closing.ActivatedBundles,
+            request.SelectedEmailAttachments,
+            closing.ScannedBins,
+            closing.ActiveBins);
+    }
+
+    private static ImportLine FromStoredImportLine(StoredImportLine line) =>
+        new(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source, line.IsSoldOut);
+
     private void WriteClosingReports(
         ClosingReportTarget target,
         DateTime intervalStartUtc,
@@ -5923,7 +5961,9 @@ public sealed partial class MainWindow : Window
         long instantCashoutCents,
         long expectedCashCents,
         int activatedBundleCount,
-        IReadOnlyList<string> selectedEmailAttachments)
+        IReadOnlyList<string> selectedEmailAttachments,
+        int scannedBinCount,
+        int activeBinCount)
     {
         Directory.CreateDirectory(target.Folder);
         var formula = "instant_ticket_sales + online_sale - instant_cashout - online_cashout";
@@ -5937,7 +5977,7 @@ public sealed partial class MainWindow : Window
             new[]
             {
                 CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles", "activated_bundles"),
-                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, _closingScannedBins.Count.ToString(CultureInfo.InvariantCulture), ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture))
+                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, scannedBinCount.ToString(CultureInfo.InvariantCulture), activeBinCount.ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture))
             },
             Encoding.UTF8);
 
@@ -5986,6 +6026,58 @@ public sealed partial class MainWindow : Window
             currentBundles.Count,
             resolvedBundles.Count,
             activatedBundleCount);
+    }
+
+    private async Task RetryPendingClosingReportsAsync(IReadOnlyList<StoredClosingReportJob> jobs)
+    {
+        foreach (var job in jobs)
+            await ProcessClosingReportJobAsync(job, announceResult: false);
+    }
+
+    private async Task ProcessClosingReportJobAsync(StoredClosingReportJob job, bool announceResult)
+    {
+        try
+        {
+            await Task.Run(() =>
+            {
+                DeleteReportFolder(job.Request.Closing.ReportFolder);
+                WriteClosingReports(job.Request);
+                _store.MarkClosingReportCompleted(job.Id);
+            });
+            AppLog.Info($"Closing reports generated for {job.Request.Closing.ShiftLabel}.");
+            if (!announceResult)
+                return;
+
+            StatusText.Text = $"Shift closed. Reports saved to {job.Request.Closing.ReportFolder}.";
+            ClosingStatusText.Text = $"{job.Request.Closing.ShiftLabel} closed. Reports are ready.";
+            TryRecordAudit(
+                "report",
+                "Closing reports generated",
+                $"{job.Request.Closing.ShiftLabel}; folder {job.Request.Closing.ReportFolder}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Closing report generation failed for {job.Request.Closing.ShiftLabel}.", ex);
+            TryDeleteReportFolder(job.Request.Closing.ReportFolder);
+            try
+            {
+                _store.MarkClosingReportFailed(job.Id, ex.Message);
+            }
+            catch (Exception persistenceError)
+            {
+                AppLog.Error($"Closing report failure state could not be persisted for job {job.Id.ToString(CultureInfo.InvariantCulture)}.", persistenceError);
+            }
+
+            if (!announceResult)
+                return;
+
+            StatusText.Text = $"Shift closed, but reports for {job.Request.Closing.ShiftLabel} are pending retry.";
+            ClosingStatusText.Text = $"Report generation failed: {ex.Message}. The shift remains closed and reports will retry after restart.";
+            TryRecordAudit(
+                "report",
+                "Closing reports pending retry",
+                $"{job.Request.Closing.ShiftLabel}: {ex.Message}");
+        }
     }
 
     private static void WriteClosingPdfReport(
@@ -6305,13 +6397,12 @@ public sealed partial class MainWindow : Window
         File.WriteAllLines(path, lines, Encoding.UTF8);
     }
 
-    private void WriteAnomaliesCsv(string path)
+    private static void WriteAnomaliesCsv(string path)
     {
         var lines = new List<string>
         {
             CsvLine("title", "detail")
         };
-        lines.AddRange(_closingScanIssues.Select(i => CsvLine(i.Title, i.Detail)));
         File.WriteAllLines(path, lines, Encoding.UTF8);
     }
 
@@ -6400,13 +6491,36 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (Directory.Exists(folder))
-                Directory.Delete(folder, recursive: true);
+            DeleteReportFolder(folder);
         }
         catch
         {
-            // A failed cleanup should not hide the original closing failure.
+            // Best-effort cleanup must not hide the report generation failure.
         }
+    }
+
+    private static void DeleteReportFolder(string folder)
+    {
+        var reportsRoot = Path.GetFullPath(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SimpleLotto",
+            "reports"));
+        var fullFolder = Path.GetFullPath(folder);
+        var relativeFolder = Path.GetRelativePath(reportsRoot, fullFolder);
+        var segments = relativeFolder.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+        if (Path.IsPathRooted(relativeFolder) ||
+            relativeFolder.Equals("..", StringComparison.Ordinal) ||
+            relativeFolder.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+            relativeFolder.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal) ||
+            segments.Length < 2)
+        {
+            throw new InvalidOperationException("Closing report folder is outside the SimpleLotto reports directory.");
+        }
+
+        if (Directory.Exists(fullFolder))
+            Directory.Delete(fullFolder, recursive: true);
     }
 
     private void ReplaceImportLine(ImportLine replacement)
@@ -6552,6 +6666,7 @@ public sealed partial class MainWindow : Window
 
     private static bool TryParseTicketSerial(string ticket, out int serial)
     {
+        serial = 0;
         var value = ticket.Trim();
         return value.Length > 0 &&
             value.All(char.IsAsciiDigit) &&
@@ -7409,30 +7524,44 @@ public sealed partial class MainWindow : Window
         try
         {
             SaveSetting("backup_folder_path", folder);
-            using (var conn = _store.Open())
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = "PRAGMA wal_checkpoint(PASSIVE)";
-                cmd.ExecuteNonQuery();
-            }
-
             var storeName = SanitizePathSegment(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName);
             var stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
             var destDir = Path.Combine(folder, storeName, "backup", stamp);
             Directory.CreateDirectory(destDir);
             var zipPath = Path.Combine(destDir, "backup.zip");
-
-            using (var fs = File.Create(zipPath))
-            using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+            var pendingZipPath = Path.Combine(destDir, "backup.partial");
+            var snapshotPath = Path.Combine(Path.GetTempPath(), $"simplelotto-backup-{Guid.NewGuid():N}.db");
+            try
             {
-                if (File.Exists(LocalStore.DbPath))
-                    zip.CreateEntryFromFile(LocalStore.DbPath, "simplelotto.db", CompressionLevel.Optimal);
+                _store.BackupDatabase(snapshotPath);
+                using (var fs = File.Create(pendingZipPath))
+                using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+                {
+                    zip.CreateEntryFromFile(snapshotPath, "simplelotto.db", CompressionLevel.Optimal);
 
-                var entry = zip.CreateEntry("backup-meta.txt", CompressionLevel.Optimal);
-                using var writer = new StreamWriter(entry.Open());
-                writer.Write($"created_at_utc={DateTime.UtcNow:O}{Environment.NewLine}");
-                writer.Write($"store_name={_storeName}{Environment.NewLine}");
-                writer.Write($"database={LocalStore.DbPath}{Environment.NewLine}");
+                    var entry = zip.CreateEntry("backup-meta.txt", CompressionLevel.Optimal);
+                    using var writer = new StreamWriter(entry.Open());
+                    writer.Write($"created_at_utc={DateTime.UtcNow:O}{Environment.NewLine}");
+                    writer.Write($"store_name={_storeName}{Environment.NewLine}");
+                    writer.Write($"database={LocalStore.DbPath}{Environment.NewLine}");
+                    writer.Write($"backup_method=sqlite_online_backup{Environment.NewLine}");
+                }
+
+                File.Move(pendingZipPath, zipPath);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(snapshotPath))
+                        File.Delete(snapshotPath);
+                    if (File.Exists(pendingZipPath))
+                        File.Delete(pendingZipPath);
+                }
+                catch (Exception cleanupError)
+                {
+                    AppLog.Error("Temporary SQLite backup files could not be deleted.", cleanupError);
+                }
             }
 
             var size = new FileInfo(zipPath).Length;

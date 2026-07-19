@@ -1,5 +1,11 @@
 # SimpleLotto TODO
 
+## Known-Good Closing Baseline
+
+- On 2026-07-18, the user confirmed that installer [`SimpleLotto-0.0.1-921fba3.exe`](https://files.k2patel.in/u/SimpleLotto-0.0.1-921fba3.exe), built from commit `921fba3`, produced the correct closing outcome and that its closing scan worked correctly with the scanner paired.
+- Keep this installer and commit as the closing regression baseline until a newer build passes the same Windows store test. Do not infer a regression from code differences alone.
+- The exact game, bundle, bin, ticket, and manual-total values used for that successful run were not captured. Before testing a newer build, record the scanner pairing/focus state, game price, bundle price, first/last ticket, starting bin/bundle/current ticket, scanned barcode sequence, manual closing totals, and expected closing result so the comparison is reproducible.
+
 ## Windows Verification
 
 The latest fixes need verification in the intended Windows WinUI environment because this macOS host cannot execute the Windows XAML compiler.
@@ -85,6 +91,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
    - Receiving and Closing reject bin and price commands with `Ticket only.` Receiving finalizes through `Update Inventory`; Closing retains `Close Scanning`.
    - A price label can populate the activation and receiving game-price field while normal manual price entry remains possible.
+18. Verify crash-consistent closing reports and backups:
+   - Force report-folder creation or report writing to fail and confirm the SQLite closing transaction still commits, the next close interval begins, and a pending/failed `closing_report_outbox` row retains the immutable report snapshot.
+   - Restart after a committed close with a pending report job and confirm the exact shift report is regenerated, the outbox row becomes completed, and no sale, closing, or inventory row is duplicated.
+   - Interrupt report generation after some artifacts are written, restart, and confirm partial output is replaced by the complete report set.
+   - Create a backup while the active database has committed WAL frames, restore/open the zipped `simplelotto.db`, and confirm the latest committed closing, sales, inventory, and outbox data are present.
 
 ## Missing Follow-Up Work
 
