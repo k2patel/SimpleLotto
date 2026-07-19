@@ -3710,7 +3710,8 @@ public sealed partial class MainWindow : Window
         if (!_isWindowInitialized)
             return;
 
-        if (ClosingTabs.SelectedItem == ClosingScanEvidenceTab)
+        if (ClosingTabs.SelectedItem is TabViewItem selectedClosingTab &&
+            selectedClosingTab == ClosingScanEvidenceTab)
             ExitClosingReportContext();
     }
 
