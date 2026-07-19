@@ -214,6 +214,8 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    private const int ShowWindowRestore = 9;
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern bool Shell_NotifyIcon(uint dwMessage, ref NotifyIconData lpData);
 
@@ -1560,6 +1562,8 @@ public sealed partial class MainWindow : Window
 
     private async Task<ActivationBinSelection?> ShowActivationBinDialogAsync(ImportTicket ticket)
     {
+        RestoreForScannerWorkflowDialog("bundle activation bin selection");
+
         var binBox = new TextBox
         {
             Header = "Bin number",
@@ -1768,7 +1772,29 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        var activationSale = BuildActivationGapFillSale(DateTime.Now, ticket, bin);
+        if (!TryBuildActivationGapFillSale(
+                DateTime.Now,
+                ticket,
+                bin,
+                out var activationSale,
+                out var configurationError))
+        {
+            if (updateDashboardStatus)
+            {
+                DashboardScannerStatusText.Text = $"Game {ticket.GameId} setup is invalid. Bundle not activated.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | invalid setup";
+                ClearDashboardPendingScanPair();
+            }
+
+            StatusText.Text = $"Bundle {ticket.BundleId} was not activated: {configurationError}";
+            TryRecordAudit(
+                "activation",
+                "Bundle activation blocked",
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {bin}: {configurationError}");
+            _ = SpeakAsync("Game setup required.");
+            return false;
+        }
+
         var line = new ImportLine(
             ticket.GameId,
             ticket.BundleId,
@@ -1857,6 +1883,8 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
+        RestoreForScannerWorkflowDialog("game price setup");
+
         existingGame ??= _gameCatalog.FirstOrDefault(g =>
             string.Equals(g.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase));
         var nameBox = new TextBox
@@ -1932,11 +1960,15 @@ public sealed partial class MainWindow : Window
         };
         dialog.PrimaryButtonClick += (_, args) =>
         {
-            if (PriceCentsFromNumberBox(priceBox) > 0)
+            var priceCents = PriceCentsFromNumberBox(priceBox);
+            var bundlePriceCents = existingGame?.BundlePriceCents > 0
+                ? existingGame.BundlePriceCents
+                : DefaultBundlePriceFor(priceCents);
+            if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
             args.Cancel = true;
-            statusText.Text = "Enter or scan a positive ticket price in the game price box before continuing.";
+            statusText.Text = configurationError;
         };
 
         _isWorkflowDialogOpen = true;
@@ -1972,8 +2004,14 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        if (priceCents <= 0)
+        var bundlePriceCents = existingGame?.BundlePriceCents > 0
+            ? existingGame.BundlePriceCents
+            : DefaultBundlePriceFor(priceCents);
+        if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
+        {
+            StatusText.Text = $"Game {ticket.GameId} was not saved: {configurationError}";
             return false;
+        }
 
         var name = string.IsNullOrWhiteSpace(nameBox.Text)
             ? $"Game {ticket.GameId}"
@@ -1982,14 +2020,13 @@ public sealed partial class MainWindow : Window
             ticket.GameId,
             name,
             priceCents,
-            existingGame?.BundlePriceCents > 0 ? existingGame.BundlePriceCents : DefaultBundlePriceFor(priceCents),
+            bundlePriceCents,
             existingGame?.FirstTicketSerial is 1 ? 1 : 0,
             "Activation",
             existingGame?.ImageUri ?? "ms-appx:///Assets/SimpleLottoLogo64.png",
             existingGame?.ImageStatus ?? "Image not uploaded");
 
-        UpsertManualGameRecord(record);
-        return true;
+        return UpsertManualGameRecord(record);
     }
 
     private void AcceptImportBin(ImportBin bin)
@@ -2493,6 +2530,15 @@ public sealed partial class MainWindow : Window
         StatusText.Text = "SimpleLotto restored.";
     }
 
+    private void RestoreForScannerWorkflowDialog(string workflow)
+    {
+        ShowWindow(_hwnd, ShowWindowRestore);
+        var foregrounded = SetForegroundWindow(_hwnd);
+        AppLog.Info(foregrounded
+            ? $"Restored SimpleLotto for scanner workflow: {workflow}."
+            : $"Restored SimpleLotto for scanner workflow but Windows did not grant foreground focus: {workflow}.");
+    }
+
     private async void RequestExitFromTray()
     {
         if (_sales.Count > 0)
@@ -2927,10 +2973,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void UpsertManualGameRecord(GameCatalogRecord game)
+    private bool UpsertManualGameRecord(GameCatalogRecord game)
     {
         if (!SaveManualGame(game))
-            return;
+            return false;
 
         var existing = _manualGameCatalog.FindIndex(g =>
             string.Equals(g.GameId, game.GameId, StringComparison.OrdinalIgnoreCase));
@@ -2946,6 +2992,7 @@ public sealed partial class MainWindow : Window
             "inventory",
             "Game setup saved",
             $"Game {game.GameId}, name {game.Name}, price {MoneyText(game.PriceCents)}, source {game.Source}, image status {game.ImageStatus}");
+        return true;
     }
 
     private void SelectGame(string gameId)
@@ -3055,9 +3102,19 @@ public sealed partial class MainWindow : Window
         var instantTicketSalesCents = (long)Math.Round(_sales.Sum(s => s.Amount) * 100m, MidpointRounding.AwayFromZero);
         instantTicketSalesCents += _closingScanSales.Sum(s =>
             (long)Math.Round(s.Sale.Amount * 100m, MidpointRounding.AwayFromZero));
-        if (_closingScanCaptured && _closingScanIssues.Count == 0 && _closingUnmatchedTickets.Count == 0)
-            instantTicketSalesCents += BuildClosingGeneratedSales(ClosingSoldOutBundles(), DateTime.UtcNow)
+        if (_closingScanCaptured &&
+            _closingScanIssues.Count == 0 &&
+            _closingUnmatchedTickets.Count == 0 &&
+            TryBuildClosingSoldOutChanges(
+                ClosingSoldOutBundles(),
+                DateTime.UtcNow,
+                out var projectedSales,
+                out _,
+                out _))
+        {
+            instantTicketSalesCents += projectedSales
                 .Sum(sale => (long)Math.Round(sale.Amount * 100m, MidpointRounding.AwayFromZero));
+        }
 
         TryReadMoneyCentsOrZero(ClosingOnlineSaleBox, out var onlineSaleCents);
         TryReadMoneyCentsOrZero(ClosingOnlineCashoutBox, out var onlineCashoutCents);
@@ -4794,11 +4851,15 @@ public sealed partial class MainWindow : Window
         };
         dialog.PrimaryButtonClick += (_, args) =>
         {
-            if (PriceCentsFromNumberBox(priceBox) > 0)
+            var priceCents = PriceCentsFromNumberBox(priceBox);
+            var bundlePriceCents = existingGame?.BundlePriceCents > 0
+                ? existingGame.BundlePriceCents
+                : DefaultBundlePriceFor(priceCents);
+            if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
             args.Cancel = true;
-            statusText.Text = "Enter a positive ticket price before continuing.";
+            statusText.Text = configurationError;
         };
         dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
 
@@ -4831,19 +4892,24 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        if (priceCents <= 0)
+        var bundlePriceCents = existingGame?.BundlePriceCents > 0
+            ? existingGame.BundlePriceCents
+            : DefaultBundlePriceFor(priceCents);
+        if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
+        {
+            StatusText.Text = $"Game {bundle.GameId} was not saved: {configurationError}";
             return false;
+        }
 
-        UpsertManualGameRecord(new GameCatalogRecord(
+        return UpsertManualGameRecord(new GameCatalogRecord(
             bundle.GameId,
             string.IsNullOrWhiteSpace(nameBox.Text) ? $"Game {bundle.GameId}" : nameBox.Text.Trim(),
             priceCents,
-            existingGame?.BundlePriceCents > 0 ? existingGame.BundlePriceCents : DefaultBundlePriceFor(priceCents),
+            bundlePriceCents,
             existingGame?.FirstTicketSerial is 1 ? 1 : 0,
             "Receiving",
             existingGame?.ImageUri ?? DefaultGameImageUri,
             existingGame?.ImageStatus ?? "Image not uploaded"));
-        return true;
     }
 
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
@@ -5612,18 +5678,29 @@ public sealed partial class MainWindow : Window
         }
 
         var unscannedSoldOutBundles = ClosingSoldOutBundles();
-        var soldOutPlacements = unscannedSoldOutBundles
-            .Select(BuildSoldOutPlacement)
-            .ToList();
+        var closedAtUtc = DateTime.UtcNow;
+        if (!TryBuildClosingSoldOutChanges(
+                unscannedSoldOutBundles,
+                closedAtUtc,
+                out var soldOutSales,
+                out var soldOutPlacements,
+                out var configurationError))
+        {
+            ClosingStatusText.Text = $"Closing blocked: {configurationError}";
+            StatusText.Text = "Shift was not closed because game setup is invalid.";
+            TryRecordAudit("closing", "Closing finalization blocked", configurationError);
+            _ = SpeakAsync("Game setup required.");
+            return;
+        }
+
         var currentBundlesForClosing = _closingCurrentPlacements
             .Concat(soldOutPlacements)
             .GroupBy(BundleKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
             .ToList();
-        var closedAtUtc = DateTime.UtcNow;
         var generatedSales = _closingScanSales
             .Select(s => s.Sale)
-            .Concat(BuildClosingGeneratedSales(unscannedSoldOutBundles, closedAtUtc))
+            .Concat(soldOutSales)
             .ToList();
         var instantTicketSalesCents = (long)Math.Round(
             (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
@@ -5760,48 +5837,52 @@ public sealed partial class MainWindow : Window
         RefreshOperationalPages();
     }
 
-    private List<SaleLine> BuildClosingGeneratedSales(IEnumerable<ImportLine> soldOutBundles, DateTime closedAtUtc)
+    private bool TryBuildClosingSoldOutChanges(
+        IEnumerable<ImportLine> soldOutBundles,
+        DateTime closedAtUtc,
+        out List<SaleLine> sales,
+        out List<ImportLine> placements,
+        out string error)
     {
-        var sales = new List<SaleLine>();
+        sales = new List<SaleLine>();
+        placements = new List<ImportLine>();
+        error = string.Empty;
         foreach (var bundle in soldOutBundles)
         {
-            if (TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _) &&
-                TryBuildTicketBackfillSale(
-                    closedAtUtc.ToLocalTime(),
-                    bundle,
-                    FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket)),
-                    "closing_gap_fill_sold",
-                    out var backfill,
-                    out _))
+            if (!TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out var rangeError))
             {
-                sales.Add(backfill.Sale);
-                continue;
+                error = $"Game {bundle.GameId}, bundle {bundle.BundleId}: {rangeError}";
+                return false;
             }
 
-            sales.Add(new SaleLine(
-                closedAtUtc.ToLocalTime(),
-                bundle.GameId,
-                bundle.Bin,
-                bundle.Ticket,
-                1,
-                GamePriceCents(bundle.GameId) / 100m,
-                "closing_gap_fill_sold",
-                bundle.BundleId));
+            var finalTicket = FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket));
+            if (!TryBuildTicketBackfillSale(
+                    closedAtUtc.ToLocalTime(),
+                    bundle,
+                    finalTicket,
+                    "closing_gap_fill_sold",
+                    out var backfill,
+                    out var backfillError))
+            {
+                error = $"Game {bundle.GameId}, bundle {bundle.BundleId}: {backfillError}";
+                return false;
+            }
+
+            if (backfill.Sale.Amount <= 0)
+            {
+                error = $"Game {bundle.GameId}, bundle {bundle.BundleId} calculated a non-positive closing sale.";
+                return false;
+            }
+
+            sales.Add(backfill.Sale);
+            placements.Add(bundle with
+            {
+                Ticket = finalTicket,
+                IsSoldOut = true
+            });
         }
 
-        return sales;
-    }
-
-    private ImportLine BuildSoldOutPlacement(ImportLine bundle)
-    {
-        if (!TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _))
-            return bundle with { IsSoldOut = true };
-
-        return bundle with
-        {
-            Ticket = FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket)),
-            IsSoldOut = true
-        };
+        return true;
     }
 
     private ClosingReportTarget BuildClosingReportTarget(DateTime closedAtUtc)
@@ -6366,22 +6447,34 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        if (TryParseTicketSerial(activeBundle.Ticket, out var currentSerial) &&
-            (currentSerial < firstTicket || currentSerial > lastTicket))
+        if (!TryParseTicketSerial(activeBundle.Ticket, out var currentSerial))
+        {
+            error = $"Current ticket {activeBundle.Ticket} is not a valid ticket serial.";
+            return false;
+        }
+
+        if (currentSerial < firstTicket || currentSerial > lastTicket)
         {
             error = $"Current ticket {activeBundle.Ticket} is outside the configured bundle range. The bundle was retired from the active bin.";
             return false;
         }
 
-        if (TryParseTicketSerial(activeBundle.Ticket, out currentSerial) &&
-            scannedSerial < currentSerial)
+        if (scannedSerial < currentSerial)
         {
             error = $"Ticket {scannedTicket} was already recorded for bundle {activeBundle.BundleId}. Current ticket is {activeBundle.Ticket}.";
             return false;
         }
 
-        var range = BuildTicketBackfillRange(activeBundle.Ticket, scannedTicket);
+        var width = Math.Max(TicketSerialWidth(activeBundle.Ticket), TicketSerialWidth(scannedTicket));
+        var range = BuildTicketBackfillRange(currentSerial, scannedSerial, width);
         var price = GamePriceCents(activeBundle.GameId) / 100m;
+        var amount = range.Quantity * price;
+        if (amount <= 0)
+        {
+            error = $"Game {activeBundle.GameId} calculated a non-positive sale.";
+            return false;
+        }
+
         var isComplete = TryParseTicketSerial(range.NextTicket, out var nextSerial) && nextSerial > lastTicket;
         backfill = new TicketBackfillSale(
             new SaleLine(
@@ -6390,7 +6483,7 @@ public sealed partial class MainWindow : Window
                 activeBundle.Bin,
                 range.SoldTicketText,
                 range.Quantity,
-                range.Quantity * price,
+                amount,
                 source,
                 activeBundle.BundleId),
             range.NextTicket,
@@ -6398,80 +6491,71 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private TicketBackfillSale BuildActivationGapFillSale(DateTime soldAt, ImportTicket ticket, string bin)
+    private bool TryBuildActivationGapFillSale(
+        DateTime soldAt,
+        ImportTicket ticket,
+        string bin,
+        out TicketBackfillSale backfill,
+        out string error)
     {
-        var scannedText = string.IsNullOrWhiteSpace(ticket.Ticket) ? "000" : ticket.Ticket.Trim();
+        backfill = null!;
+        error = string.Empty;
+        var scannedText = ticket.Ticket.Trim();
         var width = TicketSerialWidth(scannedText);
-        var price = GamePriceCents(ticket.GameId) / 100m;
+        if (!TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var lastTicket, out error))
+            return false;
 
-        if (TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var lastTicket, out _) &&
-            TryParseTicketSerial(scannedText, out var scannedSerial) &&
-            scannedSerial >= firstTicket && scannedSerial <= lastTicket)
+        if (!TryParseTicketSerial(scannedText, out var scannedSerial) ||
+            scannedSerial < firstTicket ||
+            scannedSerial > lastTicket)
         {
-            var quantity = scannedSerial - firstTicket + 1;
-            var startText = FormatTicketSerial(firstTicket, width);
-            var endText = FormatTicketSerial(scannedSerial, width);
-            var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
-            var isComplete = scannedSerial == lastTicket;
-            return new TicketBackfillSale(
-                new SaleLine(
-                    soldAt,
-                    ticket.GameId,
-                    bin,
-                    soldText,
-                    quantity,
-                    quantity * price,
-                    "activation_gap_fill",
-                    ticket.BundleId),
-                isComplete ? endText : FormatTicketSerial(scannedSerial + 1, width),
-                isComplete);
+            error = $"Ticket {ticket.Ticket} is outside the configured {FormatTicketSerial(firstTicket, width)}-{FormatTicketSerial(lastTicket, width)} bundle range.";
+            return false;
         }
 
-        return new TicketBackfillSale(
+        var quantity = scannedSerial - firstTicket + 1;
+        var startText = FormatTicketSerial(firstTicket, width);
+        var endText = FormatTicketSerial(scannedSerial, width);
+        var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
+        var isComplete = scannedSerial == lastTicket;
+        var price = GamePriceCents(ticket.GameId) / 100m;
+        var amount = quantity * price;
+        if (amount <= 0)
+        {
+            error = $"Game {ticket.GameId} calculated a non-positive activation sale.";
+            return false;
+        }
+
+        backfill = new TicketBackfillSale(
             new SaleLine(
                 soldAt,
                 ticket.GameId,
                 bin,
-                scannedText,
-                1,
-                price,
+                soldText,
+                quantity,
+                amount,
                 "activation_gap_fill",
                 ticket.BundleId),
-            scannedText,
-            false);
+            isComplete ? endText : FormatTicketSerial(scannedSerial + 1, width),
+            isComplete);
+        return true;
     }
 
-    private static TicketBackfillRange BuildTicketBackfillRange(string currentTicket, string scannedTicket)
+    private static TicketBackfillRange BuildTicketBackfillRange(int currentSerial, int scannedSerial, int width)
     {
-        var currentText = string.IsNullOrWhiteSpace(currentTicket) ? scannedTicket : currentTicket.Trim();
-        var scannedText = string.IsNullOrWhiteSpace(scannedTicket) ? currentText : scannedTicket.Trim();
-        var width = Math.Max(TicketSerialWidth(currentText), TicketSerialWidth(scannedText));
-
-        if (TryParseTicketSerial(currentText, out var currentSerial) &&
-            TryParseTicketSerial(scannedText, out var scannedSerial))
-        {
-            if (scannedSerial >= currentSerial)
-            {
-                var quantity = scannedSerial - currentSerial + 1;
-                var startText = FormatTicketSerial(currentSerial, width);
-                var endText = FormatTicketSerial(scannedSerial, width);
-                var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
-                return new TicketBackfillRange(soldText, quantity, FormatTicketSerial(scannedSerial + 1, width));
-            }
-
-            return new TicketBackfillRange(scannedText, 1, FormatTicketSerial(currentSerial, width));
-        }
-
-        if (TryParseTicketSerial(scannedText, out var fallbackScannedSerial))
-            return new TicketBackfillRange(scannedText, 1, FormatTicketSerial(fallbackScannedSerial + 1, width));
-
-        return new TicketBackfillRange(scannedText, 1, currentText);
+        var quantity = scannedSerial - currentSerial + 1;
+        var startText = FormatTicketSerial(currentSerial, width);
+        var endText = FormatTicketSerial(scannedSerial, width);
+        var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
+        return new TicketBackfillRange(soldText, quantity, FormatTicketSerial(scannedSerial + 1, width));
     }
 
     private static bool TryParseTicketSerial(string ticket, out int serial)
     {
-        var digits = DigitsOnly(ticket);
-        return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out serial);
+        var value = ticket.Trim();
+        return value.Length > 0 &&
+            value.All(char.IsAsciiDigit) &&
+            int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out serial);
     }
 
     private static int TicketSerialWidth(string ticket) =>
@@ -6590,7 +6674,12 @@ public sealed partial class MainWindow : Window
             "ms-appx:///Assets/SimpleLottoLogo64.png",
             "Image not uploaded");
 
-        UpsertManualGameRecord(record);
+        if (!UpsertManualGameRecord(record))
+        {
+            GameCatalogStatusText.Text = $"Game {gameId} could not be saved.";
+            return;
+        }
+
         GameCatalogStatusText.Text = $"Game {gameId} added.";
     }
 
@@ -6648,7 +6737,12 @@ public sealed partial class MainWindow : Window
             FirstTicketSerial = GameFirstTicketEditComboBox.SelectedIndex == 1 ? 1 : 0,
             Source = "Manual"
         };
-        UpsertManualGameRecord(updated);
+        if (!UpsertManualGameRecord(updated))
+        {
+            GameCatalogStatusText.Text = $"Game {updated.GameId} details could not be saved.";
+            return;
+        }
+
         GameCatalogStatusText.Text = $"Game {updated.GameId} details saved.";
     }
 
@@ -7504,6 +7598,13 @@ public sealed partial class MainWindow : Window
         if (bundlePriceCents % ticketPriceCents != 0)
         {
             error = "Bundle price must divide evenly by the ticket price.";
+            return false;
+        }
+
+        var ticketCount = bundlePriceCents / ticketPriceCents;
+        if (ticketCount > int.MaxValue)
+        {
+            error = "Bundle ticket count is too large.";
             return false;
         }
 

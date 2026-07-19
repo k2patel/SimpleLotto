@@ -185,6 +185,8 @@ Bundle price rules:
 - Bundle price must produce a whole ticket count. If it does not, the system must reject the value or require correction before saving.
 - Bundle price options must be editable in Inventory game setup.
 - Bundle price is used for ticket range calculation, sold-out detection, and closing accountability.
+- Price setup is complete only after the game configuration is successfully persisted. A SQLite save failure must leave activation or receiving blocked and must not be reported as a successful price setup.
+- Missing or invalid ticket price, bundle price, ticket count, current ticket serial, or configured ticket range must block activation, normal sales, and closing-generated sales. Financial workflows must never substitute a one-ticket or `$0` fallback ledger row.
 
 Ticket numbering rules:
 
@@ -596,6 +598,7 @@ Scanner rules:
 - Focused/on-demand scan capture is used only inside explicit workflows that ask the user to scan, such as add bundle, inventory receiving, closing scan, setup/import, and correction dialogs.
 - Paired scanner input should be monitored regardless of which page is currently visible.
 - Scanner input should continue to be monitored when the main window is minimized to the tray.
+- If a background scan requires an operator dialog, such as selecting an activation bin or entering a missing game price, SimpleLotto must restore and foreground the main window before showing that dialog. Configured-game sales that require no operator input should remain background-capable without restoring the window.
 - Scanner routing must respect the current workflow state: global normal sale/activation, focused add-bundle capture, focused inventory receiving, focused closing scan, setup/import, or correction.
 - Scan events should be captured with timestamp, active user, current close interval/shift reference, raw barcode, parsed meaning, page/workflow state, and result.
 - Scanner monitoring should not depend on keyboard focus inside a specific text field.

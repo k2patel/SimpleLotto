@@ -975,7 +975,10 @@ public sealed class LocalStore
     private static void ClaimSaleTickets(SqliteConnection conn, SqliteTransaction tx, StoredSaleLine sale)
     {
         if (sale.Quantity <= 0)
-            return;
+            throw new InvalidOperationException("A recorded sale must have a positive ticket quantity.");
+
+        if (sale.AmountCents <= 0)
+            throw new InvalidOperationException("A recorded sale must have a positive amount.");
 
         if (string.IsNullOrWhiteSpace(sale.BundleId))
             throw new InvalidOperationException("A sale must identify its bundle before it can be recorded.");
@@ -1027,8 +1030,10 @@ public sealed class LocalStore
 
     private static bool TryParseTicketSerial(string value, out int serial)
     {
-        var digits = new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out serial);
+        var ticket = (value ?? string.Empty).Trim();
+        return ticket.Length > 0 &&
+            ticket.All(char.IsAsciiDigit) &&
+            int.TryParse(ticket, NumberStyles.None, CultureInfo.InvariantCulture, out serial);
     }
 
     private static List<StoredGameRecord> QueryManualGames(SqliteConnection conn)

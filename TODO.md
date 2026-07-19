@@ -21,6 +21,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - If a placed bundle has no positive game price, scanning a ticket must require game price setup and must not record a `$0.00` sale.
    - Verify bundle-range completion: a `$20` game with a `$300` bundle and first ticket `000` permits `000`-`014`; scanning `014` records the final sale, keeps the bundle in the bin/Rdisplay as grey `Sold out`, and never creates ticket `015`. Verify `$50` games default to a `$900` bundle but their saved bundle price remains editable.
    - Verify ledger integrity: scan ticket `003` twice and confirm only the first scan records revenue; repeat in a closing backfill. Void a sale twice and confirm the second attempt is rejected, including after restarting the app.
+   - Verify configuration integrity: make SQLite game persistence fail and confirm activation/receiving does not continue; use missing, non-divisible, or malformed price/range configuration and confirm activation and closing are blocked without a one-ticket or `$0` sale.
    - Scanner input, rejected scans, ticket sales, bundle activations, opening placements, and bin placements appear in Audit.
 7. Verify license workflow:
    - Store > Registration shows the 64-character registration ID before first check.
@@ -77,6 +78,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Cancellation is audited with discarded counts.
 17. Verify scanner capture and routing:
    - A paired HID scanner records valid scans while the app is unfocused and while it is minimized to the tray; normal keyboard typing from a different device does not create a scan or audit row.
+   - With the paired scanner active and SimpleLotto hidden in the tray, scanning an unknown bundle restores and foregrounds the app before the activation-bin dialog; a missing-price activation also restores before its price dialog. Configured-game sales that need no dialog leave the app in the tray.
    - Reconnecting the paired scanner changes Settings and Dashboard status to listening; unplugging it shows a clear not-detected status.
    - An unpaired scanner completes a valid fast barcode both with Enter/Tab and after 400 ms idle; ordinary typing in text, password, search, rich-text, and number fields does not become a scan.
    - An incomplete unpaired or paired fragment is discarded after five seconds without affecting the separate configurable activation bin/bundle pairing window.
