@@ -325,6 +325,45 @@ public sealed class LocalStore
             throw new InvalidOperationException("Active bundle was not found.");
     }
 
+    public void UpdateImportState(StoredImportLine bundle)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE imports
+            SET ticket = $ticket,
+                is_sold_out = $is_sold_out
+            WHERE game_id = $game_id
+              AND bundle_id = $bundle_id
+              AND bin = $bin
+            """;
+        cmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+        cmd.Parameters.AddWithValue("$is_sold_out", bundle.IsSoldOut ? 1 : 0);
+        cmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+        cmd.Parameters.AddWithValue("$bin", bundle.Bin);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Active bundle was not found.");
+    }
+
+    public int? GetHighestClaimedTicketSerial(string gameId, string bundleId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT MAX(ticket_serial)
+            FROM sale_ticket_claims
+            WHERE game_id = $game_id
+              AND bundle_id = $bundle_id
+            """;
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        var result = cmd.ExecuteScalar();
+        return result is null or DBNull
+            ? null
+            : Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
+
     public CompleteClosingResult CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,
@@ -999,15 +1038,16 @@ public sealed class LocalStore
                     name TEXT NOT NULL,
                     source TEXT NOT NULL,
                     price_cents INTEGER NOT NULL DEFAULT 0,
-                    bundle_price_cents INTEGER NOT NULL DEFAULT 30000,
+                    bundle_price_cents INTEGER NOT NULL DEFAULT 0,
                     first_ticket_serial INTEGER NOT NULL DEFAULT 0,
                     image_uri TEXT NOT NULL,
                     image_status TEXT NOT NULL
                 )
                 """);
             EnsureColumn(conn, "manual_games", "price_cents", "INTEGER NOT NULL DEFAULT 0");
-            EnsureColumn(conn, "manual_games", "bundle_price_cents", "INTEGER NOT NULL DEFAULT 30000");
+            EnsureColumn(conn, "manual_games", "bundle_price_cents", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(conn, "manual_games", "first_ticket_serial", "INTEGER NOT NULL DEFAULT 0");
+            Exec(conn, "UPDATE manual_games SET bundle_price_cents = 0 WHERE price_cents <= 0 AND bundle_price_cents <> 0");
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS rdisplay_displays (
                     id INTEGER PRIMARY KEY,

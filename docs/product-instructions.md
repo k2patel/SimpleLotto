@@ -60,8 +60,10 @@ First-install workflow:
 
 1. Create required Manager password.
 2. Optionally create a Clerk user.
-3. Continue into the first login screen.
-4. Successful login enters the currently open financial close interval.
+3. Scan the initial bin and bundle/ticket placements.
+4. Before initial import can finish, enter and persist the ticket price and bundle price once for every distinct imported Game ID that is not already configured.
+5. Continue into the first login screen only after all imported Game IDs have valid saved pricing.
+6. Successful login enters the currently open financial close interval.
 
 ## Shift Model
 
@@ -144,20 +146,23 @@ Game price rules:
 - Each game type has a price per ticket.
 - Game ID, game name, game price, and related game metadata are stable once defined and should not change during normal operations. Game name may be established or corrected through explicit user edit or license-server sync rules.
 - New game types require the user to set a positive price before the game can be used operationally.
-- If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm the game price before that workflow can finalize.
-- Regular bundle activation follows the same missing-price rule as inventory receiving. If the scanned bundle's game ID is new or has no positive price, activation must pause and open a required price-entry dialog before assigning the bundle to the bin.
-- If the scanned bundle's game ID already has a saved positive price and display name, activation must not ask for price or name again; after the bin is selected/scanned, activation should continue.
-- The activation price dialog should show the game ID, bundle ID, selected/scanned bin, any fetched/manual game name, and any fetched/manual image when available.
-- The activation price dialog must allow the operator to enter or scan the price into the same game price field; do not add a separate price-scan text field.
-- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, game price, and game name; do not add separate barcode-focused text boxes for values that are already captured by the scanner workflow.
-- Entering a missing price during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without it.
-- Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether any scanned game IDs are new or still have no price.
-- If receiving includes any new/unpriced game IDs, the app must present a required price-entry dialog for each missing game before finalizing receiving.
-- The missing-price dialog should show the game ID, any fetched/manual game name, and any fetched/manual image when available.
+- If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm both the per-ticket game price and the total bundle price before that workflow can finalize.
+- Regular bundle activation follows the same missing-configuration rule as inventory receiving. If the scanned bundle's game ID is new or has no valid positive ticket price and bundle price, activation must pause and open a required game-setup dialog before assigning the bundle to the bin.
+- If the scanned bundle's game ID already has a saved valid ticket price and bundle price, activation must reuse them and must not ask for prices again; after the bin is selected/scanned, activation should continue. A missing display name may be corrected separately and must not cause valid saved prices to be requested again.
+- The activation game-setup dialog should show the game ID, bundle ID, selected/scanned bin, ticket-price field, bundle-price field, any fetched/manual game name, and any fetched/manual image when available.
+- The activation game-setup dialog must allow the operator to enter or scan the ticket price into the same game price field; do not add a separate price-scan text field.
+- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, ticket price, bundle price, and game name; do not add separate barcode-focused text boxes for values that are already captured by the scanner workflow.
+- Entering missing ticket and bundle prices during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without them.
+- Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether every scanned game ID has both a valid positive ticket price and a valid positive bundle price.
+- If receiving includes any new or incompletely configured game IDs, the app must present a required game-setup dialog for each missing game before finalizing receiving.
+- The receiving game-setup dialog should show the game ID, ticket-price field, bundle-price field, any fetched/manual game name, and any fetched/manual image when available.
 - The app may attempt a best-effort price lookup using the same state/game setup source used for names and images, but an auto-found price is only a suggestion. The user must confirm or correct the price before saving.
 - Price lookup failure must not block manual setup; the user must be able to enter the game price manually.
 - Auto-fetched game names and images should reuse the already-wired state setup mechanism from `../WindowsPOS`.
 - Auto-fetch failures must not block manual setup. The user must be able to enter or correct the lotto name and image manually.
+- Initial import may collect bin and bundle/ticket placement pairs before asking for prices. When the operator continues to login, the app must validate every distinct imported Game ID and present the same required ticket-price and bundle-price setup for each unconfigured Game ID.
+- Multiple initially imported bundles with the same Game ID share one saved game configuration. Initial import must prompt at most once for that Game ID and reuse the persisted prices for all of its bundles.
+- Cancelling a required initial-import game setup, entering invalid prices, or failing to persist the game/setup state must keep the initial import open and must not continue to login.
 
 Game image handling:
 
@@ -181,7 +186,7 @@ Bundle price rules:
 
 - Bundle price is configured based on the game price.
 - Ticket count per bundle is calculated as: `bundle price / game price`.
-- New game setup defaults to a `$300` bundle, except a `$50` game defaults to a `$900` bundle. These are editable defaults: the saved per-game bundle price is the authoritative value.
+- New game setup has no default bundle price. The operator must explicitly enter the actual bundle price, such as `$300` or `$500`, and the saved per-game bundle price is authoritative for every later bundle with that Game ID.
 - Bundle price must produce a whole ticket count. If it does not, the system must reject the value or require correction before saving.
 - Bundle price options must be editable in Inventory game setup.
 - Bundle price is used for ticket range calculation, sold-out detection, and closing accountability.
@@ -598,7 +603,7 @@ Scanner rules:
 - Focused/on-demand scan capture is used only inside explicit workflows that ask the user to scan, such as add bundle, inventory receiving, closing scan, setup/import, and correction dialogs.
 - Paired scanner input should be monitored regardless of which page is currently visible.
 - Scanner input should continue to be monitored when the main window is minimized to the tray.
-- If a background scan requires an operator dialog, such as selecting an activation bin or entering a missing game price, SimpleLotto must restore and foreground the main window before showing that dialog. Configured-game sales that require no operator input should remain background-capable without restoring the window.
+- If a background scan requires an operator dialog, such as selecting an activation bin or completing missing ticket/bundle price setup, SimpleLotto must restore and foreground the main window before showing that dialog. Configured-game sales that require no operator input should remain background-capable without restoring the window.
 - Scanner routing must respect the current workflow state: global normal sale/activation, focused add-bundle capture, focused inventory receiving, focused closing scan, setup/import, or correction.
 - Scan events should be captured with timestamp, active user, current close interval/shift reference, raw barcode, parsed meaning, page/workflow state, and result.
 - Scanner monitoring should not depend on keyboard focus inside a specific text field.

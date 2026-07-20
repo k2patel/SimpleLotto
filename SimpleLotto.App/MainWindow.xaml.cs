@@ -159,10 +159,6 @@ public sealed partial class MainWindow : Window
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
     private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
     private const int LicenseExpiryWarningDays = 7;
-    // WindowsPOS convention: $300 for ordinary games and $900 for $50 games.
-    // These are only defaults for a game record; its saved bundle price is authoritative.
-    private const long DefaultBundlePriceCents = 30_000;
-    private const long HighValueBundlePriceCents = 90_000;
     private const string EmailSendClosingSettingKey = "email_send_closing";
     private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
     private const string EmailIncludeInventorySettingKey = "email_include_inventory";
@@ -500,7 +496,8 @@ public sealed partial class MainWindow : Window
             _auditLogRows.Add(AuditLogRow.From(audit));
         ApplyAuditLogPage();
 
-        RetireOutOfRangeActiveBundles();
+        foreach (var game in _manualGameCatalog)
+            ReopenBundlesExtendedByGameSetup(game);
 
         BuildImportBins(clearImports: false);
 
@@ -513,7 +510,7 @@ public sealed partial class MainWindow : Window
             _ = RetryPendingClosingReportsAsync(state.PendingClosingReports);
     }
 
-    private void SaveSetupState()
+    private bool SaveSetupState()
     {
         try
         {
@@ -531,10 +528,12 @@ public sealed partial class MainWindow : Window
                 _clerkPasswordHash,
                 _managerActorId,
                 _clerkActorId));
+            return true;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Unable to save SQLite setup: {ex.Message}";
+            return false;
         }
     }
 
@@ -795,7 +794,7 @@ public sealed partial class MainWindow : Window
         return output;
     }
 
-    private void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
+    private async void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
     {
         switch (_startupStage)
         {
@@ -803,7 +802,7 @@ public sealed partial class MainWindow : Window
                 CompleteSetupStage();
                 break;
             case StartupStage.Import:
-                CompleteImportStage();
+                await CompleteImportStageAsync();
                 break;
             case StartupStage.Login:
                 CompleteLoginStage();
@@ -1157,7 +1156,13 @@ public sealed partial class MainWindow : Window
         _setupComplete = true;
         _initialImportComplete = false;
         BuildImportBins();
-        SaveSetupState();
+        if (!SaveSetupState())
+        {
+            _setupComplete = false;
+            StartupStatusText.Text = "First-install setup could not be saved. Resolve the SQLite error and try again.";
+            return;
+        }
+
         ShowImportStage();
     }
 
@@ -1262,7 +1267,7 @@ public sealed partial class MainWindow : Window
         _ = LoginPasswordBox.Focus(FocusState.Programmatic);
     }
 
-    private void CompleteImportStage()
+    private async Task CompleteImportStageAsync()
     {
         if (_hasImportFailure)
         {
@@ -1278,8 +1283,60 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var importedGameIds = _imports
+            .Where(line => string.Equals(line.Source, "initial_import", StringComparison.OrdinalIgnoreCase))
+            .Select(line => line.GameId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        foreach (var gameId in importedGameIds)
+        {
+            if (HasCompleteGameSetup(gameId))
+                continue;
+
+            var sample = _imports.First(line =>
+                string.Equals(line.Source, "initial_import", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(line.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+            var ticket = new ImportTicket(sample.GameId, sample.BundleId, sample.Ticket, sample.Ticket);
+            StartupStatusText.Text = $"Ticket price and bundle price are required for game {gameId} before initial import can finish.";
+            if (!await ShowActivationGameSetupDialogAsync(
+                    sample.Bin,
+                    ticket,
+                    setupSource: "Initial import") ||
+                !HasCompleteGameSetup(gameId))
+            {
+                StartupStatusText.Text = $"Initial import remains open. Enter and save the ticket price and bundle price for game {gameId}.";
+                TryRecordAudit(
+                    "import",
+                    "Initial import finalization paused",
+                    $"Game {gameId} still requires complete ticket and bundle price setup");
+                _ = SpeakAsync("Game setup required.");
+                return;
+            }
+        }
+
         _initialImportComplete = true;
-        SaveSetupState();
+        if (!SaveSetupState())
+        {
+            _initialImportComplete = false;
+            StartupStatusText.Text = "Initial import could not be finalized because setup was not saved. Try again.";
+            TryRecordAudit(
+                "import",
+                "Initial import finalization failed",
+                "SQLite setup state could not be persisted after game configuration");
+            return;
+        }
+
+        var importedBundles = _imports.Count(line =>
+            string.Equals(line.Source, "initial_import", StringComparison.OrdinalIgnoreCase));
+        var configuredGames = _imports
+            .Where(line => string.Equals(line.Source, "initial_import", StringComparison.OrdinalIgnoreCase))
+            .Select(line => line.GameId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        TryRecordAudit(
+            "import",
+            "Initial import finalized",
+            $"{importedBundles.ToString(CultureInfo.InvariantCulture)} bundles and {configuredGames.ToString(CultureInfo.InvariantCulture)} configured games");
         ShowLoginStage(allowBack: true);
     }
 
@@ -1500,21 +1557,21 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (GamePriceCents(activeBundle.GameId) <= 0)
+            if (!HasCompleteGameSetup(activeBundle.GameId))
             {
-                DashboardScannerStatusText.Text = $"Price required for game {activeBundle.GameId}.";
-                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
-                StatusText.Text = $"Enter a price before recording sales for game {activeBundle.GameId}.";
+                DashboardScannerStatusText.Text = $"Game setup required for game {activeBundle.GameId}.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | setup incomplete";
+                StatusText.Text = $"Enter the ticket price and bundle price before recording sales for game {activeBundle.GameId}.";
                 TryRecordAudit(
                     "sale",
                     "Sale blocked",
-                    $"Game {activeBundle.GameId}, bundle {activeBundle.BundleId}, bin {activeBundle.Bin}, scanned ticket {ticket.Ticket}, missing game price");
-                var priceSaved = await ShowActivationPriceDialogAsync(activeBundle.Bin, ticket);
-                if (!priceSaved || GamePriceCents(activeBundle.GameId) <= 0)
+                    $"Game {activeBundle.GameId}, bundle {activeBundle.BundleId}, bin {activeBundle.Bin}, scanned ticket {ticket.Ticket}, incomplete game setup");
+                var setupSaved = await ShowActivationGameSetupDialogAsync(activeBundle.Bin, ticket);
+                if (!setupSaved || !HasCompleteGameSetup(activeBundle.GameId))
                 {
-                    DashboardScannerStatusText.Text = $"Price required for game {activeBundle.GameId}. Sale not recorded.";
-                    StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} has no positive price.";
-                    _ = SpeakAsync("Price required.");
+                    DashboardScannerStatusText.Text = $"Game setup required for game {activeBundle.GameId}. Sale not recorded.";
+                    StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} needs a valid ticket price and bundle price.";
+                    _ = SpeakAsync("Game setup required.");
                     return;
                 }
             }
@@ -1534,14 +1591,14 @@ public sealed partial class MainWindow : Window
             var line = backfill.Sale;
             if (line.Amount <= 0)
             {
-                DashboardScannerStatusText.Text = $"Price required for game {activeBundle.GameId}. Sale not recorded.";
-                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
-                StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} calculated {line.AmountText}.";
+                DashboardScannerStatusText.Text = $"Game setup is invalid for game {activeBundle.GameId}. Sale not recorded.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | setup invalid";
+                StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} calculated {line.AmountText}. Verify its ticket and bundle prices.";
                 TryRecordAudit(
                     "sale",
                     "Sale blocked",
                     $"Game {activeBundle.GameId}, bundle {activeBundle.BundleId}, bin {activeBundle.Bin}, sold {line.Ticket}, quantity {line.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {line.AmountText}");
-                _ = SpeakAsync("Price required.");
+                _ = SpeakAsync("Game setup required.");
                 return;
             }
 
@@ -1804,20 +1861,20 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        if (GamePriceCents(ticket.GameId) <= 0)
+        if (!HasCompleteGameSetup(ticket.GameId))
         {
-            var priceSaved = await ShowActivationPriceDialogAsync(bin, ticket, scannedPriceCents);
-            if (!priceSaved)
+            var setupSaved = await ShowActivationGameSetupDialogAsync(bin, ticket, scannedPriceCents);
+            if (!setupSaved)
             {
                 if (updateDashboardStatus)
                 {
-                    DashboardScannerStatusText.Text = $"Price required for game {ticket.GameId}. Bundle not activated.";
-                    DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | price missing";
+                    DashboardScannerStatusText.Text = $"Game setup required for game {ticket.GameId}. Bundle not activated.";
+                    DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | setup incomplete";
                     ClearDashboardPendingScanPair();
                 }
 
-                StatusText.Text = $"Enter a price before activating game {ticket.GameId}.";
-                _ = SpeakAsync("Price required.");
+                StatusText.Text = $"Enter the ticket price and bundle price before activating game {ticket.GameId}.";
+                _ = SpeakAsync("Game setup required.");
                 return false;
             }
         }
@@ -1928,20 +1985,19 @@ public sealed partial class MainWindow : Window
         _dashboardPendingTicketAtUtc = null;
     }
 
-    private async Task<bool> ShowActivationPriceDialogAsync(
+    private async Task<bool> ShowActivationGameSetupDialogAsync(
         string bin,
         ImportTicket ticket,
-        long? scannedPriceCents = null)
+        long? scannedPriceCents = null,
+        string setupSource = "Activation")
     {
         var existingGame = FindKnownGame(ticket.GameId);
-        if (existingGame is { PriceCents: > 0 } &&
-            !string.IsNullOrWhiteSpace(existingGame.Name) &&
-            !string.Equals(existingGame.Name, "Name not set", StringComparison.OrdinalIgnoreCase))
+        if (HasCompleteGameSetup(ticket.GameId))
         {
             return true;
         }
 
-        RestoreForScannerWorkflowDialog("game price setup");
+        RestoreForScannerWorkflowDialog("game setup");
 
         existingGame ??= _gameCatalog.FirstOrDefault(g =>
             string.Equals(g.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase));
@@ -1962,9 +2018,20 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
+        var bundlePriceBox = new NumberBox
+        {
+            Header = "Bundle price ($)",
+            Value = existingGame is { PriceCents: > 0, BundlePriceCents: > 0 }
+                ? existingGame.BundlePriceCents / 100d
+                : double.NaN,
+            Minimum = 1,
+            SmallChange = 25,
+            LargeChange = 100,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
         var statusText = new TextBlock
         {
-            Text = "Enter the ticket price, or scan the price while the game price box is focused.",
+            Text = "Enter both the ticket price and bundle price. You may scan the ticket price while the game price box is focused.",
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
@@ -2005,12 +2072,13 @@ public sealed partial class MainWindow : Window
             content.Children.Add(image);
         content.Children.Add(nameBox);
         content.Children.Add(priceBox);
+        content.Children.Add(bundlePriceBox);
         content.Children.Add(statusText);
 
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Game price required",
+            Title = "Game setup required",
             Content = content,
             PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
@@ -2019,9 +2087,7 @@ public sealed partial class MainWindow : Window
         dialog.PrimaryButtonClick += (_, args) =>
         {
             var priceCents = PriceCentsFromNumberBox(priceBox);
-            var bundlePriceCents = existingGame?.BundlePriceCents > 0
-                ? existingGame.BundlePriceCents
-                : DefaultBundlePriceFor(priceCents);
+            var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
             if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
@@ -2035,7 +2101,7 @@ public sealed partial class MainWindow : Window
         {
             if (scan.Kind != ScanKind.Price)
             {
-                statusText.Text = "Scan a price label, or enter the game price.";
+                statusText.Text = "Scan a price label, or enter the ticket price.";
                 TryRecordAudit("scanner", "Scan rejected", $"Expected price command: {scan.Raw}");
                 _ = SpeakAsync("Scan again.");
                 return true;
@@ -2062,9 +2128,7 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        var bundlePriceCents = existingGame?.BundlePriceCents > 0
-            ? existingGame.BundlePriceCents
-            : DefaultBundlePriceFor(priceCents);
+        var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
             StatusText.Text = $"Game {ticket.GameId} was not saved: {configurationError}";
@@ -2080,7 +2144,7 @@ public sealed partial class MainWindow : Window
             priceCents,
             bundlePriceCents,
             existingGame?.FirstTicketSerial is 1 ? 1 : 0,
-            "Activation",
+            setupSource,
             existingGame?.ImageUri ?? "ms-appx:///Assets/SimpleLottoLogo64.png",
             existingGame?.ImageStatus ?? "Image not uploaded");
 
@@ -2218,7 +2282,7 @@ public sealed partial class MainWindow : Window
         if (_imports.Count == 0)
             ImportInstructionText.Text = $"{_configuredBinCount} bins are ready. Click a bin to hear the scan prompt, or scan BIN and ticket barcodes in either order.";
         else
-            ImportInstructionText.Text = $"{_imports.Count} import{(_imports.Count == 1 ? string.Empty : "s")} recorded. Continue when all physical bins are imported.";
+            ImportInstructionText.Text = $"{_imports.Count} import{(_imports.Count == 1 ? string.Empty : "s")} recorded. Continue when all physical bins are imported; any new Game ID pricing will be required before login.";
     }
 
     private IEnumerable<string> SplitImportScanInput(string raw)
@@ -3010,13 +3074,15 @@ public sealed partial class MainWindow : Window
         else
             _manualGameCatalog.Add(game);
 
+        ReopenBundlesExtendedByGameSetup(game);
+
         RefreshGameCatalog();
         SelectGame(game.GameId);
         SyncRdisplayTiles();
         TryRecordAudit(
             "inventory",
             "Game setup saved",
-            $"Game {game.GameId}, name {game.Name}, price {MoneyText(game.PriceCents)}, source {game.Source}, image status {game.ImageStatus}");
+            $"Game {game.GameId}, name {game.Name}, ticket price {MoneyText(game.PriceCents)}, bundle price {MoneyText(game.BundlePriceCents)}, first ticket {(game.FirstTicketSerial == 1 ? "001" : "000")}, source {game.Source}, image status {game.ImageStatus}");
         return true;
     }
 
@@ -4702,18 +4768,18 @@ public sealed partial class MainWindow : Window
                              .Select(row => row.GameId)
                              .Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    if (GamePriceCents(gameId) > 0)
+                    if (HasCompleteGameSetup(gameId))
                         continue;
 
                     var sample = stagedRows.First(row =>
                         string.Equals(row.GameId, gameId, StringComparison.OrdinalIgnoreCase));
-                    if (!await ShowReceivingPriceDialogAsync(sample))
+                    if (!await ShowReceivingGameSetupDialogAsync(sample))
                     {
-                        statusText.Text = $"Price is required for game {gameId}. Receiving remains open.";
+                        statusText.Text = $"Ticket price and bundle price are required for game {gameId}. Receiving remains open.";
                         TryRecordAudit(
                             "inventory",
                             "Receiving finalization paused",
-                            $"Game {gameId} still requires price confirmation; no bundles committed");
+                            $"Game {gameId} still requires complete ticket and bundle price setup; no bundles committed");
                         _ = content.Focus(FocusState.Programmatic);
                         return;
                     }
@@ -4852,7 +4918,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<bool> ShowReceivingPriceDialogAsync(ReceivingScanRow bundle)
+    private async Task<bool> ShowReceivingGameSetupDialogAsync(ReceivingScanRow bundle)
     {
         var existingGame = FindKnownGame(bundle.GameId);
         var nameBox = new TextBox
@@ -4870,9 +4936,20 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
+        var bundlePriceBox = new NumberBox
+        {
+            Header = "Bundle price ($)",
+            Value = existingGame is { PriceCents: > 0, BundlePriceCents: > 0 }
+                ? existingGame.BundlePriceCents / 100d
+                : double.NaN,
+            Minimum = 1,
+            SmallChange = 25,
+            LargeChange = 100,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
         var statusText = new TextBlock
         {
-            Text = "Confirm a positive ticket price before receiving this game.",
+            Text = "Enter both the ticket price and bundle price before receiving this game.",
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
@@ -4889,7 +4966,7 @@ public sealed partial class MainWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Game price required",
+            Title = "Game setup required",
             Content = new StackPanel
             {
                 Spacing = 12,
@@ -4902,6 +4979,7 @@ public sealed partial class MainWindow : Window
                     },
                     nameBox,
                     priceBox,
+                    bundlePriceBox,
                     statusText
                 }
             },
@@ -4912,9 +4990,7 @@ public sealed partial class MainWindow : Window
         dialog.PrimaryButtonClick += (_, args) =>
         {
             var priceCents = PriceCentsFromNumberBox(priceBox);
-            var bundlePriceCents = existingGame?.BundlePriceCents > 0
-                ? existingGame.BundlePriceCents
-                : DefaultBundlePriceFor(priceCents);
+            var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
             if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
@@ -4928,7 +5004,7 @@ public sealed partial class MainWindow : Window
         {
             if (scan.Kind != ScanKind.Price)
             {
-                statusText.Text = "Scan a price label, or enter the game price.";
+                statusText.Text = "Scan a price label, or enter the ticket price.";
                 TryRecordAudit("scanner", "Receiving price scan rejected", $"Expected price command: {scan.Raw}");
                 _ = SpeakAsync("Scan again.");
                 return true;
@@ -4952,9 +5028,7 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        var bundlePriceCents = existingGame?.BundlePriceCents > 0
-            ? existingGame.BundlePriceCents
-            : DefaultBundlePriceFor(priceCents);
+        var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
             StatusText.Text = $"Game {bundle.GameId} was not saved: {configurationError}";
@@ -6794,19 +6868,10 @@ public sealed partial class MainWindow : Window
         var bundlePriceBox = new NumberBox
         {
             Header = "Bundle price ($)",
-            Value = DefaultBundlePriceCents / 100d,
             Minimum = 1,
             SmallChange = 5,
             LargeChange = 25,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
-        };
-        priceBox.ValueChanged += (_, _) =>
-        {
-            if (bundlePriceBox.Value == DefaultBundlePriceCents / 100d &&
-                PriceCentsFromNumberBox(priceBox) == 5_000)
-            {
-                bundlePriceBox.Value = HighValueBundlePriceCents / 100d;
-            }
         };
         var firstTicketBox = new ComboBox
         {
@@ -7786,8 +7851,12 @@ public sealed partial class MainWindow : Window
         return game?.PriceCents ?? 0;
     }
 
-    private static long DefaultBundlePriceFor(long ticketPriceCents) =>
-        ticketPriceCents == 5_000 ? HighValueBundlePriceCents : DefaultBundlePriceCents;
+    private bool HasCompleteGameSetup(string gameId)
+    {
+        var game = FindKnownGame(gameId);
+        return game is not null &&
+            TryValidateGameTicketConfiguration(game.PriceCents, game.BundlePriceCents, out _);
+    }
 
     private static bool TryValidateGameTicketConfiguration(long ticketPriceCents, long bundlePriceCents, out string error)
     {
@@ -7846,41 +7915,47 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private void RetireOutOfRangeActiveBundles()
+    private void ReopenBundlesExtendedByGameSetup(GameCatalogRecord game)
     {
-        foreach (var bundle in _imports.ToList())
+        if (!TryGetBundleTicketRange(game.GameId, out _, out var lastTicket, out _))
+            return;
+
+        foreach (var bundle in _imports.Where(bundle =>
+                     bundle.IsSoldOut &&
+                     string.Equals(bundle.GameId, game.GameId, StringComparison.OrdinalIgnoreCase)).ToList())
         {
-            if (bundle.IsSoldOut ||
-                !TryGetBundleTicketRange(bundle.GameId, out _, out var lastTicket, out _) ||
-                !TryParseTicketSerial(bundle.Ticket, out var currentTicket) ||
-                currentTicket <= lastTicket)
-            {
+            if (!TryParseTicketSerial(bundle.Ticket, out var displayedTicket) || displayedTicket >= lastTicket)
                 continue;
-            }
 
             try
             {
-                var normalized = bundle with
+                var highestClaimedTicket = _store.GetHighestClaimedTicketSerial(bundle.GameId, bundle.BundleId);
+                var nextTicket = Math.Max(displayedTicket, highestClaimedTicket ?? displayedTicket) + 1;
+                if (nextTicket > lastTicket)
+                    continue;
+
+                var reopened = bundle with
                 {
-                    Ticket = FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket)),
-                    IsSoldOut = true
+                    Ticket = FormatTicketSerial(nextTicket, TicketSerialWidth(bundle.Ticket)),
+                    IsSoldOut = false
                 };
-                _store.MarkImportSoldOut(new StoredImportLine(
-                    normalized.GameId,
-                    normalized.BundleId,
-                    normalized.Ticket,
-                    normalized.Bin,
-                    normalized.Source,
-                    true));
-                ReplaceImportLine(normalized);
+                _store.UpdateImportState(new StoredImportLine(
+                    reopened.GameId,
+                    reopened.BundleId,
+                    reopened.Ticket,
+                    reopened.Bin,
+                    reopened.Source,
+                    false));
+                ReplaceImportLine(reopened);
                 TryRecordAudit(
                     "inventory",
-                    "Completed bundle normalized",
-                    $"Game {bundle.GameId}, bundle {bundle.BundleId}, bin {bundle.Bin}, invalid next ticket {bundle.Ticket} normalized to sold out at {normalized.Ticket}");
+                    "Bundle reopened after game setup",
+                    $"Game {bundle.GameId}, bundle {bundle.BundleId}, bin {bundle.Bin}, previous sold-out ticket {bundle.Ticket}, corrected next ticket {reopened.Ticket}, configured last ticket {FormatTicketSerial(lastTicket, TicketSerialWidth(bundle.Ticket))}");
             }
             catch (Exception ex)
             {
-                AppLog.Error($"Unable to normalize completed bundle {bundle.GameId}/{bundle.BundleId}.", ex);
+                AppLog.Error($"Unable to reopen bundle {bundle.GameId}/{bundle.BundleId} after game setup changed.", ex);
+                StatusText.Text = $"Game setup saved, but bundle {bundle.BundleId} could not be reopened: {ex.Message}";
             }
         }
     }
@@ -8080,7 +8155,7 @@ public sealed partial class MainWindow : Window
                 gameId,
                 "Name not set",
                 0,
-                DefaultBundlePriceCents,
+                0,
                 0,
                 "Initial import",
                 "ms-appx:///Assets/SimpleLottoLogo64.png",
