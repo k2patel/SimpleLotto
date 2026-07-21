@@ -98,6 +98,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
 17. Verify scanner capture and routing:
    - A paired HID scanner records valid scans while the app is unfocused and while it is minimized to the tray; normal keyboard typing from a different device does not create a scan or audit row.
    - With the paired scanner active and SimpleLotto hidden in the tray, scanning an unknown bundle restores and foregrounds the app before the activation-bin dialog; a missing-price activation also restores before its price dialog. Configured-game sales that need no dialog leave the app in the tray.
+   - With SimpleLotto maximized, scan an unknown bundle and open its bin and missing-price dialogs. Confirm the window remains maximized. Repeat from a normal visible window and confirm its size/position remain unchanged; minimized and tray-hidden windows may be restored/shown for the required dialog.
    - Reconnecting the paired scanner changes Settings and Dashboard status to listening; unplugging it shows a clear not-detected status.
    - Paired and unpaired keyboard-class scanners preserve the complete digit sequence regardless of inter-character timing and dispatch exactly once on Enter, matching the known-good `main` behavior. No inter-character or idle timer splits, emits, or discards barcode input.
    - With a paired scanner, Closing exclusively receives each complete Enter-terminated scan from the paired Raw Input path before global classification; dashboard sale, activation, import, and other routes do not process it. When paired capture is unavailable, Closing uses focused WinUI `KeyDown` as fallback. Confirm the displayed scan exactly matches the scanner output and each physical scan is processed once.
@@ -107,6 +108,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - With stored current available ticket `008`, scan `005` during Closing. Confirm it is classified as a reverse correction for `005-007`, with `005` becoming the available ticket only when the auditable correction is committed; it must not be labeled as an outside-range price issue.
    - Resize the app while Receiving and Closing scan overlays are open. Confirm the header and all footer actions remain visible/clickable, only the scan list scrolls, and narrow layouts stack buttons without horizontal or vertical clipping.
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
+   - During normal activation and inside the activation-bin dialog, scan both `BIN-005` and a physical bare numeric bin label `005`. Confirm both route as bin 5; arbitrary text containing a numeric suffix must remain rejected.
    - Receiving and Closing reject bin and price commands with `Ticket only.` Receiving finalizes through `Update Inventory`; Closing retains `Close Scanning`.
    - A price label can populate the activation and receiving game-price field while normal manual price entry remains possible.
 18. Verify header metrics:

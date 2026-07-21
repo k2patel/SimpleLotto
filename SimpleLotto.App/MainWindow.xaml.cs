@@ -211,6 +211,13 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    private const int ShowWindowShow = 5;
     private const int ShowWindowRestore = 9;
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -898,6 +905,14 @@ public sealed partial class MainWindow : Window
 
         if (BinCommandBarcode.Match(trimmed) is { Success: true } binMatch &&
             int.TryParse(binMatch.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber))
+        {
+            scan = new ClassifiedScan(ScanKind.Bin, trimmed, BinNumber: binNumber);
+            return true;
+        }
+
+        if (trimmed.Length is >= 1 and <= 4 &&
+            trimmed.All(char.IsDigit) &&
+            int.TryParse(trimmed, NumberStyles.None, CultureInfo.InvariantCulture, out binNumber))
         {
             scan = new ClassifiedScan(ScanKind.Bin, trimmed, BinNumber: binNumber);
             return true;
@@ -2624,18 +2639,22 @@ public sealed partial class MainWindow : Window
 
     private void RestoreFromTray()
     {
-        ShowWindow(_hwnd, 5);
+        ShowWindow(_hwnd, ShowWindowShow);
         SetForegroundWindow(_hwnd);
         StatusText.Text = "SimpleLotto restored.";
     }
 
     private void RestoreForScannerWorkflowDialog(string workflow)
     {
-        ShowWindow(_hwnd, ShowWindowRestore);
+        if (IsIconic(_hwnd))
+            ShowWindow(_hwnd, ShowWindowRestore);
+        else if (!IsWindowVisible(_hwnd))
+            ShowWindow(_hwnd, ShowWindowShow);
+
         var foregrounded = SetForegroundWindow(_hwnd);
         AppLog.Info(foregrounded
-            ? $"Restored SimpleLotto for scanner workflow: {workflow}."
-            : $"Restored SimpleLotto for scanner workflow but Windows did not grant foreground focus: {workflow}.");
+            ? $"Foregrounded SimpleLotto for scanner workflow without changing its visible window state: {workflow}."
+            : $"Prepared SimpleLotto for scanner workflow but Windows did not grant foreground focus: {workflow}.");
     }
 
     private async void RequestExitFromTray()
