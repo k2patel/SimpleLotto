@@ -147,3 +147,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
 2. Rdisplay expiry/grace banner is not implemented:
    - Current display payload only sends `license_status`.
    - Rdisplay client/renderer must be extended with banner text, expiry/grace fields, and daily opacity changes before transparent display banners can work.
+3. Add multiple paired Raw Input scanners with isolated per-device buffers:
+   - Replace the single saved scanner identity and device handle with a collection of paired scanner records.
+   - Maintain one input buffer per Raw Input device handle. A key or Enter event from one scanner must never append to, complete, or clear another scanner's buffer.
+   - Emit each completed scan with a stable application scanner ID and its current device identity so routing and audit records can identify the source scanner.
+   - When Closing, Receiving, or another dedicated scan workflow is open, that workflow must exclusively receive completed scans from every permitted paired scanner; normal sales, activation, import, and other routes must not process them.
+   - Outside a dedicated workflow, route completed scans through the normal sale/activation path without combining simultaneous scanner input.
+   - Support reconnecting paired devices and explicitly handle identical VID/PID scanners with no serial number. VID/PID alone is insufficient to distinguish them, so pairing must bind and display the Windows device path/instance and provide a re-identification workflow if that identity changes.
+   - Keep focused unpaired keyboard capture as a single-scanner fallback only. Do not claim device isolation or safe concurrent-scanner support without Raw Input pairing.
