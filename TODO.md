@@ -118,6 +118,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Void one sale and confirm the negative correction references the original sale ID, a second void is rejected, and the original physical ticket claims remain attached to the original sale.
    - Attempt direct update/delete of a sale, ticket claim, activation event, closing-history row, and closed interval and confirm SQLite rejects it.
    - Seed duplicate historical ticket claims, malformed ranges, missing Bundle IDs, summary mismatches, and ambiguous legacy voids. Confirm no financial rows are deleted or rewritten, unresolved data is quarantined in `legacy_unresolved`, structured conflicts are stored, and matching Audit entries are visible after login.
+20. Verify manual bundle movement from Bins:
+   - Selecting a bin alone does not show `Move Bundle`; selecting one bundle card in Bin Details reveals and enables it.
+   - `Move Bundle` shows the selected Game ID/Bundle ID, accepts only a whole configured destination bin, rejects the current bin, and provides `OK` and `Cancel`.
+   - Cancelling changes nothing. Confirming changes only the active placement bin while preserving current ticket, sold-out state, sales, activation history, and close-interval history.
+   - After a successful move, Bins, Inventory, Closing, Rdisplay, and Audit show the destination bin and the old-to-new movement.
 
 ## Missing Follow-Up Work
 

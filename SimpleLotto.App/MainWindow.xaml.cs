@@ -4383,6 +4383,7 @@ public sealed partial class MainWindow : Window
         CloseShiftButton.IsEnabled = available;
         StartClosingScanButton.IsEnabled = available;
         AddBundleToBinButton.IsEnabled = available && _selectedBinNumber is not null;
+        MoveSelectedBundleButton.IsEnabled = available && BinBundlesListView.SelectedItem is BundleDetailLine;
         _rdisplay.UpdateLicenseStatus(available ? status.Status : "expired");
     }
 
@@ -4766,6 +4767,132 @@ public sealed partial class MainWindow : Window
         ShowBinDetail(card);
     }
 
+    private void BinBundlesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var hasSelection = BinBundlesListView.SelectedItem is BundleDetailLine;
+        MoveSelectedBundleButton.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
+        MoveSelectedBundleButton.IsEnabled = hasSelection && IsLicenseAvailableForOperation();
+    }
+
+    private async void MoveSelectedBundleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureLicenseAllowsOperation("moving bundles"))
+            return;
+
+        if (BinBundlesListView.SelectedItem is not BundleDetailLine selected)
+        {
+            StatusText.Text = "Select a bundle in Bin Details before moving it.";
+            return;
+        }
+
+        var bundleIndex = -1;
+        for (var index = 0; index < _imports.Count; index++)
+        {
+            var candidate = _imports[index];
+            if (string.Equals(candidate.GameId, selected.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.BundleId, selected.BundleId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.Bin, selected.Bin, StringComparison.OrdinalIgnoreCase))
+            {
+                bundleIndex = index;
+                break;
+            }
+        }
+
+        if (bundleIndex < 0)
+        {
+            StatusText.Text = "The selected bundle is no longer assigned to this bin. Refresh and try again.";
+            return;
+        }
+
+        var newBinBox = new NumberBox
+        {
+            Header = "New bin number",
+            Minimum = 1,
+            Maximum = _configuredBinCount,
+            SmallChange = 1,
+            LargeChange = 10,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
+        var validationText = new TextBlock
+        {
+            Text = $"Move game {selected.GameId}, bundle {selected.BundleId}, from bin {selected.Bin}.",
+            TextWrapping = TextWrapping.Wrap
+        };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Move Bundle",
+            Content = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    validationText,
+                    newBinBox
+                }
+            },
+            PrimaryButtonText = "OK",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        var selectedNewBin = 0;
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            var value = newBinBox.Value;
+            if (double.IsNaN(value) ||
+                value < 1 ||
+                value > _configuredBinCount ||
+                value != Math.Truncate(value))
+            {
+                args.Cancel = true;
+                validationText.Text = $"Enter a whole bin number from 1 to {_configuredBinCount.ToString(CultureInfo.CurrentCulture)}.";
+                return;
+            }
+
+            selectedNewBin = (int)value;
+            if (string.Equals(
+                    selectedNewBin.ToString(CultureInfo.InvariantCulture),
+                    selected.Bin,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                args.Cancel = true;
+                validationText.Text = $"Bundle {selected.BundleId} is already in bin {selected.Bin}. Enter a different bin.";
+            }
+        };
+
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            _ = newBinBox.Focus(FocusState.Programmatic);
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                return;
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
+
+        var oldBin = selected.Bin;
+        var newBin = selectedNewBin.ToString(CultureInfo.InvariantCulture);
+        try
+        {
+            _store.MoveImportBundle(selected.GameId, selected.BundleId, oldBin, newBin);
+            _imports[bundleIndex] = _imports[bundleIndex] with { Bin = newBin };
+            TryRecordAudit(
+                "inventory",
+                "Bundle moved",
+                $"Game {selected.GameId}, bundle {selected.BundleId}, bin {oldBin} to bin {newBin}, ticket {selected.Ticket}, sold out {selected.IsSoldOut}");
+            RefreshOperationalPages();
+            ShowBinDetail(selectedNewBin);
+            StatusText.Text = $"Moved bundle {selected.BundleId} from bin {oldBin} to bin {newBin}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to move bundle: {ex.Message}";
+        }
+    }
+
     private async void AddBundleToBinButton_Click(object sender, RoutedEventArgs e)
     {
         if (!EnsureLicenseAllowsOperation("adding bundles"))
@@ -4843,6 +4970,9 @@ public sealed partial class MainWindow : Window
 
     private void ShowBinDetail(int binNumber)
     {
+        BinBundlesListView.SelectedItem = null;
+        MoveSelectedBundleButton.Visibility = Visibility.Collapsed;
+        MoveSelectedBundleButton.IsEnabled = false;
         _selectedBinBundles.Clear();
         var lines = _imports
             .Where(i => string.Equals(i.Bin, binNumber.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))

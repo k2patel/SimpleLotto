@@ -624,7 +624,8 @@
                                                   MaxHeight="340"
                                                   Padding="0"
                                                   VerticalAlignment="Top"
-                                                  SelectionMode="None">
+                                                  SelectionMode="Single"
+                                                  SelectionChanged="BinBundlesListView_SelectionChanged">
                                             <ListView.ItemContainerStyle>
                                                 <Style TargetType="ListViewItem">
                                                     <Setter Property="Padding" Value="0"/>
@@ -687,12 +688,20 @@
                                                 </DataTemplate>
                                             </ListView.ItemTemplate>
                                         </ListView>
-                                        <Button x:Name="AddBundleToBinButton"
-                                                Grid.Row="2"
-                                                Content="Add Bundle"
-                                                HorizontalAlignment="Stretch"
-                                                IsEnabled="False"
-                                                Click="AddBundleToBinButton_Click"/>
+                                        <StackPanel Grid.Row="2"
+                                                    Spacing="8">
+                                            <Button x:Name="MoveSelectedBundleButton"
+                                                    Content="Move Bundle"
+                                                    HorizontalAlignment="Stretch"
+                                                    Visibility="Collapsed"
+                                                    IsEnabled="False"
+                                                    Click="MoveSelectedBundleButton_Click"/>
+                                            <Button x:Name="AddBundleToBinButton"
+                                                    Content="Add Bundle"
+                                                    HorizontalAlignment="Stretch"
+                                                    IsEnabled="False"
+                                                    Click="AddBundleToBinButton_Click"/>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
                             </Grid>

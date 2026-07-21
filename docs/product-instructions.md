@@ -334,6 +334,10 @@ Regular bundle activation:
 - When a clerk activates a bundle, the bin can be identified either by scanning the bin barcode or by entering/selecting the bin number on screen.
 - Scanning the bin and entering/selecting the bin number are equivalent activation inputs; either one satisfies the bin-identification requirement.
 - The Bins detail panel should provide an Add Bundle action for the selected bin so the clerk can activate a scanned bundle directly into that bin without scanning the bin barcode again.
+- Selecting a specific bundle card in Bin Details must reveal a `Move Bundle` action. Do not show the move action when no bundle is selected.
+- `Move Bundle` must open a focused dialog that identifies the selected bundle, requires a whole destination bin number within the configured bin range, and offers `OK` and `Cancel`.
+- A successful manual move changes only the bundle's current bin assignment. Preserve its Game ID, Bundle ID, current ticket, sold-out state, sales, activation history, and close-interval history; refresh Bins, Inventory, Closing, and Rdisplay and audit the old and new bins.
+- Entering the current bin as the destination must keep the dialog open and require a different bin.
 - If the clerk scans or enters a bin number that does not exist, block activation and ask the clerk to scan the bin again or enter the correct bin number.
 - For an invalid bin, the app should give audio feedback such as `Wrong bin`.
 - Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.

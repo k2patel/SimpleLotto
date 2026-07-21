@@ -375,6 +375,30 @@ public sealed class LocalStore
             throw new InvalidOperationException("Active bundle was not found.");
     }
 
+    public void MoveImportBundle(string gameId, string bundleId, string currentBin, string newBin)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE imports
+            SET bin = $new_bin
+            WHERE id = (
+                SELECT id
+                FROM imports
+                WHERE game_id = $game_id
+                  AND bundle_id = $bundle_id
+                  AND bin = $current_bin
+                ORDER BY id DESC
+                LIMIT 1)
+            """;
+        cmd.Parameters.AddWithValue("$new_bin", newBin);
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        cmd.Parameters.AddWithValue("$current_bin", currentBin);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Active bundle was not found in its current bin.");
+    }
+
     public int? GetHighestClaimedTicketSerial(string gameId, string bundleId)
     {
         using var conn = Open();
