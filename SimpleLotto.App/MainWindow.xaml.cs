@@ -165,7 +165,7 @@ public sealed partial class MainWindow : Window
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
     private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
     private const string GlobalFirstTicketSerialSettingKey = "global_first_ticket_serial";
-    private const long StandardBundlePriceCents = 50_000;
+    private const long StandardBundlePriceCents = 30_000;
     private const long FiftyDollarBundlePriceCents = 90_000;
     private const int LicenseExpiryWarningDays = 7;
     private const string EmailSendClosingSettingKey = "email_send_closing";
@@ -806,7 +806,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void LoginUserComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        ConfigureLoginPasswordEntry();
+        ConfigureLoginPinEntry();
 
     private void StartupBackButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1139,7 +1139,12 @@ public sealed partial class MainWindow : Window
         var user = userItem.Content?.ToString() ?? string.Empty;
         var isManager = string.Equals(user, "Manager", StringComparison.Ordinal);
         var expectedHash = isManager ? _managerPasswordHash : _clerkPasswordHash;
-        var credential = LoginPasswordBox.Password;
+        var pin = LoginPasswordBox.Password;
+        if (!PinHashService.IsValidPin(pin))
+        {
+            StartupStatusText.Text = "Enter exactly four digits for the selected user's PIN.";
+            return;
+        }
 
         _loginInProgress = true;
         StartupPrimaryButton.IsEnabled = false;
@@ -1147,44 +1152,11 @@ public sealed partial class MainWindow : Window
         LoginPasswordBox.IsEnabled = false;
         try
         {
-            var verification = await Task.Run(() => PinHashService.Verify(credential, expectedHash));
-            if (!verification.IsValid)
+            var isValidPin = await Task.Run(() => PinHashService.Verify(pin, expectedHash));
+            if (!isValidPin)
             {
-                StartupStatusText.Text = "Password does not match the selected user.";
+                StartupStatusText.Text = "PIN does not match the selected user.";
                 return;
-            }
-
-            string? upgradedHash = null;
-            if (verification.IsLegacy)
-            {
-                var selectedPin = await PromptForFourDigitPinAsync(user, credential);
-                if (selectedPin is null)
-                {
-                    StartupStatusText.Text = "Create a new four-digit PIN to finish this required login update.";
-                    return;
-                }
-
-                upgradedHash = await Task.Run(() => PinHashService.CreateHash(selectedPin));
-            }
-            else if (verification.NeedsUpgrade)
-            {
-                upgradedHash = await Task.Run(() => PinHashService.CreateHash(credential));
-            }
-
-            if (upgradedHash is not null)
-            {
-                if (!TrySaveUpgradedPinHash(isManager, upgradedHash))
-                {
-                    StartupStatusText.Text = "The login was verified, but its required PIN update could not be saved. Try again.";
-                    return;
-                }
-
-                TryRecordAudit(
-                    "auth",
-                    verification.IsLegacy ? "Required PIN created" : "PIN security updated",
-                    verification.IsLegacy
-                        ? $"{user} replaced a legacy login credential with a four-digit PIN"
-                        : $"{user} login hash work factor upgraded");
             }
 
             _activeUserRole = isManager ? UserRole.Manager : UserRole.Clerk;
@@ -1214,110 +1186,6 @@ public sealed partial class MainWindow : Window
             if (_startupStage == StartupStage.Login && StartupOverlay.Visibility == Visibility.Visible)
                 _ = LoginPasswordBox.Focus(FocusState.Programmatic);
         }
-    }
-
-    private bool TrySaveUpgradedPinHash(bool isManager, string upgradedHash)
-    {
-        var settingKey = isManager ? "manager_password_hash" : "clerk_password_hash";
-        try
-        {
-            _store.SaveSetting(settingKey, upgradedHash);
-            if (isManager)
-                _managerPasswordHash = upgradedHash;
-            else
-                _clerkPasswordHash = upgradedHash;
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("PIN hash upgrade could not be saved.", ex);
-            return false;
-        }
-    }
-
-    private async Task<string?> PromptForFourDigitPinAsync(string user, string currentCredential)
-    {
-        var pinBox = new PasswordBox
-        {
-            Header = "New 4-digit PIN",
-            MaxLength = 4
-        };
-        var confirmationBox = new PasswordBox
-        {
-            Header = "Confirm PIN",
-            MaxLength = 4
-        };
-        var validationText = new TextBlock
-        {
-            TextWrapping = TextWrapping.Wrap,
-            Visibility = Visibility.Collapsed
-        };
-        AutomationProperties.SetAutomationId(pinBox, "LegacyMigrationNewPin");
-        AutomationProperties.SetAutomationId(confirmationBox, "LegacyMigrationConfirmPin");
-        AutomationProperties.SetAutomationId(validationText, "LegacyMigrationValidation");
-
-        var content = new StackPanel { Spacing = 12 };
-        content.Children.Add(new TextBlock
-        {
-            Text = $"{user}'s existing login was verified. Create a different four-digit PIN before continuing.",
-            TextWrapping = TextWrapping.Wrap
-        });
-        content.Children.Add(validationText);
-        content.Children.Add(pinBox);
-        content.Children.Add(confirmationBox);
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = Content.XamlRoot,
-            Title = "Password update required",
-            Content = content,
-            PrimaryButtonText = "Save PIN",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary
-        };
-
-        string? selectedPin = null;
-        dialog.PrimaryButtonClick += (_, args) =>
-        {
-            var newPin = pinBox.Password;
-            if (!PinHashService.IsValidPin(newPin))
-            {
-                args.Cancel = true;
-                validationText.Text = "The new PIN must contain exactly four digits.";
-                validationText.Visibility = Visibility.Visible;
-                pinBox.Password = string.Empty;
-                confirmationBox.Password = string.Empty;
-                pinBox.Focus(FocusState.Programmatic);
-                return;
-            }
-
-            if (!string.Equals(newPin, confirmationBox.Password, StringComparison.Ordinal))
-            {
-                args.Cancel = true;
-                validationText.Text = "The PIN and confirmation do not match.";
-                validationText.Visibility = Visibility.Visible;
-                confirmationBox.Password = string.Empty;
-                confirmationBox.Focus(FocusState.Programmatic);
-                return;
-            }
-
-            if (string.Equals(newPin, currentCredential, StringComparison.Ordinal))
-            {
-                args.Cancel = true;
-                validationText.Text = "Choose a PIN that differs from the current password or PIN.";
-                validationText.Visibility = Visibility.Visible;
-                pinBox.Password = string.Empty;
-                confirmationBox.Password = string.Empty;
-                pinBox.Focus(FocusState.Programmatic);
-                return;
-            }
-
-            selectedPin = newPin;
-        };
-
-        var result = await ShowResponsiveDialogAsync(dialog);
-        return result == ContentDialogResult.Primary ? selectedPin : null;
     }
 
     private void LogoutButton_Click(object sender, RoutedEventArgs e)
@@ -1379,18 +1247,18 @@ public sealed partial class MainWindow : Window
         }
         LoginUserComboBox.SelectedIndex = 0;
         LoginPasswordBox.Password = string.Empty;
-        ConfigureLoginPasswordEntry();
+        ConfigureLoginPinEntry();
         _ = LoginPasswordBox.Focus(FocusState.Programmatic);
     }
 
-    private void ConfigureLoginPasswordEntry()
+    private void ConfigureLoginPinEntry()
     {
         if (LoginPasswordBox is null || StartupStatusText is null)
             return;
 
         LoginPasswordBox.Password = string.Empty;
-        LoginPasswordBox.Header = "Password";
-        StartupStatusText.Text = "Enter the password for the selected user.";
+        LoginPasswordBox.Header = "4-digit PIN";
+        StartupStatusText.Text = "Enter the four-digit PIN for the selected user.";
     }
 
     private async Task CompleteImportStageAsync()
@@ -2144,7 +2012,7 @@ public sealed partial class MainWindow : Window
         };
         var statusText = new TextBlock
         {
-            Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $500.",
+            Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $300.",
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
@@ -4220,8 +4088,8 @@ public sealed partial class MainWindow : Window
         OwnPinStatusText.Text = "Verifying your current PIN...";
         try
         {
-            var verification = await Task.Run(() => PinHashService.Verify(currentPin, expectedHash));
-            if (!verification.IsValid)
+            var isValidPin = await Task.Run(() => PinHashService.Verify(currentPin, expectedHash));
+            if (!isValidPin)
             {
                 OwnPinStatusText.Text = "Your current PIN is incorrect.";
                 return;
@@ -5367,7 +5235,7 @@ public sealed partial class MainWindow : Window
         };
         var statusText = new TextBlock
         {
-            Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $500.",
+            Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $300.",
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
@@ -6348,7 +6216,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetAutomationId(priceBox, "ClosingGameInformationPrice");
 
-        var derivedRangeText = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var bundleTotalText = new TextBlock { TextWrapping = TextWrapping.Wrap };
         var validationText = new TextBlock { TextWrapping = TextWrapping.Wrap };
         bool TryReadPrice(out long priceCents, out string error)
         {
@@ -6367,28 +6235,25 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
-        void RefreshDerivedRange()
+        void RefreshBundleTotal()
         {
             if (!TryReadPrice(out var priceCents, out var priceError))
             {
-                derivedRangeText.Text = $"Derived range unavailable: {priceError}";
+                bundleTotalText.Text = $"Bundle total unavailable: {priceError}";
                 return;
             }
 
             var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
             if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var error))
             {
-                derivedRangeText.Text = $"Derived range unavailable: {error}";
+                bundleTotalText.Text = $"Bundle total unavailable: {error}";
                 return;
             }
 
-            var ticketCount = bundlePriceCents / priceCents;
-            var lastTicket = checked(_globalFirstTicketSerial + (int)ticketCount - 1);
-            var width = Math.Max(TicketSerialWidth(activeBundle.Ticket), TicketSerialWidth(ticket.Ticket));
-            derivedRangeText.Text = $"Derived bundle total: {MoneyText(bundlePriceCents)} | Derived ticket range: {FormatTicketSerial(_globalFirstTicketSerial, width)}-{FormatTicketSerial(lastTicket, width)}";
+            bundleTotalText.Text = $"Bundle total: {MoneyText(bundlePriceCents)}";
         }
-        priceBox.ValueChanged += (_, _) => RefreshDerivedRange();
-        RefreshDerivedRange();
+        priceBox.ValueChanged += (_, _) => RefreshBundleTotal();
+        RefreshBundleTotal();
 
         var content = new StackPanel
         {
@@ -6397,23 +6262,18 @@ public sealed partial class MainWindow : Window
             {
                 new TextBlock
                 {
-                    Text = "Verify the saved game information against the physical ticket before continuing closing.",
-                    TextWrapping = TextWrapping.Wrap
-                },
-                new TextBlock
-                {
-                    Text = $"Game name: {GameDisplayName(ticket.GameId)}\nGame ID: {ticket.GameId}\nBundle ID: {ticket.BundleId}\nStored current available ticket: {activeBundle.Ticket}\nScanned ticket: {ticket.Ticket}",
+                    Text = $"Game name: {GameDisplayName(ticket.GameId)}\nGame ID: {ticket.GameId}\nBin number: {activeBundle.Bin}\nCurrent ticket: {activeBundle.Ticket}",
                     TextWrapping = TextWrapping.Wrap
                 },
                 priceBox,
-                derivedRangeText,
+                bundleTotalText,
                 validationText
             }
         };
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Verify Game Information",
+            Title = "Verify Game Price",
             Content = content,
             PrimaryButtonText = "Save and Recheck",
             CloseButtonText = "Cancel",
@@ -7575,7 +7435,7 @@ public sealed partial class MainWindow : Window
                 priceBox,
                 new TextBlock
                 {
-                    Text = "Bundle total is automatic: $900 for a $50 ticket; otherwise $500. Ticket numbering uses the global setting.",
+                    Text = "Bundle total is automatic: $900 for a $50 ticket; otherwise $300. Ticket numbering uses the global setting.",
                     TextWrapping = TextWrapping.Wrap
                 }
             }

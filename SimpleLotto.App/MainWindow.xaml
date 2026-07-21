@@ -1139,7 +1139,7 @@
                                                            SmallChange="1"
                                                            LargeChange="5"
                                                            SpinButtonPlacementMode="Compact"/>
-                                                <TextBlock Text="Bundle total is automatic: $900 for a $50 ticket; otherwise $500."
+                                                <TextBlock Text="Bundle total is automatic: $900 for a $50 ticket; otherwise $300."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
                                                 <ComboBox x:Name="GlobalFirstTicketEditComboBox"
@@ -2650,7 +2650,7 @@
                                 Visibility="Collapsed">
                         <TextBlock Text="Login"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="Enter the password for the selected user."
+                        <TextBlock Text="Enter the four-digit PIN for the selected user."
                                    Style="{StaticResource SlCaptionTextStyle}"/>
 
                         <ComboBox x:Name="LoginUserComboBox"
@@ -2660,8 +2660,9 @@
                                   SelectionChanged="LoginUserComboBox_SelectionChanged"/>
 
                         <PasswordBox x:Name="LoginPasswordBox"
-                                     Header="Password"
-                                     AutomationProperties.AutomationId="LoginPassword"
+                                     Header="4-digit PIN"
+                                     AutomationProperties.AutomationId="LoginPin"
+                                     MaxLength="4"
                                      KeyDown="LoginPasswordBox_KeyDown"/>
                     </StackPanel>
 

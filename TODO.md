@@ -26,7 +26,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - After setup completes, regular scanning of any ticket serial in a new bundle, then bin, then missing game price/name records activation gap-fill from the global first ticket through the scanned ticket; for example with global start `000`, `001` records `000-001`, quantity `2`, next `002`, and `008` records `000-008`, quantity `9`, next `009`.
    - With active current ticket `002`, scanning `003` records sale range `002-003`, quantity `2`, amount `2 * game price`, and next available ticket `004`.
    - If a placed bundle has no valid positive game price or valid automatically derived bundle total, scanning a ticket must require complete game setup and must not record a `$0.00` sale.
-   - Verify automatic bundle totals and completion: a `$50` ticket derives a `$900` bundle; every other positive ticket price derives `$500`. No initial-import, activation, receiving, Add Game, or Game Prices workflow asks for bundle price. Derived totals must still produce a whole ticket count or configuration remains blocked.
+   - Verify automatic bundle totals and completion: a `$50` ticket derives a `$900` bundle; every other positive ticket price derives `$300`. No initial-import, activation, receiving, Add Game, or Game Prices workflow asks for bundle price. Derived totals must still produce a whole ticket count or configuration remains blocked.
    - Verify the one global first-ticket setting controls every game and bundle, persists across restart, and is not shown as a per-game or per-bundle field.
    - Upgrade a database without the global setting: unanimous/majority legacy `001` games initialize the global control to `001`; no configured games initialize it to `000`.
    - Verify premature sold-out recovery for every denomination after automatic bundle-total or global-first-ticket correction: affected grey bins reopen at the first unclaimed ticket (using the ticket-claim ledger after restart), while genuinely complete bundles at the calculated last ticket remain sold out. Later bundles with the same configured Game ID reuse its saved ticket price without prompting again.
@@ -74,20 +74,17 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - The Visual C++ runtime installer is skipped when a compatible x64 runtime is already installed.
    - An unsigned build skips the certificate-import PowerShell step.
    - The existing firewall rule is refreshed without accumulating duplicate rules.
-14. Verify login keyboard behavior:
-   - The PIN migration release keeps the existing Password field, unrestricted input, focus behavior, and Enter-key login action.
-   - Opening the login screen focuses the Password field, and pressing Enter performs the same validation and login action as clicking Login.
+14. Verify PIN login keyboard behavior:
+   - Login presents a four-digit PIN field, limits input to four characters, and rejects anything other than exactly four ASCII digits.
+   - Opening the login screen focuses the PIN field, and pressing Enter performs the same validation and login action as clicking Login.
    - New setup limits Manager and optional Clerk PIN fields to four characters and accepts only values containing exactly four digits; letters and shorter values are rejected.
-   - Invalid passwords or PINs remain on the login screen and show the existing validation message without a retry delay or account lockout.
-   - Every correct legacy SHA-256 credential, including an existing four-digit value, requires creation and confirmation of a different four-digit PIN before login completes.
-   - The required PIN dialog captures valid values before closing. Invalid, mismatched, or unchanged values keep the same dialog open with a specific inline message and never reopen in a loop.
-   - Successful required migration atomically replaces only that user's stored hash with the versioned PBKDF2 format; cancelling the dialog or failing the write does not log in.
-   - A malformed hash or failed hash-upgrade write does not log in or replace the in-memory credential.
+   - Invalid PINs remain on the login screen and show the existing validation message without a retry delay or account lockout.
+   - Existing versioned PBKDF2 PINs continue to log in without a forced change, migration, or login-time hash rewrite.
+   - Legacy SHA-256 and malformed hashes do not log in or modify the stored credential.
    - Settings > Users/PIN lets Manager and Clerk change their own PIN. Each flow rejects an incorrect current PIN, a repeated current PIN, non-four-digit values, and mismatched confirmation.
    - Clerk sees only PIN and Scanner and Display settings. The Clerk reset card and all other Manager-only settings remain hidden.
    - Manager can create or reset the Clerk login using a name and matching four-digit PIN without knowing the previous Clerk PIN.
    - Successful own-PIN changes and Manager-authorized Clerk resets take effect on the next login, preserve the current close interval, and write audit entries without recording a PIN or hash.
-   - The later strict PIN-enforcement release is separate: only after the migration version is deployed should login itself reject or prevent non-four-digit input.
 15. Verify manually published branch upgrades:
    - A manual Windows workflow run without `publish_update_manifest` builds/uploads the installer but does not replace the public latest manifest.
    - A manual run with `publish_update_manifest` enabled uploads the manifest and the installed app's Check for Upgrade action discovers that exact build.
@@ -106,7 +103,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - With a paired scanner, Closing exclusively receives each complete Enter-terminated scan from the paired Raw Input path before global classification; dashboard sale, activation, import, and other routes do not process it. When paired capture is unavailable, Closing uses focused WinUI `KeyDown` as fallback. Confirm the displayed scan exactly matches the scanner output and each physical scan is processed once.
    - Scan a ticket from a bin containing two active bundles during Closing. Confirm one Enter produces exactly one scan row with the raw printed barcode and no second inferred number, bundle, or outside-range error.
    - During Closing, scan a valid bin command between ticket scans. Confirm it remains an `Ignored bin scan` feedback row, does not block finalization, and does not increase the `total scanned` ticket count.
-   - Configure the wrong price so a closing ticket falls outside the derived range. Confirm `Resolve Closing Issues` opens `Verify Game Information` with game name/ID, Bundle ID, current and scanned tickets, price, bundle total, and derived range; saving a corrected price re-evaluates the same scan, while Cancel leaves Closing blocked.
+   - Configure the wrong price so a closing ticket does not fit the derived range. Confirm `Resolve Closing Issues` opens the KISS `Verify Game Price` dialog with only game name/ID, bin number, current ticket, editable ticket price, and automatic bundle total; saving re-evaluates the same scan internally, while Cancel leaves Closing blocked.
    - With stored current available ticket `008`, scan `005` during Closing. Confirm it is classified as a reverse correction for `005-007`, with `005` becoming the available ticket only when the auditable correction is committed; it must not be labeled as an outside-range price issue.
    - Resize the app while Receiving and Closing scan overlays are open. Confirm the header and all footer actions remain visible/clickable, only the scan list scrolls, and narrow layouts stack buttons without horizontal or vertical clipping.
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`

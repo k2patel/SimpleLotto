@@ -28,11 +28,8 @@ internal static class PinHashService
         return true;
     }
 
-    public static bool IsVersionedHash(string storedHash) =>
+    private static bool IsVersionedHash(string storedHash) =>
         storedHash.StartsWith($"{AlgorithmName}$", StringComparison.Ordinal);
-
-    public static bool IsLegacyHash(string storedHash) =>
-        !IsVersionedHash(storedHash) && storedHash.Contains(':');
 
     public static string CreateHash(string pin)
     {
@@ -66,17 +63,15 @@ internal static class PinHashService
         }
     }
 
-    public static PinVerificationResult Verify(string credential, string storedHash)
+    public static bool Verify(string pin, string storedHash)
     {
-        if (string.IsNullOrEmpty(storedHash))
-            return PinVerificationResult.Invalid;
+        if (!IsValidPin(pin) || string.IsNullOrEmpty(storedHash) || !IsVersionedHash(storedHash))
+            return false;
 
-        return IsVersionedHash(storedHash)
-            ? VerifyVersionedHash(credential, storedHash)
-            : VerifyLegacyHash(credential, storedHash);
+        return VerifyVersionedHash(pin, storedHash);
     }
 
-    private static PinVerificationResult VerifyVersionedHash(string pin, string storedHash)
+    private static bool VerifyVersionedHash(string pin, string storedHash)
     {
         var parts = storedHash.Split('$');
         if (parts.Length != 5 ||
@@ -86,7 +81,7 @@ internal static class PinHashService
             iterations <= 0 ||
             iterations > MaximumAcceptedIterationCount)
         {
-            return PinVerificationResult.Invalid;
+            return false;
         }
 
         try
@@ -96,7 +91,7 @@ internal static class PinHashService
             try
             {
                 if (salt.Length != SaltSize || expectedHash.Length != HashSize)
-                    return PinVerificationResult.Invalid;
+                    return false;
 
                 var pinBytes = Encoding.UTF8.GetBytes(pin);
                 try
@@ -109,10 +104,7 @@ internal static class PinHashService
                         HashSize);
                     try
                     {
-                        var isValid = CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
-                        return isValid
-                            ? new PinVerificationResult(true, iterations < IterationCount, false)
-                            : PinVerificationResult.Invalid;
+                        return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
                     }
                     finally
                     {
@@ -132,63 +124,7 @@ internal static class PinHashService
         }
         catch (FormatException)
         {
-            return PinVerificationResult.Invalid;
+            return false;
         }
     }
-
-    private static PinVerificationResult VerifyLegacyHash(string credential, string storedHash)
-    {
-        var parts = storedHash.Split(':', 2);
-        if (parts.Length != 2)
-            return PinVerificationResult.Invalid;
-
-        try
-        {
-            var salt = Convert.FromBase64String(parts[0]);
-            var expectedHash = Convert.FromBase64String(parts[1]);
-            try
-            {
-                if (salt.Length != SaltSize || expectedHash.Length != HashSize)
-                    return PinVerificationResult.Invalid;
-
-                var credentialBytes = Encoding.UTF8.GetBytes(credential);
-                var saltedCredential = new byte[salt.Length + credentialBytes.Length];
-                try
-                {
-                    Buffer.BlockCopy(salt, 0, saltedCredential, 0, salt.Length);
-                    Buffer.BlockCopy(credentialBytes, 0, saltedCredential, salt.Length, credentialBytes.Length);
-                    var actualHash = SHA256.HashData(saltedCredential);
-                    try
-                    {
-                        return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash)
-                            ? new PinVerificationResult(true, true, true)
-                            : PinVerificationResult.Invalid;
-                    }
-                    finally
-                    {
-                        CryptographicOperations.ZeroMemory(actualHash);
-                    }
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(credentialBytes);
-                    CryptographicOperations.ZeroMemory(saltedCredential);
-                }
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(salt);
-                CryptographicOperations.ZeroMemory(expectedHash);
-            }
-        }
-        catch (FormatException)
-        {
-            return PinVerificationResult.Invalid;
-        }
-    }
-}
-
-internal readonly record struct PinVerificationResult(bool IsValid, bool NeedsUpgrade, bool IsLegacy)
-{
-    public static PinVerificationResult Invalid { get; } = new(false, false, false);
 }

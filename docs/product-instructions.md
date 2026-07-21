@@ -43,13 +43,10 @@ Login expectations:
 
 - A login screen is always shown after setup is complete.
 - Any valid user can log in.
-- The Password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
-- During the PIN migration release, keep the existing Password field and unrestricted login input so every installed legacy password remains usable for its required one-time migration.
-- After any legacy password verifies successfully, do not enter the application yet. Require the user to create and confirm a different four-digit ASCII PIN, persist its versioned PBKDF2 hash, and only then complete login.
-- Validate and capture the new PIN before the required `ContentDialog` closes. Invalid, mismatched, or unchanged values must keep the same dialog open with inline feedback; do not close and recreate the dialog or read cleared password controls after closing.
+- The four-digit PIN field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
+- Login accepts exactly four ASCII digits. Text passwords and other input lengths are not accepted.
 - New setup credentials, user-initiated credential changes, and Manager-authorized Clerk resets must create exactly four-digit ASCII PINs.
-- Do not add password-composition rules beyond the four-digit PIN requirement, failed-login delays, or account lockouts.
-- Release a later strict PIN-enforcement version only after the migration release has given installed Manager and Clerk accounts the opportunity to convert. That later version may limit the login field itself to four digits.
+- Do not add credential-composition rules beyond the four-digit PIN requirement, failed-login delays, or account lockouts.
 - Logging in controls access only. It does not start, end, or otherwise define a financial shift/close interval.
 - SimpleLotto is a single-computer, single-active-user application.
 - Only one user is actively operating the application at a time.
@@ -190,7 +187,7 @@ Ticket barcode parsing:
 Bundle price rules:
 
 - Bundle total is derived automatically from the per-ticket game price. It is not entered for each game or bundle.
-- For now, a `$50` ticket price always derives a `$900` bundle total. Every other positive ticket price derives a `$500` bundle total.
+- For now, a `$50` ticket price always derives a `$900` bundle total. Every other positive ticket price derives a `$300` bundle total.
 - A future bundle-type creator may replace this hardcoded mapping, but do not expose per-game or per-bundle bundle-total entry in the current workflow.
 - Ticket count per bundle is calculated as: `automatic bundle total / ticket price`.
 - Bundle price must produce a whole ticket count. If it does not, the system must reject the value or require correction before saving.
@@ -486,7 +483,7 @@ Closing scan rules:
 - In reconciliation context, "game bundle" means Bundle ID.
 - Every reconciliation interaction must show at minimum: game name, Bundle ID, and game ID.
 - Reconciliation interactions should also show bundle ID, current/expected bin, scanned ticket/current ticket, price, and status when available.
-- When a closing scan falls outside the range derived from Game Information, open a bounded custom reconciliation dialog showing game name, Game ID, Bundle ID, configured ticket price, derived bundle total/range, stored current available ticket, and scanned ticket. With Manager access, allow the operator to correct the whole-dollar ticket price, save it to Game Information, recalculate the range, and re-evaluate the same scan. Cancelling, insufficient role, or an invalid price leaves Closing blocked.
+- When a closing scan does not fit the range derived from Game Information, keep reconciliation simple: open a bounded `Verify Game Price` dialog showing only game name, Game ID, bin number, current ticket, editable whole-dollar ticket price, and the read-only automatic bundle total. With Manager access, save the corrected ticket price to Game Information and re-evaluate the same scan internally. Do not expose the scanned barcode or derived range calculation in this operator dialog. Cancelling, insufficient role, or an invalid price leaves Closing blocked.
 - During closing reconciliation, dormant bundles in a bin that are not represented in the scanned physical state should be considered sold as appropriate for close-interval accountability.
 - The sold-out fill created by closing must be distinguishable from ordinary scan sales in audit/reporting.
 - If a bundle reaches its automatically derived bundle total before closing, it is considered complete/sold out.
@@ -810,8 +807,8 @@ Reliability and recovery rules:
 Security rules:
 
 - Manager/Clerk PINs must be stored as versioned, salted PBKDF2-HMAC-SHA256 hashes, never plaintext. New hashes store their format version and work factor so they can be upgraded later.
-- Existing salted SHA-256 login hashes remain readable only for backward-compatible verification during the PIN migration release. After any successful legacy login, require a different four-digit PIN and replace only the selected account's stored hash with the current PBKDF2 format before completing login.
-- Do not silently reuse an existing four-digit legacy password as the new PIN. The required migration must collect and confirm a different PIN so the password change is explicit.
+- Login accepts only the released versioned PBKDF2 PIN-hash format. Do not retain legacy SHA-256 verification, forced PIN changes, or login-time hash upgrades.
+- Legacy text passwords and legacy hashes are no longer accepted. Existing versioned PBKDF2 PIN hashes remain unchanged and valid.
 - Keep the existing `manager_password_hash` and `clerk_password_hash` setting keys for database compatibility even though the product terminology is PIN.
 - Email SMTP passwords and display tokens must be stored securely.
 - Scanner/display diagnostics visible to Clerk must not expose secrets.
