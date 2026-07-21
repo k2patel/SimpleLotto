@@ -16,11 +16,12 @@ The latest fixes need verification in the intended Windows WinUI environment bec
 4. Verify Closing top metric cards switch between history context and live scan context correctly.
 5. Generate `closing_report.pdf` and confirm it no longer lists report files.
 6. Verify ticket backfill:
-   - With current ticket `003`, scanning `007` records sale range `003-007`.
+   - During a regular sale, with current ticket `003`, scanning sold ticket `007` records sale range `003-007`.
    - Quantity is `5`.
    - Amount is `5 * game price`.
    - Next available ticket advances to `008`.
    - Regular sale rows keep `normal_sale`; closing-generated rows keep `closing_gap_fill_sold`.
+   - During Closing, with stored current available ticket `003`, scanning current available ticket `007` records only `003-006` as `closing_gap_fill_sold`, quantity `4`, stores current `007`, and leaves the bundle active. Scanning `003` when stored current is `003` records no sale and keeps current `003`.
    - During first-time setup initial scan, scanning ticket `001` records opening inventory only, keeps current ticket `001`, and does not create a sale or gap-fill.
    - Initial import collects bin + bundle/ticket placements first, then `Continue to Login` requires only the ticket price once per distinct unconfigured Game ID. Repeated bundles for the same Game ID reuse that saved price; bundle total is derived automatically; cancel, invalid input, game-save failure, or setup-save failure keeps initial import open.
    - After setup completes, regular scanning of any ticket serial in a new bundle, then bin, then missing game price/name records activation gap-fill from the global first ticket through the scanned ticket; for example with global start `000`, `001` records `000-001`, quantity `2`, next `002`, and `008` records `000-008`, quantity `9`, next `009`.
@@ -106,6 +107,8 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - During Closing, scan a valid bin command between ticket scans. Confirm it remains an `Ignored bin scan` feedback row, does not block finalization, and does not increase the `total scanned` ticket count.
    - Configure the wrong price so a closing ticket does not fit the derived range. Confirm `Resolve Closing Issues` opens the KISS `Verify Game Price` dialog with only game name/ID, bin number, current ticket, editable ticket price, and automatic bundle total; saving re-evaluates the same scan internally, while Cancel leaves Closing blocked.
    - With stored current available ticket `008`, scan `005` during Closing. Confirm it stages one automatic bundle-scoped reversal for `005-007`, produces no correction prompt or audio, and does not label the scan as an outside-range price issue. Finalize Closing and confirm current-interval claims/ledger activity for `005-007` are removed, any unaffected prefix remains accurate, `005` becomes available, and one immutable Audit row identifies Game ID + Bundle ID + the full reversed range. Cancelling Closing must leave the ledger, claims, and available ticket unchanged; a reversal that reaches a closed interval must fail without partial changes.
+   - Repeat the backward Closing case with zero claims across `005-007`. Confirm Closing stores `005` as current and audits an inventory-cursor correction without creating, deleting, or changing a sale. A partially claimed range must still block finalization as inconsistent.
+   - Mark a bundle sold out, then scan a physically available ticket from it during Closing. Confirm Closing reopens it and reconciles from the scanned ticket through the configured final ticket using the same open-claim/no-claim rules.
    - Resize the app while Receiving and Closing scan overlays are open. Confirm the header and all footer actions remain visible/clickable, only the scan list scrolls, and narrow layouts stack buttons without horizontal or vertical clipping.
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
    - During normal activation and inside the activation-bin dialog, scan both `BIN-005` and a physical bare numeric bin label `005`. Confirm both route as bin 5; arbitrary text containing a numeric suffix must remain rejected.

@@ -419,6 +419,27 @@ public sealed class LocalStore
             : Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
+    public int CountTicketClaims(string gameId, string bundleId, int firstTicketSerial, int lastTicketSerial)
+    {
+        if (firstTicketSerial < 0 || lastTicketSerial < firstTicketSerial)
+            throw new ArgumentOutOfRangeException(nameof(firstTicketSerial));
+
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*)
+            FROM sale_ticket_claims
+            WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+              AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+              AND ticket_serial BETWEEN $first_ticket AND $last_ticket
+            """;
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        cmd.Parameters.AddWithValue("$first_ticket", firstTicketSerial);
+        cmd.Parameters.AddWithValue("$last_ticket", lastTicketSerial);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
     public CompleteClosingResult CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,
@@ -719,6 +740,29 @@ public sealed class LocalStore
             }
 
             var expectedClaimCount = correction.LastTicketSerial - correction.FirstTicketSerial + 1;
+            if (correction.InventoryOnly)
+            {
+                if (selectedClaims.Count != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Inventory correction for game {correction.GameId}, bundle {correction.BundleId} found recorded ticket claims. Closing stopped without changing the ledger.");
+                }
+
+                var inventoryWidth = Math.Max(
+                    SaleTicketSerialWidth(correction.StoredCurrentTicket),
+                    SaleTicketSerialWidth(correction.ScannedTicket));
+                var inventoryAudit = new StoredAuditRecord(
+                    closing.ClosedAtUtc,
+                    "closing",
+                    "Closing inventory cursor corrected",
+                    closing.ClosedByActorName,
+                    $"Game {correction.GameId}, bundle {correction.BundleId}, bin {correction.Bin}, unclaimed range {FormatSaleTicketRange(correction.FirstTicketSerial, correction.LastTicketSerial, inventoryWidth)}, stored current {correction.StoredCurrentTicket}, scanned available {correction.ScannedTicket}; no ledger sale or ticket claim was removed",
+                    closing.ClosedByActorId);
+                InsertAudit(conn, tx, inventoryAudit);
+                auditRecords.Add(inventoryAudit);
+                continue;
+            }
+
             if (selectedClaims.Count != expectedClaimCount)
             {
                 throw new InvalidOperationException(
@@ -3221,7 +3265,8 @@ public sealed record StoredClosingReverseCorrection(
     int FirstTicketSerial,
     int LastTicketSerial,
     string StoredCurrentTicket,
-    string ScannedTicket);
+    string ScannedTicket,
+    bool InventoryOnly = false);
 
 public sealed record StoredClosingReportJob(
     long Id,

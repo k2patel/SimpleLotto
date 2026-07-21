@@ -89,6 +89,7 @@ public sealed partial class MainWindow : Window
     private static readonly HttpClient ImageHttpClient = CreateImageHttpClient();
     private const string DefaultGameImageUri = "ms-appx:///Assets/SimpleLottoLogo64.png";
     private const string ClosingGameInformationIssueTitle = "Verify game information";
+    private const string ClosingLedgerMismatchIssueTitle = "Ticket ledger mismatch";
     private readonly IntPtr _hwnd;
     private readonly SubclassProc _subclassProc;
     private IntPtr _trayIconHandle;
@@ -3335,7 +3336,7 @@ public sealed partial class MainWindow : Window
         {
             var bin = i.ToString(CultureInfo.InvariantCulture);
             grouped.TryGetValue(bin, out var bundles);
-            var current = bundles?.FirstOrDefault();
+            var current = CurrentBundleForBin(bundles);
             var gameSales = current is not null && salesByGame.TryGetValue(current.GameId, out var count)
                 ? count
                 : 0;
@@ -4009,7 +4010,7 @@ public sealed partial class MainWindow : Window
             .Select(g => new
             {
                 Bin = int.TryParse(g.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0,
-                Current = g.First()
+                Current = CurrentBundleForBin(g)!
             })
             .Where(x => x.Bin > 0)
             .Select(x => new
@@ -4046,7 +4047,7 @@ public sealed partial class MainWindow : Window
         {
             var bin = i.ToString(CultureInfo.InvariantCulture);
             grouped.TryGetValue(bin, out var bundles);
-            var current = bundles?.FirstOrDefault();
+            var current = CurrentBundleForBin(bundles);
             if (current is not null && !current.IsSoldOut)
                 activeBinCount++;
 
@@ -4900,14 +4901,23 @@ public sealed partial class MainWindow : Window
         var lines = _imports
             .Where(i => string.Equals(i.Bin, binNumber.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
             .ToList();
+        var current = CurrentBundleForBin(lines);
 
         _selectedBinNumber = binNumber;
         AddBundleToBinButton.IsEnabled = IsLicenseAvailableForOperation();
         var bundleLabel = lines.Count == 1 ? "bundle" : "bundles";
         BinDetailText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} Details ({lines.Count.ToString(CultureInfo.CurrentCulture)} {bundleLabel})";
 
-        for (var i = 0; i < lines.Count; i++)
-            _selectedBinBundles.Add(BundleDetailLine.From(lines[i], GameNameForDetail(lines[i].GameId), i == 0));
+        foreach (var line in lines)
+            _selectedBinBundles.Add(BundleDetailLine.From(line, GameNameForDetail(line.GameId), ReferenceEquals(line, current)));
+    }
+
+    private static ImportLine? CurrentBundleForBin(IEnumerable<ImportLine>? bundles)
+    {
+        if (bundles is null)
+            return null;
+
+        return bundles.FirstOrDefault(bundle => !bundle.IsSoldOut) ?? bundles.FirstOrDefault();
     }
 
     private void BinDetailSplitter_DragDelta(object sender, DragDeltaEventArgs e)
@@ -5831,18 +5841,9 @@ public sealed partial class MainWindow : Window
         var ticket = TryParseImportTicket(raw);
         if (ticket is not null)
         {
-            var activeBundle = FindActiveBundle(ticket);
-            if (activeBundle is null && FindPlacedBundle(ticket)?.IsSoldOut == true)
-            {
-                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Sold out"));
-                TryRecordAudit("closing", "Closing scan rejected", $"Sold-out bundle scanned: game {ticket.GameId}, bundle {ticket.BundleId}");
-                statusText.Text = "Scan error: this bundle is already sold out.";
-                _ = SpeakAsync("Bundle sold out.");
-                return;
-            }
-
-            if (activeBundle is null ||
-                !int.TryParse(activeBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
+            var closingBundle = FindPlacedBundle(ticket);
+            if (closingBundle is null ||
+                !int.TryParse(closingBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
                 !IsConfiguredBin(binNumber))
             {
                 if (!_closingUnmatchedTickets.Any(t =>
@@ -5864,65 +5865,27 @@ public sealed partial class MainWindow : Window
             // Every rescan is authoritative evidence against the persisted pre-closing state.
             // Temporary reconciliation from an earlier scan of this bundle must be replaced,
             // not used as the starting ticket for another range.
-            var closingBundle = activeBundle;
-            if (closingBundle.IsSoldOut)
+            var reconciliation = default(ClosingTicketReconciliation);
+            var reconciliationError = string.Empty;
+            if (!TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var lastTicket, out var rangeError) ||
+                !TryParseTicketSerial(ticket.Ticket, out var scannedSerial) ||
+                !TryParseTicketSerial(closingBundle.Ticket, out var storedCurrentSerial) ||
+                !ClosingTicketReconciliation.TryCreate(
+                    storedCurrentSerial,
+                    scannedSerial,
+                    firstTicket,
+                    lastTicket,
+                    closingBundle.IsSoldOut,
+                    out reconciliation,
+                    out reconciliationError))
             {
-                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Sold out"));
-                TryRecordAudit("closing", "Closing scan rejected", $"Sold-out bundle scanned: game {ticket.GameId}, bundle {ticket.BundleId}");
-                statusText.Text = "Scan error: this bundle is already sold out.";
-                _ = SpeakAsync("Bundle sold out.");
-                return;
-            }
-
-            if (!TryBuildTicketBackfillSale(
-                    DateTime.Now,
-                    closingBundle,
-                    ticket.Ticket,
-                    "closing_gap_fill_sold",
-                    out var backfill,
-                    out var rangeError))
-            {
-                if (TryParseTicketSerial(ticket.Ticket, out var scannedSerial) &&
-                    TryParseTicketSerial(closingBundle.Ticket, out var currentSerial) &&
-                    TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var lastTicket, out _) &&
-                    scannedSerial >= firstTicket &&
-                    scannedSerial <= lastTicket &&
-                    currentSerial >= firstTicket &&
-                    currentSerial <= lastTicket &&
-                    scannedSerial < currentSerial)
+                if (string.IsNullOrWhiteSpace(rangeError))
                 {
-                    var width = Math.Max(TicketSerialWidth(ticket.Ticket), TicketSerialWidth(closingBundle.Ticket));
-                    var reverseFirst = FormatTicketSerial(scannedSerial, width);
-                    var reverseLast = FormatTicketSerial(currentSerial - 1, width);
-                    ClearClosingReconciliationForBundle(ticket);
-                    ClearClosingScanErrorsForBundle(ticket);
-                    _closingScannedBins.Add(binNumber);
-                    _closingScannedBundleKeys.Add(BundleKey(activeBundle));
-                    UpsertClosingReverseCorrection(new ClosingReverseCorrection(
-                        ticket.GameId,
-                        ticket.BundleId,
-                        activeBundle.Bin,
-                        scannedSerial,
-                        currentSerial - 1,
-                        closingBundle.Ticket,
-                        ticket.Ticket));
-                    ReplaceClosingCurrentPlacement(activeBundle with
-                    {
-                        Ticket = ticket.Ticket,
-                        IsSoldOut = false
-                    });
-                    _closingScanRows.Insert(0, new ClosingScanRow(
-                        $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
-                        $"Scanned; reverse {reverseFirst}-{reverseLast}")
-                    {
-                        Raw = raw
-                    });
-                    TryRecordAudit(
-                        "closing",
-                        "Closing reverse staged",
-                        $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {activeBundle.Bin}, range {reverseFirst}-{reverseLast}; stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}");
-                    statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Reverse {reverseFirst}-{reverseLast} will be applied when Closing finalizes.";
-                    return;
+                    rangeError = !TryParseTicketSerial(ticket.Ticket, out _)
+                        ? $"Scanned ticket {ticket.Ticket} is not a valid ticket serial."
+                        : !TryParseTicketSerial(closingBundle.Ticket, out _)
+                            ? $"Stored current ticket {closingBundle.Ticket} is not a valid ticket serial."
+                            : reconciliationError;
                 }
 
                 var guidance = $"{rangeError} Verify the game name, Game ID, Bundle ID, ticket price, derived ticket range, stored current ticket, and scanned ticket in Game Information.";
@@ -5934,18 +5897,105 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            _closingScannedBins.Add(binNumber);
-            _closingScannedBundleKeys.Add(BundleKey(activeBundle));
+            var width = Math.Max(TicketSerialWidth(ticket.Ticket), TicketSerialWidth(closingBundle.Ticket));
             ClearClosingReconciliationForBundle(ticket);
             ClearClosingScanErrorsForBundle(ticket);
-            UpsertClosingScanSale(BundleKey(activeBundle), backfill.Sale);
-            ReplaceClosingCurrentPlacement(activeBundle with
+            _closingScannedBins.Add(binNumber);
+            _closingScannedBundleKeys.Add(BundleKey(closingBundle));
+            ReplaceClosingCurrentPlacement(closingBundle with
             {
-                Ticket = backfill.IsBundleComplete ? ticket.Ticket : backfill.NextTicket,
-                IsSoldOut = backfill.IsBundleComplete
+                Ticket = ticket.Ticket,
+                IsSoldOut = false
             });
+
+            if (reconciliation.Kind == ClosingTicketReconciliationKind.BackwardCorrection)
+            {
+                var reverseFirst = FormatTicketSerial(reconciliation.FirstAffectedSerial, width);
+                var reverseLast = FormatTicketSerial(reconciliation.LastAffectedSerial, width);
+                var expectedClaims = reconciliation.Quantity;
+                var claimCount = _store.CountTicketClaims(
+                    ticket.GameId,
+                    ticket.BundleId,
+                    reconciliation.FirstAffectedSerial,
+                    reconciliation.LastAffectedSerial);
+                var inventoryOnly = claimCount == 0;
+                if (!inventoryOnly && claimCount != expectedClaims)
+                {
+                    var mismatchDetail = $"Game {ticket.GameId}, bundle {ticket.BundleId}, range {reverseFirst}-{reverseLast} has {claimCount.ToString(CultureInfo.CurrentCulture)} of {expectedClaims.ToString(CultureInfo.CurrentCulture)} expected ticket claims. Closing cannot guess which ledger activity is valid.";
+                    _closingScanRows.Insert(0, new ClosingScanRow(
+                        $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
+                        "Scanned; ledger mismatch")
+                    {
+                        Raw = raw
+                    });
+                    AddClosingScanIssue(raw, ClosingLedgerMismatchIssueTitle, mismatchDetail);
+                    TryRecordAudit("closing", "Closing scan ledger mismatch", mismatchDetail);
+                    statusText.Text = "Closing found a partially claimed correction range. No correction was staged.";
+                    return;
+                }
+
+                UpsertClosingReverseCorrection(new ClosingReverseCorrection(
+                    ticket.GameId,
+                    ticket.BundleId,
+                    closingBundle.Bin,
+                    reconciliation.FirstAffectedSerial,
+                    reconciliation.LastAffectedSerial,
+                    closingBundle.Ticket,
+                    ticket.Ticket,
+                    inventoryOnly));
+                _closingScanRows.Insert(0, new ClosingScanRow(
+                    $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
+                    inventoryOnly
+                        ? $"Scanned; correct current to {ticket.Ticket}"
+                        : $"Scanned; reverse {reverseFirst}-{reverseLast}")
+                {
+                    Raw = raw
+                });
+                TryRecordAudit(
+                    "closing",
+                    inventoryOnly ? "Closing inventory correction staged" : "Closing reverse staged",
+                    inventoryOnly
+                        ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}; range {reverseFirst}-{reverseLast} has no recorded claims"
+                        : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, range {reverseFirst}-{reverseLast}; stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}, claims {claimCount.ToString(CultureInfo.InvariantCulture)} of {expectedClaims.ToString(CultureInfo.InvariantCulture)}");
+                statusText.Text = inventoryOnly
+                    ? $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Current available ticket will be corrected to {ticket.Ticket}; no recorded sale needs reversal."
+                    : $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Reverse {reverseFirst}-{reverseLast} will be applied when Closing finalizes.";
+                return;
+            }
+
+            if (reconciliation.Kind == ClosingTicketReconciliationKind.Match)
+            {
+                _closingScanRows.Insert(0, new ClosingScanRow(
+                    $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
+                    "Scanned; current matches")
+                {
+                    Raw = raw
+                });
+                TryRecordAudit(
+                    "closing",
+                    "Closing scan matched",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, current available {ticket.Ticket}; no sale or reversal staged");
+                statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Current available ticket matches.";
+                return;
+            }
+
+            var soldQuantity = reconciliation.Quantity;
+            var soldFirst = FormatTicketSerial(reconciliation.FirstAffectedSerial, width);
+            var soldLast = FormatTicketSerial(reconciliation.LastAffectedSerial, width);
+            var soldText = soldQuantity == 1 ? soldFirst : $"{soldFirst}-{soldLast}";
+            var price = GamePriceCents(closingBundle.GameId) / 100m;
+            var sale = new SaleLine(
+                DateTime.Now,
+                closingBundle.GameId,
+                closingBundle.Bin,
+                soldText,
+                soldQuantity,
+                soldQuantity * price,
+                "closing_gap_fill_sold",
+                closingBundle.BundleId);
+            UpsertClosingScanSale(BundleKey(closingBundle), sale);
             _closingScanRows.Insert(0, new ClosingScanRow(
-                $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {backfill.Sale.Ticket}",
+                $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
                 "Scanned")
             {
                 Raw = raw
@@ -5953,12 +6003,8 @@ public sealed partial class MainWindow : Window
             TryRecordAudit(
                 "closing",
                 "Closing scan captured",
-                backfill.IsBundleComplete
-                    ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned final ticket {ticket.Ticket}, reconciled range {backfill.Sale.Ticket}, quantity {backfill.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {backfill.Sale.AmountText}; bundle completed"
-                    : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned ticket {ticket.Ticket}, reconciled range {backfill.Sale.Ticket}, quantity {backfill.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {backfill.Sale.AmountText}, next {backfill.NextTicket}");
-            statusText.Text = backfill.IsBundleComplete
-                ? $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Bundle is sold out."
-                : $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. {backfill.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(backfill.Sale.Quantity == 1 ? string.Empty : "s")} captured.";
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {binNumber.ToString(CultureInfo.InvariantCulture)}, scanned available {ticket.Ticket}, reconciled sold range {sale.Ticket}, quantity {sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {sale.AmountText}; current remains {ticket.Ticket}");
+            statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. {sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(sale.Quantity == 1 ? string.Empty : "s")} captured; {ticket.Ticket} remains available.";
             return;
         }
 
@@ -5987,7 +6033,9 @@ public sealed partial class MainWindow : Window
     private void ClearClosingScanErrorsForBundle(ImportTicket ticket)
     {
         foreach (var row in _closingScanRows
-                     .Where(row => row.CanDiscard && ClosingRowMatchesBundle(row, ticket))
+                     .Where(row =>
+                         (row.CanDiscard || string.Equals(row.Status, "Scanned; ledger mismatch", StringComparison.Ordinal)) &&
+                         ClosingRowMatchesBundle(row, ticket))
                      .ToList())
         {
             _closingScanRows.Remove(row);
@@ -6094,6 +6142,13 @@ public sealed partial class MainWindow : Window
 
         if (_closingScanIssues.Count > 0)
         {
+            if (_closingScanIssues.Any(issue =>
+                    string.Equals(issue.Title, ClosingLedgerMismatchIssueTitle, StringComparison.Ordinal)))
+            {
+                ClosingExceptionText.Text = "A backward correction range is only partially represented in the ticket ledger. Closing is blocked because the application cannot safely guess which financial activity is valid.";
+                return;
+            }
+
             if (_closingScanIssues.Any(issue =>
                     string.Equals(issue.Title, ClosingGameInformationIssueTitle, StringComparison.Ordinal)))
             {
@@ -6465,6 +6520,9 @@ public sealed partial class MainWindow : Window
         error = string.Empty;
         foreach (var correction in _closingReverseCorrections)
         {
+            if (correction.InventoryOnly)
+                continue;
+
             for (var index = projectedSales.Count - 1; index >= 0; index--)
             {
                 var sale = projectedSales[index];
@@ -6740,7 +6798,8 @@ public sealed partial class MainWindow : Window
                     correction.FirstTicketSerial,
                     correction.LastTicketSerial,
                     correction.StoredCurrentTicket,
-                    correction.ScannedTicket)),
+                    correction.ScannedTicket,
+                    correction.InventoryOnly)),
                 reportRequest);
         }
         catch (Exception ex)
@@ -9056,7 +9115,8 @@ public sealed partial class MainWindow : Window
         int FirstTicketSerial,
         int LastTicketSerial,
         string StoredCurrentTicket,
-        string ScannedTicket);
+        string ScannedTicket,
+        bool InventoryOnly = false);
 
     private sealed record TicketBackfillSale(SaleLine Sale, string NextTicket, bool IsBundleComplete);
 
