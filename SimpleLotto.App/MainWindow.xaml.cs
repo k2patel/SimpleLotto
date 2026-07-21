@@ -967,6 +967,52 @@ public sealed partial class MainWindow : Window
             statusText.Text = "Scanning...";
     }
 
+    private async Task<ContentDialogResult> ShowResponsiveDialogAsync(ContentDialog dialog)
+    {
+        dialog.XamlRoot ??= Content.XamlRoot;
+
+        var contentElement = dialog.Content as UIElement ?? new TextBlock
+        {
+            Text = dialog.Content?.ToString() ?? string.Empty,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var viewport = contentElement as ScrollViewer ?? new ScrollViewer
+        {
+            Content = contentElement,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollMode = ScrollMode.Auto
+        };
+        dialog.Content = viewport;
+
+        void ApplyViewportBounds(double width, double height)
+        {
+            var maxWidth = Math.Max(240, Math.Min(640, width - 96));
+            viewport.MaxWidth = maxWidth;
+            viewport.MaxHeight = Math.Max(64, Math.Min(640, height - 240));
+            if (contentElement is FrameworkElement element && !ReferenceEquals(element, viewport))
+            {
+                element.MaxWidth = maxWidth;
+                if (element.MinWidth > maxWidth)
+                    element.MinWidth = maxWidth;
+            }
+        }
+
+        var rootSize = dialog.XamlRoot.Size;
+        ApplyViewportBounds(rootSize.Width, rootSize.Height);
+        SizeChangedEventHandler sizeChanged = (_, args) =>
+            ApplyViewportBounds(args.NewSize.Width, args.NewSize.Height);
+        RootGrid.SizeChanged += sizeChanged;
+        try
+        {
+            return await dialog.ShowAsync();
+        }
+        finally
+        {
+            RootGrid.SizeChanged -= sizeChanged;
+        }
+    }
+
     private void ObserveFocusedCommandScanKey(
         KeyRoutedEventArgs e,
         StringBuilder buffer,
@@ -1268,7 +1314,7 @@ public sealed partial class MainWindow : Window
             selectedPin = newPin;
         };
 
-        var result = await dialog.ShowAsync();
+        var result = await ShowResponsiveDialogAsync(dialog);
         return result == ContentDialogResult.Primary ? selectedPin : null;
     }
 
@@ -1871,7 +1917,7 @@ public sealed partial class MainWindow : Window
         };
         try
         {
-            var result = await dialog.ShowAsync();
+            var result = await ShowResponsiveDialogAsync(dialog);
             if (result == ContentDialogResult.Primary || selectedBin is not null)
                 return selectedBin is null ? null : new ActivationBinSelection(selectedBin.Value, scannedPriceCents);
 
@@ -2178,7 +2224,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _ = priceBox.Focus(FocusState.Programmatic);
-            var result = await dialog.ShowAsync();
+            var result = await ShowResponsiveDialogAsync(dialog);
             if (result != ContentDialogResult.Primary)
                 return false;
         }
@@ -2737,7 +2783,7 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Close
             };
 
-            var result = await dialog.ShowAsync();
+            var result = await ShowResponsiveDialogAsync(dialog);
             if (result != ContentDialogResult.Primary)
                 return;
         }
@@ -3721,7 +3767,7 @@ public sealed partial class MainWindow : Window
         ContentDialogResult result;
         try
         {
-            result = await dialog.ShowAsync();
+            result = await ShowResponsiveDialogAsync(dialog);
         }
         finally
         {
@@ -3785,7 +3831,7 @@ public sealed partial class MainWindow : Window
         ContentDialogResult result;
         try
         {
-            result = await dialog.ShowAsync();
+            result = await ShowResponsiveDialogAsync(dialog);
         }
         finally
         {
@@ -4798,7 +4844,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _ = newBinBox.Focus(FocusState.Programmatic);
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            if (await ShowResponsiveDialogAsync(dialog) != ContentDialogResult.Primary)
                 return;
         }
         finally
@@ -4881,7 +4927,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _ = barcodeBox.Focus(FocusState.Programmatic);
-            var result = await dialog.ShowAsync();
+            var result = await ShowResponsiveDialogAsync(dialog);
             if (result != ContentDialogResult.Primary || parsedTicket is null)
                 return;
         }
@@ -5245,7 +5291,7 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = "Keep Scanning",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await confirm.ShowAsync() == ContentDialogResult.Primary)
+            if (await ShowResponsiveDialogAsync(confirm) == ContentDialogResult.Primary)
             {
                 TryRecordAudit(
                     "inventory",
@@ -5385,7 +5431,7 @@ public sealed partial class MainWindow : Window
         };
         try
         {
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            if (await ShowResponsiveDialogAsync(dialog) != ContentDialogResult.Primary)
                 return false;
         }
         finally
@@ -5745,7 +5791,7 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = "Keep Scanning",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await confirm.ShowAsync() == ContentDialogResult.Primary)
+            if (await ShowResponsiveDialogAsync(confirm) == ContentDialogResult.Primary)
                 closed.TrySetResult(true);
             else
                 _ = content.Focus(FocusState.Programmatic);
@@ -6175,7 +6221,7 @@ public sealed partial class MainWindow : Window
             ContentDialogResult result;
             try
             {
-                result = await dialog.ShowAsync();
+                result = await ShowResponsiveDialogAsync(dialog);
             }
             finally
             {
@@ -6292,7 +6338,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close
         };
 
-        var result = await dialog.ShowAsync();
+        var result = await ShowResponsiveDialogAsync(dialog);
         if (result != ContentDialogResult.Primary)
         {
             ClosingStatusText.Text = "Closing finalization cancelled.";
@@ -7326,7 +7372,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Primary
         };
 
-        var result = await dialog.ShowAsync();
+        var result = await ShowResponsiveDialogAsync(dialog);
         if (result != ContentDialogResult.Primary)
             return;
 
@@ -7583,7 +7629,7 @@ public sealed partial class MainWindow : Window
         if (hasCachedImage)
             dialog.SecondaryButtonText = "Remove Image";
 
-        var result = await dialog.ShowAsync();
+        var result = await ShowResponsiveDialogAsync(dialog);
         if (result != ContentDialogResult.Secondary || !hasCachedImage)
             return;
 
@@ -7998,7 +8044,7 @@ public sealed partial class MainWindow : Window
             XamlRoot = RootGrid.XamlRoot
         };
 
-        var result = await dialog.ShowAsync();
+        var result = await ShowResponsiveDialogAsync(dialog);
         return result == ContentDialogResult.Primary ? selected : null;
     }
 
@@ -8081,7 +8127,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close
         };
 
-        var response = await dialog.ShowAsync();
+        var response = await ShowResponsiveDialogAsync(dialog);
         if (response != ContentDialogResult.Primary)
             return;
 

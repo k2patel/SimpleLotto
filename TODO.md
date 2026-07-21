@@ -112,6 +112,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
 18. Verify header metrics:
    - Bins shows an `Activated bundles` card counting activations in the current open close interval; completing a shift resets the displayed count for the new interval.
    - Closing Sales displays whole-dollar currency in a card wide enough for a five-digit amount, while closing details and reports retain exact cents.
+   - At reduced window heights, verify every dialog keeps its title and footer actions visible inside the dialog border while only its content scrolls. In particular, test Finalize Closing, Cached Image, Pair Scanner, Add Game, activation game setup, receiving game setup, and closing reconciliation.
 19. Verify crash-consistent closing reports and backups:
    - Force report-folder creation or report writing to fail and confirm the SQLite closing transaction still commits, the next close interval begins, and a pending/failed `closing_report_outbox` row retains the immutable report snapshot.
    - Restart after a committed close with a pending report job and confirm the exact shift report is regenerated, the outbox row becomes completed, and no sale, closing, or inventory row is duplicated.
