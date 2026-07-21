@@ -156,6 +156,11 @@ public sealed partial class MainWindow : Window
     private DateTime? _dashboardPendingTicketAtUtc;
     private int? _selectedBinNumber;
     private bool _isWorkflowDialogOpen;
+    private ContentDialog? _activeContentDialog;
+    private bool _activeContentDialogAllowsScannerInput;
+    private ContentDialog? _lastContentDialogOpenFailure;
+    private long _contentDialogRequestSequence;
+    private bool IsWorkflowInteractionBlocked => _isWorkflowDialogOpen || _activeContentDialog is not null;
     private Func<ClassifiedScan, bool>? _scannerScanOverride;
     private const string ScannerVidSettingKey = "barcode_scanner_vid";
     private const string ScannerPidSettingKey = "barcode_scanner_pid";
@@ -837,7 +842,7 @@ public sealed partial class MainWindow : Window
         if (_scannerInput.IsActivelyCapturing)
             return;
 
-        if (_isWorkflowDialogOpen)
+        if (IsWorkflowInteractionBlocked)
             return;
 
         if (FocusManager.GetFocusedElement(Content.XamlRoot) is TextBox or PasswordBox or AutoSuggestBox or RichEditBox or NumberBox)
@@ -860,6 +865,12 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            if (_activeContentDialog is not null && !_activeContentDialogAllowsScannerInput)
+            {
+                AppLog.Info($"Scanner input was ignored while ContentDialog '{_activeContentDialog.Title}' owns the window.");
+                return;
+            }
+
             if (_rawScannerScanOverride?.Invoke(raw) == true)
                 return;
 
@@ -881,7 +892,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            if (_isWorkflowDialogOpen)
+            if (IsWorkflowInteractionBlocked)
             {
                 RejectScannerInput(scan.Raw, "No active scanner route for this dialog.");
                 return;
@@ -984,58 +995,93 @@ public sealed partial class MainWindow : Window
             statusText.Text = "Scanning...";
     }
 
-    private async Task<ContentDialogResult> ShowResponsiveDialogAsync(ContentDialog dialog)
+    private async Task<ContentDialogResult> ShowResponsiveDialogAsync(
+        ContentDialog dialog,
+        bool allowScannerInput = false)
     {
-        dialog.XamlRoot ??= Content.XamlRoot;
+        var requestId = ++_contentDialogRequestSequence;
+        if (_activeContentDialog is { } activeDialog)
+        {
+            var activeState = activeDialog.IsLoaded ? "open and was focused" : "still opening or closing";
+            if (activeDialog.IsLoaded)
+                _ = activeDialog.Focus(FocusState.Programmatic);
 
-        var contentElement = dialog.Content as UIElement ?? new TextBlock
-        {
-            Text = dialog.Content?.ToString() ?? string.Empty,
-            TextWrapping = TextWrapping.Wrap
-        };
-        ScrollViewer viewport;
-        if (contentElement is ScrollViewer existingViewport)
-        {
-            viewport = existingViewport;
-        }
-        else
-        {
-            dialog.Content = null;
-            viewport = new ScrollViewer
-            {
-                Content = contentElement,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollMode = ScrollMode.Auto
-            };
-            dialog.Content = viewport;
+            AppLog.Info($"ContentDialog #{requestId.ToString(CultureInfo.InvariantCulture)} '{dialog.Title}' was discarded because '{activeDialog.Title}' is {activeState}.");
+            return ContentDialogResult.None;
         }
 
-        void ApplyViewportBounds(double width, double height)
-        {
-            var maxWidth = Math.Max(240, Math.Min(640, width - 96));
-            viewport.MaxWidth = maxWidth;
-            viewport.MaxHeight = Math.Max(64, Math.Min(640, height - 240));
-            if (contentElement is FrameworkElement element && !ReferenceEquals(element, viewport))
-            {
-                element.MaxWidth = maxWidth;
-                if (element.MinWidth > maxWidth)
-                    element.MinWidth = maxWidth;
-            }
-        }
-
-        var rootSize = dialog.XamlRoot.Size;
-        ApplyViewportBounds(rootSize.Width, rootSize.Height);
-        SizeChangedEventHandler sizeChanged = (_, args) =>
-            ApplyViewportBounds(args.NewSize.Width, args.NewSize.Height);
-        RootGrid.SizeChanged += sizeChanged;
+        var previousWorkflowDialogState = _isWorkflowDialogOpen;
+        _activeContentDialog = dialog;
+        _activeContentDialogAllowsScannerInput = allowScannerInput;
+        _isWorkflowDialogOpen = true;
+        SizeChangedEventHandler? sizeChanged = null;
         try
         {
-            return await dialog.ShowAsync();
+            dialog.XamlRoot ??= Content.XamlRoot;
+
+            var contentElement = dialog.Content as UIElement ?? new TextBlock
+            {
+                Text = dialog.Content?.ToString() ?? string.Empty,
+                TextWrapping = TextWrapping.Wrap
+            };
+            ScrollViewer viewport;
+            if (contentElement is ScrollViewer existingViewport)
+            {
+                viewport = existingViewport;
+            }
+            else
+            {
+                dialog.Content = null;
+                viewport = new ScrollViewer
+                {
+                    Content = contentElement,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalScrollMode = ScrollMode.Auto
+                };
+                dialog.Content = viewport;
+            }
+
+            void ApplyViewportBounds(double width, double height)
+            {
+                var maxWidth = Math.Max(240, Math.Min(640, width - 96));
+                viewport.MaxWidth = maxWidth;
+                viewport.MaxHeight = Math.Max(64, Math.Min(640, height - 240));
+                if (contentElement is FrameworkElement element && !ReferenceEquals(element, viewport))
+                {
+                    element.MaxWidth = maxWidth;
+                    if (element.MinWidth > maxWidth)
+                        element.MinWidth = maxWidth;
+                }
+            }
+
+            var rootSize = dialog.XamlRoot.Size;
+            ApplyViewportBounds(rootSize.Width, rootSize.Height);
+            sizeChanged = (_, args) =>
+                ApplyViewportBounds(args.NewSize.Width, args.NewSize.Height);
+            RootGrid.SizeChanged += sizeChanged;
+            AppLog.Info($"ContentDialog #{requestId.ToString(CultureInfo.InvariantCulture)} '{dialog.Title}' opening.");
+            var result = await dialog.ShowAsync();
+            AppLog.Info($"ContentDialog #{requestId.ToString(CultureInfo.InvariantCulture)} '{dialog.Title}' completed with result {result}.");
+            return result;
+        }
+        catch (COMException ex) when (ex.HResult == unchecked((int)0x80000019))
+        {
+            _lastContentDialogOpenFailure = dialog;
+            AppLog.Error($"ContentDialog #{requestId.ToString(CultureInfo.InvariantCulture)} '{dialog.Title}' could not open because WinUI reports an occupied dialog slot.", ex);
+            return ContentDialogResult.None;
         }
         finally
         {
-            RootGrid.SizeChanged -= sizeChanged;
+            if (sizeChanged is not null)
+                RootGrid.SizeChanged -= sizeChanged;
+            if (ReferenceEquals(_activeContentDialog, dialog))
+            {
+                _activeContentDialog = null;
+                _activeContentDialogAllowsScannerInput = false;
+            }
+            _isWorkflowDialogOpen = previousWorkflowDialogState;
+            AppLog.Info($"ContentDialog #{requestId.ToString(CultureInfo.InvariantCulture)} '{dialog.Title}' released.");
         }
     }
 
@@ -1811,7 +1857,7 @@ public sealed partial class MainWindow : Window
         };
         try
         {
-            var result = await ShowResponsiveDialogAsync(dialog);
+            var result = await ShowResponsiveDialogAsync(dialog, allowScannerInput: true);
             if (result == ContentDialogResult.Primary || selectedBin is not null)
                 return selectedBin is null ? null : new ActivationBinSelection(selectedBin.Value, scannedPriceCents);
 
@@ -2118,7 +2164,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _ = priceBox.Focus(FocusState.Programmatic);
-            var result = await ShowResponsiveDialogAsync(dialog);
+            var result = await ShowResponsiveDialogAsync(dialog, allowScannerInput: true);
             if (result != ContentDialogResult.Primary)
                 return false;
         }
@@ -4896,7 +4942,7 @@ public sealed partial class MainWindow : Window
 
     private async Task StartReceivingScanWorkflowAsync()
     {
-        if (_isWorkflowDialogOpen)
+        if (IsWorkflowInteractionBlocked)
             return;
 
         var stagedRows = new ObservableCollection<ReceivingScanRow>();
@@ -5329,7 +5375,7 @@ public sealed partial class MainWindow : Window
         };
         try
         {
-            if (await ShowResponsiveDialogAsync(dialog) != ContentDialogResult.Primary)
+            if (await ShowResponsiveDialogAsync(dialog, allowScannerInput: true) != ContentDialogResult.Primary)
                 return false;
         }
         finally
@@ -5366,7 +5412,7 @@ public sealed partial class MainWindow : Window
         if (!EnsureLicenseAllowsOperation("starting closing scans"))
             return;
 
-        if (_isWorkflowDialogOpen)
+        if (IsWorkflowInteractionBlocked)
             return;
 
         ExitClosingReportContext();
@@ -6035,6 +6081,7 @@ public sealed partial class MainWindow : Window
              _closingScanIssues.Any(issue =>
                  string.Equals(issue.Title, ClosingGameInformationIssueTitle, StringComparison.Ordinal)));
         FinalizeClosingButton.IsEnabled = licenseAvailable &&
+            _activeContentDialog is null &&
             _closingScanCaptured &&
             _closingScanIssues.Count == 0 &&
             _closingUnmatchedTickets.Count == 0;
@@ -6603,9 +6650,26 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close
         };
 
-        var result = await ShowResponsiveDialogAsync(dialog);
+        FinalizeClosingButton.IsEnabled = false;
+        ContentDialogResult result;
+        try
+        {
+            result = await ShowResponsiveDialogAsync(dialog);
+        }
+        finally
+        {
+            RefreshClosingActionState();
+        }
         if (result != ContentDialogResult.Primary)
         {
+            if (ReferenceEquals(_lastContentDialogOpenFailure, dialog))
+            {
+                _lastContentDialogOpenFailure = null;
+                ClosingStatusText.Text = "Finalize confirmation could not open because Windows still reports another dialog. No closing data was changed; try Finalize again.";
+                AppLog.Info("Closing finalization did not start because its confirmation dialog could not open.");
+                return;
+            }
+
             ClosingStatusText.Text = "Closing finalization cancelled.";
             return;
         }
