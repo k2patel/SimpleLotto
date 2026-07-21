@@ -438,7 +438,7 @@ Closing must be shift-based. It should show cash summaries, inventory overview, 
 Closing scan rules:
 
 - Clicking Shift Closing should open a dedicated scan dialog.
-- The scan dialog should accept barcode scans and show a live count of scanned barcodes.
+- The scan dialog should accept barcode scans and show a live count of ticket-shaped barcodes only. Ignored bin commands and unrelated/unrecognized scans may remain visible as feedback rows but must not increase the ticket scan total.
 - The scan dialog should show enough live feedback for the user to know scans are being captured, but it should not finalize reconciliation while the user is still scanning.
 - The scan dialog should allow the user to finish/close the scanning session.
 - Closing the scan dialog must preserve all collected valid evidence. Reopening `Start Closing Scan` resumes that same in-progress evidence instead of resetting it.

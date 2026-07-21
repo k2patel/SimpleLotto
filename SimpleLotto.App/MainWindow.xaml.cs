@@ -5500,7 +5500,7 @@ public sealed partial class MainWindow : Window
         };
         var totalText = new TextBlock
         {
-            Text = _closingScanRows.Count.ToString(CultureInfo.CurrentCulture),
+            Text = ClosingTicketScanCount().ToString(CultureInfo.CurrentCulture),
             Style = (Style)Application.Current.Resources["SlMetricTextStyle"],
             HorizontalAlignment = HorizontalAlignment.Center,
             TextAlignment = TextAlignment.Center
@@ -5529,7 +5529,7 @@ public sealed partial class MainWindow : Window
 
         void RefreshDialogTotals()
         {
-            totalText.Text = _closingScanRows.Count.ToString(CultureInfo.CurrentCulture);
+            totalText.Text = ClosingTicketScanCount().ToString(CultureInfo.CurrentCulture);
             if (_selectedClosingReport is null)
                 ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
         }
@@ -5869,6 +5869,9 @@ public sealed partial class MainWindow : Window
         _closingScanSales.Clear();
         _closingScanCaptured = false;
     }
+
+    private int ClosingTicketScanCount() =>
+        _closingScanRows.Count(row => TryParseImportTicket(row.Raw) is not null);
 
     private int ActiveClosingBinCount() =>
         _imports
