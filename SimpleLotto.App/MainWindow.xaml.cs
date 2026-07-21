@@ -127,6 +127,7 @@ public sealed partial class MainWindow : Window
     private bool _isWindowInitialized;
     private bool _isScannerPaired;
     private bool _useFocusedScannerCapture;
+    private Func<string, bool>? _rawScannerScanOverride;
     private bool _automaticUpgradeCheckRunning;
     private bool _loginInProgress;
     private bool _auditLogPageDirty;
@@ -850,6 +851,9 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            if (_rawScannerScanOverride?.Invoke(raw) == true)
+                return;
+
             if (!TryClassifyScan(raw, out var scan))
             {
                 RejectScannerInput(raw, "Barcode is not a recognized SimpleLotto scan.");
@@ -5547,7 +5551,10 @@ public sealed partial class MainWindow : Window
         content.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
-                CaptureGlobalScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText)),
+            {
+                if (!_scannerInput.IsActivelyCapturing)
+                    CaptureGlobalScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText);
+            }),
             handledEventsToo: true);
 
         var totalView = new Viewbox
@@ -5747,8 +5754,12 @@ public sealed partial class MainWindow : Window
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
 
         _isWorkflowDialogOpen = true;
-        var previousFocusedScannerCapture = _useFocusedScannerCapture;
-        _useFocusedScannerCapture = true;
+        var previousRawScannerScanOverride = _rawScannerScanOverride;
+        _rawScannerScanOverride = raw =>
+        {
+            AcceptDialogScan(raw);
+            return true;
+        };
         try
         {
             AppLog.Info("Closing scan overlay opened.");
@@ -5792,7 +5803,7 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlay.Visibility = Visibility.Collapsed;
             ClosingScanOverlayContent.Children.Clear();
             dialogScanBuffer.Clear();
-            _useFocusedScannerCapture = previousFocusedScannerCapture;
+            _rawScannerScanOverride = previousRawScannerScanOverride;
             _isWorkflowDialogOpen = false;
             RefreshClosingBins();
             RefreshClosingActionState();
