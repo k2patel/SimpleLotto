@@ -12,7 +12,7 @@ public sealed class LocalStore
 {
     public const int RecentAuditLogLimit = 200;
 
-    private const int SchemaVersion = 17;
+    private const int SchemaVersion = 18;
     private const string SystemActorId = "system";
     private const string LegacyActorId = "legacy-migration";
     private static readonly object SchemaLock = new();
@@ -427,12 +427,14 @@ public sealed class LocalStore
         IEnumerable<StoredImportLine> closedBundles,
         IEnumerable<StoredImportLine> currentBundles,
         IEnumerable<StoredImportLine> resolvedBundles,
+        IEnumerable<StoredClosingReverseCorrection> reverseCorrections,
         StoredClosingReportRequest reportRequest)
     {
         var generated = new List<StoredSaleLine>(generatedSales);
         var closed = new List<StoredImportLine>(closedBundles);
         var current = new List<StoredImportLine>(currentBundles);
         var resolved = new List<StoredImportLine>(resolvedBundles);
+        var reversals = new List<StoredClosingReverseCorrection>(reverseCorrections);
         if (reportRequest.Closing != closingRecord)
             throw new InvalidOperationException("Closing report request does not match the closing record.");
 
@@ -453,6 +455,12 @@ public sealed class LocalStore
             if (Convert.ToInt32(intervalCheck.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
                 throw new InvalidOperationException("The closing interval is no longer open.");
         }
+
+        var reverseAuditRecords = ApplyClosingReverseCorrections(
+            conn,
+            tx,
+            closingRecord,
+            reversals);
 
         var insertedGeneratedSales = new List<StoredSaleLine>();
         foreach (var line in generated)
@@ -654,7 +662,303 @@ public sealed class LocalStore
             closingRecord.IntervalId,
             openIntervalId,
             insertedGeneratedSales,
-            persistedReportRequest);
+            persistedReportRequest,
+            reverseAuditRecords);
+    }
+
+    private static List<StoredAuditRecord> ApplyClosingReverseCorrections(
+        SqliteConnection conn,
+        SqliteTransaction tx,
+        StoredClosingRecord closing,
+        IReadOnlyList<StoredClosingReverseCorrection> corrections)
+    {
+        var auditRecords = new List<StoredAuditRecord>();
+        if (corrections.Count == 0)
+            return auditRecords;
+
+        using (var guardCmd = conn.CreateCommand())
+        {
+            guardCmd.Transaction = tx;
+            guardCmd.CommandText = "INSERT INTO ledger_mutation_guard (id, purpose) VALUES (1, 'closing_reverse')";
+            guardCmd.ExecuteNonQuery();
+        }
+
+        foreach (var correction in corrections)
+        {
+            if (string.IsNullOrWhiteSpace(correction.GameId) ||
+                string.IsNullOrWhiteSpace(correction.BundleId) ||
+                correction.FirstTicketSerial < 0 ||
+                correction.LastTicketSerial < correction.FirstTicketSerial)
+            {
+                throw new InvalidOperationException("Closing contains an invalid reverse-correction range.");
+            }
+
+            var selectedClaims = new List<(int Serial, long SaleId)>();
+            using (var claimsCmd = conn.CreateCommand())
+            {
+                claimsCmd.Transaction = tx;
+                claimsCmd.CommandText = """
+                    SELECT ticket_serial, sale_id
+                    FROM sale_ticket_claims
+                    WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                      AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                      AND ticket_serial BETWEEN $first_ticket AND $last_ticket
+                    ORDER BY ticket_serial
+                    """;
+                claimsCmd.Parameters.AddWithValue("$game_id", correction.GameId);
+                claimsCmd.Parameters.AddWithValue("$bundle_id", correction.BundleId);
+                claimsCmd.Parameters.AddWithValue("$first_ticket", correction.FirstTicketSerial);
+                claimsCmd.Parameters.AddWithValue("$last_ticket", correction.LastTicketSerial);
+                using var reader = claimsCmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (reader.IsDBNull(1))
+                        throw new InvalidOperationException("A ticket in the Closing reverse range has no ledger sale identity.");
+                    selectedClaims.Add((reader.GetInt32(0), reader.GetInt64(1)));
+                }
+            }
+
+            var expectedClaimCount = correction.LastTicketSerial - correction.FirstTicketSerial + 1;
+            if (selectedClaims.Count != expectedClaimCount)
+            {
+                throw new InvalidOperationException(
+                    $"Reverse range for game {correction.GameId}, bundle {correction.BundleId} expected {expectedClaimCount.ToString(CultureInfo.InvariantCulture)} recorded tickets but found {selectedClaims.Count.ToString(CultureInfo.InvariantCulture)}. Closing stopped without changing the ledger.");
+            }
+
+            long removedCents = 0;
+            var removedRows = 0;
+            var reshapedRows = 0;
+            foreach (var saleGroup in selectedClaims.GroupBy(claim => claim.SaleId))
+            {
+                var sale = QuerySaleById(conn, tx, saleGroup.Key) ??
+                    throw new InvalidOperationException("A ticket in the Closing reverse range references a missing sale.");
+                if (!string.Equals(sale.GameId.Trim(), correction.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(sale.BundleId.Trim(), correction.BundleId.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("A ticket in the Closing reverse range references a different physical bundle.");
+                }
+                if (sale.IntervalId != closing.IntervalId)
+                {
+                    throw new InvalidOperationException(
+                        $"Reverse range for game {correction.GameId}, bundle {correction.BundleId} reaches a closed shift. Prior closing history was not changed.");
+                }
+
+                var selectedSerials = saleGroup.Select(claim => claim.Serial).ToHashSet();
+                var allSerials = QueryClaimedSerialsForSale(conn, tx, sale.Id);
+                if (allSerials.Count != sale.Quantity || sale.Quantity <= 0 || sale.AmountCents <= 0)
+                    throw new InvalidOperationException($"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} has an inconsistent ticket ledger and cannot be reversed safely.");
+
+                var voidCorrection = QueryCorrectionForSale(conn, tx, sale.Id);
+                if (voidCorrection is not null &&
+                    (voidCorrection.Quantity != -sale.Quantity || voidCorrection.AmountCents != -sale.AmountCents))
+                {
+                    throw new InvalidOperationException($"Voided sale {sale.Id.ToString(CultureInfo.InvariantCulture)} has an inconsistent correction entry and cannot be reversed safely.");
+                }
+
+                DeleteTicketClaims(conn, tx, correction.GameId, correction.BundleId, selectedSerials);
+
+                if (sale.AmountCents % sale.Quantity != 0)
+                    throw new InvalidOperationException($"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} has a non-whole-cent ticket amount and cannot be reversed safely.");
+
+                var remainingSerials = allSerials.Where(serial => !selectedSerials.Contains(serial)).ToList();
+                if (voidCorrection is null)
+                    removedCents += sale.AmountCents / sale.Quantity * selectedSerials.Count;
+                if (remainingSerials.Count == 0)
+                {
+                    if (voidCorrection is not null)
+                    {
+                        using var deleteVoidCmd = conn.CreateCommand();
+                        deleteVoidCmd.Transaction = tx;
+                        deleteVoidCmd.CommandText = "DELETE FROM sale_voids WHERE original_sale_id = $original_sale_id";
+                        deleteVoidCmd.Parameters.AddWithValue("$original_sale_id", sale.Id);
+                        deleteVoidCmd.ExecuteNonQuery();
+
+                        using var deleteCorrectionCmd = conn.CreateCommand();
+                        deleteCorrectionCmd.Transaction = tx;
+                        deleteCorrectionCmd.CommandText = "DELETE FROM sales WHERE id = $id AND interval_id = $interval_id";
+                        deleteCorrectionCmd.Parameters.AddWithValue("$id", voidCorrection.Id);
+                        deleteCorrectionCmd.Parameters.AddWithValue("$interval_id", closing.IntervalId);
+                        if (deleteCorrectionCmd.ExecuteNonQuery() != 1)
+                            throw new InvalidOperationException("Closing could not remove the reversed void entry.");
+                    }
+
+                    using var deleteSaleCmd = conn.CreateCommand();
+                    deleteSaleCmd.Transaction = tx;
+                    deleteSaleCmd.CommandText = "DELETE FROM sales WHERE id = $id AND interval_id = $interval_id";
+                    deleteSaleCmd.Parameters.AddWithValue("$id", sale.Id);
+                    deleteSaleCmd.Parameters.AddWithValue("$interval_id", closing.IntervalId);
+                    if (deleteSaleCmd.ExecuteNonQuery() != 1)
+                        throw new InvalidOperationException("Closing could not remove the reversed ledger entry.");
+                    removedRows++;
+                    continue;
+                }
+
+                if (remainingSerials[^1] - remainingSerials[0] + 1 != remainingSerials.Count)
+                    throw new InvalidOperationException($"Reverse range would split sale {sale.Id.ToString(CultureInfo.InvariantCulture)} into disconnected ranges. Closing stopped without changing the ledger.");
+
+                var width = SaleTicketSerialWidth(sale.Ticket);
+                var remainingTicket = FormatSaleTicketRange(remainingSerials[0], remainingSerials[^1], width);
+                using var updateSaleCmd = conn.CreateCommand();
+                updateSaleCmd.Transaction = tx;
+                updateSaleCmd.CommandText = """
+                    UPDATE sales
+                    SET ticket = $ticket,
+                        quantity = $quantity,
+                        amount_cents = $amount_cents
+                    WHERE id = $id AND interval_id = $interval_id
+                    """;
+                updateSaleCmd.Parameters.AddWithValue("$ticket", remainingTicket);
+                updateSaleCmd.Parameters.AddWithValue("$quantity", remainingSerials.Count);
+                updateSaleCmd.Parameters.AddWithValue("$amount_cents", sale.AmountCents / sale.Quantity * remainingSerials.Count);
+                updateSaleCmd.Parameters.AddWithValue("$id", sale.Id);
+                updateSaleCmd.Parameters.AddWithValue("$interval_id", closing.IntervalId);
+                if (updateSaleCmd.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException("Closing could not retain the unaffected part of a reversed ledger entry.");
+                if (voidCorrection is not null)
+                {
+                    using var updateCorrectionCmd = conn.CreateCommand();
+                    updateCorrectionCmd.Transaction = tx;
+                    updateCorrectionCmd.CommandText = """
+                        UPDATE sales
+                        SET ticket = $ticket,
+                            quantity = $quantity,
+                            amount_cents = $amount_cents
+                        WHERE id = $id AND interval_id = $interval_id
+                        """;
+                    updateCorrectionCmd.Parameters.AddWithValue("$ticket", remainingTicket);
+                    updateCorrectionCmd.Parameters.AddWithValue("$quantity", -remainingSerials.Count);
+                    updateCorrectionCmd.Parameters.AddWithValue("$amount_cents", -(sale.AmountCents / sale.Quantity * remainingSerials.Count));
+                    updateCorrectionCmd.Parameters.AddWithValue("$id", voidCorrection.Id);
+                    updateCorrectionCmd.Parameters.AddWithValue("$interval_id", closing.IntervalId);
+                    if (updateCorrectionCmd.ExecuteNonQuery() != 1)
+                        throw new InvalidOperationException("Closing could not retain the unaffected part of a reversed void entry.");
+                }
+                reshapedRows++;
+            }
+
+            var widthForAudit = Math.Max(
+                SaleTicketSerialWidth(correction.StoredCurrentTicket),
+                SaleTicketSerialWidth(correction.ScannedTicket));
+            var auditRecord = new StoredAuditRecord(
+                closing.ClosedAtUtc,
+                "closing",
+                "Closing sale range reversed",
+                closing.ClosedByActorName,
+                $"Game {correction.GameId}, bundle {correction.BundleId}, bin {correction.Bin}, range {FormatSaleTicketRange(correction.FirstTicketSerial, correction.LastTicketSerial, widthForAudit)}, stored current {correction.StoredCurrentTicket}, scanned available {correction.ScannedTicket}; released claims {selectedClaims.Count.ToString(CultureInfo.InvariantCulture)}, removed {removedCents.ToString(CultureInfo.InvariantCulture)} cents, deleted rows {removedRows.ToString(CultureInfo.InvariantCulture)}, reshaped rows {reshapedRows.ToString(CultureInfo.InvariantCulture)}",
+                closing.ClosedByActorId);
+            InsertAudit(conn, tx, auditRecord);
+            auditRecords.Add(auditRecord);
+        }
+
+        using var clearGuardCmd = conn.CreateCommand();
+        clearGuardCmd.Transaction = tx;
+        clearGuardCmd.CommandText = "DELETE FROM ledger_mutation_guard WHERE id = 1";
+        clearGuardCmd.ExecuteNonQuery();
+        return auditRecords;
+    }
+
+    private static StoredSaleLine? QuerySaleById(SqliteConnection conn, SqliteTransaction tx, long saleId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT id, sold_at_utc, game_id, bundle_id, bin, ticket, quantity, amount_cents, source,
+                   interval_id, actor_id, actor_name, corrects_sale_id, migration_state
+            FROM sales
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$id", saleId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        var soldAt = DateTime.TryParse(
+            reader.GetString(1),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var parsed)
+            ? parsed
+            : DateTime.UtcNow;
+        return new StoredSaleLine(
+            soldAt,
+            reader.GetString(2),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.GetInt32(6),
+            reader.GetInt64(7),
+            reader.GetString(8),
+            reader.GetString(3),
+            reader.GetInt64(0),
+            reader.IsDBNull(9) ? 0 : reader.GetInt64(9),
+            reader.GetString(10),
+            reader.GetString(11),
+            reader.IsDBNull(12) ? null : reader.GetInt64(12),
+            reader.GetString(13));
+    }
+
+    private static List<int> QueryClaimedSerialsForSale(SqliteConnection conn, SqliteTransaction tx, long saleId)
+    {
+        var serials = new List<int>();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT ticket_serial FROM sale_ticket_claims WHERE sale_id = $sale_id ORDER BY ticket_serial";
+        cmd.Parameters.AddWithValue("$sale_id", saleId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            serials.Add(reader.GetInt32(0));
+        return serials;
+    }
+
+    private static StoredSaleLine? QueryCorrectionForSale(SqliteConnection conn, SqliteTransaction tx, long saleId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT id FROM sales WHERE corrects_sale_id = $sale_id";
+        cmd.Parameters.AddWithValue("$sale_id", saleId);
+        var result = cmd.ExecuteScalar();
+        return result is null or DBNull
+            ? null
+            : QuerySaleById(conn, tx, Convert.ToInt64(result, CultureInfo.InvariantCulture));
+    }
+
+    private static void DeleteTicketClaims(
+        SqliteConnection conn,
+        SqliteTransaction tx,
+        string gameId,
+        string bundleId,
+        IReadOnlySet<int> serials)
+    {
+        foreach (var serial in serials)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                DELETE FROM sale_ticket_claims
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND ticket_serial = $ticket_serial
+                """;
+            cmd.Parameters.AddWithValue("$game_id", gameId);
+            cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+            cmd.Parameters.AddWithValue("$ticket_serial", serial);
+            if (cmd.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("Closing could not release a reversed ticket claim.");
+        }
+    }
+
+    private static int SaleTicketSerialWidth(string ticket)
+    {
+        var width = 1;
+        foreach (var part in (ticket ?? string.Empty).Split('-', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            width = Math.Max(width, part.Count(char.IsAsciiDigit));
+        return width;
+    }
+
+    private static string FormatSaleTicketRange(int first, int last, int width)
+    {
+        var firstText = first.ToString($"D{Math.Max(1, width).ToString(CultureInfo.InvariantCulture)}", CultureInfo.InvariantCulture);
+        var lastText = last.ToString($"D{Math.Max(1, width).ToString(CultureInfo.InvariantCulture)}", CultureInfo.InvariantCulture);
+        return first == last ? firstText : $"{firstText}-{lastText}";
     }
 
     public void MarkClosingReportCompleted(long reportJobId)
@@ -1015,6 +1319,13 @@ public sealed class LocalStore
             EnsureColumn(conn, "sale_ticket_claims", "sale_id", "INTEGER NULL");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_sale_ticket_claims_sale ON sale_ticket_claims(sale_id)");
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS ledger_mutation_guard (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    purpose TEXT NOT NULL CHECK (purpose = 'closing_reverse')
+                )
+                """);
+            Exec(conn, "DELETE FROM ledger_mutation_guard");
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS closing_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     closed_at_utc TEXT NOT NULL,
@@ -1130,8 +1441,9 @@ public sealed class LocalStore
             }
             else
                 EnsureLedgerRuntimeState(conn);
+            DropLedgerIntegrityTriggers(conn);
             CreateLedgerIntegrityTriggers(conn);
-            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Assign immutable ledger intervals, actors, sale IDs, and historical claim conflicts");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Allow audited open-interval Closing reversals while preserving closed ledger history");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             SchemaReadyPaths.Add(fullDatabasePath);
         }
@@ -1428,6 +1740,9 @@ public sealed class LocalStore
         Exec(conn, """
             CREATE TRIGGER IF NOT EXISTS trg_sales_append_only_update
             BEFORE UPDATE ON sales
+            WHEN NOT EXISTS (
+                SELECT 1 FROM ledger_mutation_guard
+                WHERE id = 1 AND purpose = 'closing_reverse')
             BEGIN
                 SELECT RAISE(ABORT, 'Sales ledger rows are immutable');
             END
@@ -1435,6 +1750,9 @@ public sealed class LocalStore
         Exec(conn, """
             CREATE TRIGGER IF NOT EXISTS trg_sales_append_only_delete
             BEFORE DELETE ON sales
+            WHEN NOT EXISTS (
+                SELECT 1 FROM ledger_mutation_guard
+                WHERE id = 1 AND purpose = 'closing_reverse')
             BEGIN
                 SELECT RAISE(ABORT, 'Sales ledger rows are immutable');
             END
@@ -1451,6 +1769,9 @@ public sealed class LocalStore
         Exec(conn, """
             CREATE TRIGGER IF NOT EXISTS trg_claims_append_only_update
             BEFORE UPDATE ON sale_ticket_claims
+            WHEN NOT EXISTS (
+                SELECT 1 FROM ledger_mutation_guard
+                WHERE id = 1 AND purpose = 'closing_reverse')
             BEGIN
                 SELECT RAISE(ABORT, 'Ticket claims are immutable');
             END
@@ -1458,6 +1779,9 @@ public sealed class LocalStore
         Exec(conn, """
             CREATE TRIGGER IF NOT EXISTS trg_claims_append_only_delete
             BEFORE DELETE ON sale_ticket_claims
+            WHEN NOT EXISTS (
+                SELECT 1 FROM ledger_mutation_guard
+                WHERE id = 1 AND purpose = 'closing_reverse')
             BEGIN
                 SELECT RAISE(ABORT, 'Ticket claims are immutable');
             END
@@ -2890,6 +3214,15 @@ public sealed record StoredClosingReportRequest(
     List<StoredImportLine> ResolvedBundles,
     List<string> SelectedEmailAttachments);
 
+public sealed record StoredClosingReverseCorrection(
+    string GameId,
+    string BundleId,
+    string Bin,
+    int FirstTicketSerial,
+    int LastTicketSerial,
+    string StoredCurrentTicket,
+    string ScannedTicket);
+
 public sealed record StoredClosingReportJob(
     long Id,
     string Status,
@@ -2923,7 +3256,8 @@ public sealed record CompleteClosingResult(
     long ClosedIntervalId,
     long OpenIntervalId,
     List<StoredSaleLine> GeneratedSales,
-    StoredClosingReportRequest ReportRequest);
+    StoredClosingReportRequest ReportRequest,
+    List<StoredAuditRecord> ReverseAuditRecords);
 
 public sealed record StoredGameRecord(
     string GameId,

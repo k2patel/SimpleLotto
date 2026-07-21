@@ -77,6 +77,7 @@ public sealed partial class MainWindow : Window
     private readonly List<ImportLine> _closingResolvedPlacements = new();
     private readonly List<ClosingScanIssue> _closingScanIssues = new();
     private readonly List<ClosingScanSale> _closingScanSales = new();
+    private readonly List<ClosingReverseCorrection> _closingReverseCorrections = new();
     private bool _closingScanCaptured;
     private readonly SpeechSynthesizer _speechSynthesizer = new();
     private readonly MediaPlayer _speechPlayer = new()
@@ -88,7 +89,6 @@ public sealed partial class MainWindow : Window
     private static readonly HttpClient ImageHttpClient = CreateImageHttpClient();
     private const string DefaultGameImageUri = "ms-appx:///Assets/SimpleLottoLogo64.png";
     private const string ClosingGameInformationIssueTitle = "Verify game information";
-    private const string ClosingBackwardCorrectionIssueTitle = "Reverse correction required";
     private readonly IntPtr _hwnd;
     private readonly SubclassProc _subclassProc;
     private IntPtr _trayIconHandle;
@@ -993,14 +993,23 @@ public sealed partial class MainWindow : Window
             Text = dialog.Content?.ToString() ?? string.Empty,
             TextWrapping = TextWrapping.Wrap
         };
-        var viewport = contentElement as ScrollViewer ?? new ScrollViewer
+        ScrollViewer viewport;
+        if (contentElement is ScrollViewer existingViewport)
         {
-            Content = contentElement,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollMode = ScrollMode.Auto
-        };
-        dialog.Content = viewport;
+            viewport = existingViewport;
+        }
+        else
+        {
+            dialog.Content = null;
+            viewport = new ScrollViewer
+            {
+                Content = contentElement,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollMode = ScrollMode.Auto
+            };
+            dialog.Content = viewport;
+        }
 
         void ApplyViewportBounds(double width, double height)
         {
@@ -5756,6 +5765,7 @@ public sealed partial class MainWindow : Window
         _closingScanRows.Clear();
         _closingScanIssues.Clear();
         _closingScanSales.Clear();
+        _closingReverseCorrections.Clear();
         _closingScanCaptured = false;
     }
 
@@ -5805,10 +5815,10 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var closingBundle = _closingCurrentPlacements.FirstOrDefault(placement =>
-                string.Equals(placement.GameId, activeBundle.GameId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(placement.BundleId, activeBundle.BundleId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(placement.Bin, activeBundle.Bin, StringComparison.OrdinalIgnoreCase)) ?? activeBundle;
+            // Every rescan is authoritative evidence against the persisted pre-closing state.
+            // Temporary reconciliation from an earlier scan of this bundle must be replaced,
+            // not used as the starting ticket for another range.
+            var closingBundle = activeBundle;
             if (closingBundle.IsSoldOut)
             {
                 _closingScanRows.Insert(0, new ClosingScanRow(raw, "Sold out"));
@@ -5826,32 +5836,61 @@ public sealed partial class MainWindow : Window
                     out var backfill,
                     out var rangeError))
             {
-                var issueTitle = ClosingGameInformationIssueTitle;
-                var rowStatus = "Verify game information";
-                var guidance = $"{rangeError} Verify the game name, Game ID, Bundle ID, ticket price, derived ticket range, stored current ticket, and scanned ticket in Game Information.";
                 if (TryParseTicketSerial(ticket.Ticket, out var scannedSerial) &&
                     TryParseTicketSerial(closingBundle.Ticket, out var currentSerial) &&
+                    TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var lastTicket, out _) &&
+                    scannedSerial >= firstTicket &&
+                    scannedSerial <= lastTicket &&
+                    currentSerial >= firstTicket &&
+                    currentSerial <= lastTicket &&
                     scannedSerial < currentSerial)
                 {
-                    issueTitle = ClosingBackwardCorrectionIssueTitle;
-                    rowStatus = "Reverse correction";
-                    guidance = $"Reverse correction required for game {ticket.GameId}, bundle {ticket.BundleId}: void/correct tickets {FormatTicketSerial(scannedSerial, TicketSerialWidth(ticket.Ticket))}-{FormatTicketSerial(currentSerial - 1, TicketSerialWidth(closingBundle.Ticket))}; scanned ticket {ticket.Ticket} becomes the available ticket.";
+                    var width = Math.Max(TicketSerialWidth(ticket.Ticket), TicketSerialWidth(closingBundle.Ticket));
+                    var reverseFirst = FormatTicketSerial(scannedSerial, width);
+                    var reverseLast = FormatTicketSerial(currentSerial - 1, width);
+                    ClearClosingReconciliationForBundle(ticket);
+                    ClearClosingScanErrorsForBundle(ticket);
+                    _closingScannedBins.Add(binNumber);
+                    _closingScannedBundleKeys.Add(BundleKey(activeBundle));
+                    UpsertClosingReverseCorrection(new ClosingReverseCorrection(
+                        ticket.GameId,
+                        ticket.BundleId,
+                        activeBundle.Bin,
+                        scannedSerial,
+                        currentSerial - 1,
+                        closingBundle.Ticket,
+                        ticket.Ticket));
+                    ReplaceClosingCurrentPlacement(activeBundle with
+                    {
+                        Ticket = ticket.Ticket,
+                        IsSoldOut = false
+                    });
+                    _closingScanRows.Insert(0, new ClosingScanRow(
+                        $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
+                        $"Scanned; reverse {reverseFirst}-{reverseLast}")
+                    {
+                        Raw = raw
+                    });
+                    TryRecordAudit(
+                        "closing",
+                        "Closing reverse staged",
+                        $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {activeBundle.Bin}, range {reverseFirst}-{reverseLast}; stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}");
+                    statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Reverse {reverseFirst}-{reverseLast} will be applied when Closing finalizes.";
+                    return;
                 }
 
-                _closingScanRows.Insert(0, new ClosingScanRow(raw, rowStatus));
-                AddClosingScanIssue(raw, issueTitle, guidance);
+                var guidance = $"{rangeError} Verify the game name, Game ID, Bundle ID, ticket price, derived ticket range, stored current ticket, and scanned ticket in Game Information.";
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Verify game information"));
+                AddClosingScanIssue(raw, ClosingGameInformationIssueTitle, guidance);
                 TryRecordAudit("closing", "Closing scan requires reconciliation", guidance);
-                statusText.Text = issueTitle == ClosingBackwardCorrectionIssueTitle
-                    ? "Reverse correction required. Resolve the correction before finalizing."
-                    : "Verify this game's price and derived ticket range in Game Information.";
-                _ = SpeakAsync(issueTitle == ClosingBackwardCorrectionIssueTitle
-                    ? "Reverse correction required."
-                    : "Verify game information.");
+                statusText.Text = "Verify this game's price and derived ticket range in Game Information.";
+                _ = SpeakAsync("Verify game information.");
                 return;
             }
 
             _closingScannedBins.Add(binNumber);
             _closingScannedBundleKeys.Add(BundleKey(activeBundle));
+            ClearClosingReconciliationForBundle(ticket);
             ClearClosingScanErrorsForBundle(ticket);
             UpsertClosingScanSale(BundleKey(activeBundle), backfill.Sale);
             ReplaceClosingCurrentPlacement(activeBundle with
@@ -5954,6 +5993,24 @@ public sealed partial class MainWindow : Window
         _closingScanSales.Add(new ClosingScanSale(bundleKey, sale));
     }
 
+    private void UpsertClosingReverseCorrection(ClosingReverseCorrection correction)
+    {
+        _closingReverseCorrections.RemoveAll(existing =>
+            string.Equals(existing.GameId, correction.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.BundleId, correction.BundleId, StringComparison.OrdinalIgnoreCase));
+        _closingReverseCorrections.Add(correction);
+    }
+
+    private void ClearClosingReconciliationForBundle(ImportTicket ticket)
+    {
+        var key = BundleKey(ticket);
+        _closingScanSales.RemoveAll(sale =>
+            string.Equals(sale.BundleKey, key, StringComparison.OrdinalIgnoreCase));
+        _closingReverseCorrections.RemoveAll(correction =>
+            string.Equals(correction.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(correction.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
+    }
+
     private void ReplaceClosingCurrentPlacement(ImportLine placement)
     {
         _closingCurrentPlacements.RemoveAll(i =>
@@ -5994,13 +6051,6 @@ public sealed partial class MainWindow : Window
                     string.Equals(issue.Title, ClosingGameInformationIssueTitle, StringComparison.Ordinal)))
             {
                 ClosingExceptionText.Text = "A scanned ticket does not fit its derived range. Select Resolve Closing Issues to verify or correct the price in Game Information.";
-                return;
-            }
-
-            if (_closingScanIssues.Any(issue =>
-                    string.Equals(issue.Title, ClosingBackwardCorrectionIssueTitle, StringComparison.Ordinal)))
-            {
-                ClosingExceptionText.Text = "A lower physical ticket requires an auditable reverse correction before Closing can finalize.";
                 return;
             }
 
@@ -6359,6 +6409,115 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private bool TryProjectClosingReverseCorrections(
+        IEnumerable<SaleLine> currentSales,
+        out List<SaleLine> projectedSales,
+        out string error)
+    {
+        projectedSales = currentSales.ToList();
+        error = string.Empty;
+        foreach (var correction in _closingReverseCorrections)
+        {
+            for (var index = projectedSales.Count - 1; index >= 0; index--)
+            {
+                var sale = projectedSales[index];
+                if (sale.Quantity <= 0 ||
+                    !string.Equals(sale.GameId, correction.GameId, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(sale.BundleId, correction.BundleId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!TryParseSaleTicketRange(sale.Ticket, out var saleFirst, out var saleLast) ||
+                    saleLast - saleFirst + 1 != sale.Quantity)
+                {
+                    error = $"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} has an invalid ticket range and cannot be reversed safely.";
+                    return false;
+                }
+
+                var removeFirst = Math.Max(saleFirst, correction.FirstTicketSerial);
+                var removeLast = Math.Min(saleLast, correction.LastTicketSerial);
+                if (removeFirst > removeLast)
+                    continue;
+
+                var remainingFirst = saleFirst;
+                var remainingLast = removeFirst - 1;
+                if (removeLast < saleLast)
+                {
+                    error = $"Reverse range {correction.FirstTicketSerial.ToString(CultureInfo.InvariantCulture)}-{correction.LastTicketSerial.ToString(CultureInfo.InvariantCulture)} would split sale {sale.Id.ToString(CultureInfo.InvariantCulture)}. Closing stopped without changing the ledger.";
+                    return false;
+                }
+
+                var removedQuantity = removeLast - removeFirst + 1;
+                var correctionIndex = _voidedSaleIds.Contains(sale.Id)
+                    ? projectedSales.FindIndex(candidate => candidate.CorrectsSaleId == sale.Id)
+                    : -1;
+                if (_voidedSaleIds.Contains(sale.Id) && correctionIndex < 0)
+                {
+                    error = $"Voided sale {sale.Id.ToString(CultureInfo.InvariantCulture)} is missing its correction entry and cannot be reversed safely.";
+                    return false;
+                }
+
+                if (removedQuantity == sale.Quantity)
+                {
+                    if (correctionIndex >= 0)
+                    {
+                        projectedSales.RemoveAt(correctionIndex);
+                        if (correctionIndex < index)
+                            index--;
+                    }
+                    projectedSales.RemoveAt(index);
+                    continue;
+                }
+
+                if (sale.Amount * 100m % sale.Quantity != 0)
+                {
+                    error = $"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} does not have a whole-cent per-ticket amount and cannot be reversed safely.";
+                    return false;
+                }
+
+                var remainingQuantity = remainingLast - remainingFirst + 1;
+                var width = Math.Max(TicketSerialWidth(sale.Ticket), TicketSerialWidth(correction.StoredCurrentTicket));
+                var remainingTicket = remainingQuantity == 1
+                    ? FormatTicketSerial(remainingFirst, width)
+                    : $"{FormatTicketSerial(remainingFirst, width)}-{FormatTicketSerial(remainingLast, width)}";
+                projectedSales[index] = sale with
+                {
+                    Ticket = remainingTicket,
+                    Quantity = remainingQuantity,
+                    Amount = sale.Amount / sale.Quantity * remainingQuantity
+                };
+                if (correctionIndex >= 0)
+                {
+                    var voidCorrection = projectedSales[correctionIndex];
+                    projectedSales[correctionIndex] = voidCorrection with
+                    {
+                        Ticket = remainingTicket,
+                        Quantity = -remainingQuantity,
+                        Amount = -(sale.Amount / sale.Quantity * remainingQuantity)
+                    };
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseSaleTicketRange(string ticket, out int first, out int last)
+    {
+        first = 0;
+        last = 0;
+        var parts = (ticket ?? string.Empty).Split(
+            '-',
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length is < 1 or > 2 || !TryParseTicketSerial(parts[0], out first))
+            return false;
+
+        last = first;
+        return parts.Length == 1 ||
+            (TryParseTicketSerial(parts[1], out last) && last >= first);
+    }
+
     private async void FinalizeClosingButton_Click(object sender, RoutedEventArgs e)
     {
         if (!EnsureLicenseAllowsOperation("finalizing closing"))
@@ -6412,12 +6571,20 @@ public sealed partial class MainWindow : Window
             .GroupBy(BundleKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
             .ToList();
+        if (!TryProjectClosingReverseCorrections(_sales, out var currentSalesAfterReversals, out var reverseError))
+        {
+            ClosingStatusText.Text = $"Closing blocked: {reverseError}";
+            StatusText.Text = "Shift was not closed because the staged reversal could not be applied safely.";
+            TryRecordAudit("closing", "Closing reverse blocked", reverseError);
+            return;
+        }
+
         var generatedSales = _closingScanSales
             .Select(s => s.Sale)
             .Concat(soldOutSales)
             .ToList();
         var instantTicketSalesCents = (long)Math.Round(
-            (_sales.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
+            (currentSalesAfterReversals.Sum(s => s.Amount) + generatedSales.Sum(s => s.Amount)) * 100m,
             MidpointRounding.AwayFromZero);
         var expectedCashCents = instantTicketSalesCents + onlineSaleCents - instantCashoutCents - onlineCashoutCents;
         var activatedBundles = CurrentShiftActivationCount();
@@ -6445,7 +6612,7 @@ public sealed partial class MainWindow : Window
 
         var intervalStartUtc = _lastCloseUtc;
         var reportTarget = BuildClosingReportTarget(closedAtUtc);
-        var reportSales = _sales
+        var reportSales = currentSalesAfterReversals
             .Concat(generatedSales)
             .OrderBy(s => s.SoldAt)
             .ThenBy(s => s.GameId, StringComparer.OrdinalIgnoreCase)
@@ -6460,8 +6627,8 @@ public sealed partial class MainWindow : Window
             reportTarget.Folder,
             _closingScannedBins.Count,
             ActiveClosingBinCount(),
-            _sales.Count + generatedSales.Count,
-            _sales.Sum(s => s.Quantity) + generatedSales.Sum(s => s.Quantity),
+            currentSalesAfterReversals.Count + generatedSales.Count,
+            currentSalesAfterReversals.Sum(s => s.Quantity) + generatedSales.Sum(s => s.Quantity),
             instantTicketSalesCents,
             onlineSaleCents,
             onlineCashoutCents,
@@ -6502,6 +6669,14 @@ public sealed partial class MainWindow : Window
                 Array.Empty<StoredImportLine>(),
                 storedCurrentBundles,
                 storedResolvedBundles,
+                _closingReverseCorrections.Select(correction => new StoredClosingReverseCorrection(
+                    correction.GameId,
+                    correction.BundleId,
+                    correction.Bin,
+                    correction.FirstTicketSerial,
+                    correction.LastTicketSerial,
+                    correction.StoredCurrentTicket,
+                    correction.ScannedTicket)),
                 reportRequest);
         }
         catch (Exception ex)
@@ -6524,11 +6699,15 @@ public sealed partial class MainWindow : Window
             if (received is not null)
                 _receivedBundles.Remove(received);
         }
-        foreach (var generated in closingResult.GeneratedSales)
-            _allSales.Insert(0, FromStoredSaleLine(generated));
+        foreach (var existing in _allSales.Where(sale => sale.IntervalId == closingResult.ClosedIntervalId).ToList())
+            _allSales.Remove(existing);
+        foreach (var persisted in closingResult.ReportRequest.Sales.OrderBy(sale => sale.Id))
+            _allSales.Insert(0, FromStoredSaleLine(persisted));
         _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
         ApplyClosingHistoryPage(resetPage: true);
         ClosingHistoryListView.SelectedItem = _pagedClosingHistoryRows.FirstOrDefault();
+        foreach (var reverseAuditRecord in closingResult.ReverseAuditRecords)
+            AddAuditLogRowToUi(reverseAuditRecord);
         AddAuditLogRowToUi(auditRecord);
         _sales.Clear();
         ClosingOnlineSaleBox.Value = 0;
@@ -8799,12 +8978,21 @@ public sealed partial class MainWindow : Window
 
         public string DisplayText => $"{ScannedText} — {Status}";
 
-        public bool CanDiscard => !string.Equals(Status, "Scanned", StringComparison.OrdinalIgnoreCase);
+        public bool CanDiscard => !Status.StartsWith("Scanned", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record ClosingScanIssue(string Raw, string Title, string Detail);
 
     private sealed record ClosingScanSale(string BundleKey, SaleLine Sale);
+
+    private sealed record ClosingReverseCorrection(
+        string GameId,
+        string BundleId,
+        string Bin,
+        int FirstTicketSerial,
+        int LastTicketSerial,
+        string StoredCurrentTicket,
+        string ScannedTicket);
 
     private sealed record TicketBackfillSale(SaleLine Sale, string NextTicket, bool IsBundleComplete);
 
