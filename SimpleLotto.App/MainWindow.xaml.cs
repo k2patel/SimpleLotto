@@ -3275,7 +3275,7 @@ public sealed partial class MainWindow : Window
     {
         if (_selectedClosingReport is { } selected)
         {
-            ClosingSalesText.Text = selected.SalesText;
+            ClosingSalesText.Text = selected.SalesHeaderText;
             ClosingTicketsText.Text = selected.TicketText;
             ClosingEvidenceText.Text = selected.BinText;
             ClosingActivatedText.Text = selected.ActivatedBundles.ToString(CultureInfo.CurrentCulture);
@@ -3283,7 +3283,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        ClosingSalesText.Text = _sales.Sum(s => s.Amount).ToString("C", CultureInfo.CurrentCulture);
+        ClosingSalesText.Text = _sales.Sum(s => s.Amount).ToString("C0", CultureInfo.CurrentCulture);
         ClosingTicketsText.Text = _sales.Sum(s => s.Quantity).ToString(CultureInfo.CurrentCulture);
         ClosingActivatedText.Text = CurrentShiftActivationCount().ToString(CultureInfo.CurrentCulture);
         ClosingExpectedCashText.Text = MoneyText(CurrentClosingExpectedCashCents());
@@ -3361,6 +3361,7 @@ public sealed partial class MainWindow : Window
         BinsTotalText.Text = _configuredBinCount.ToString(CultureInfo.CurrentCulture);
         BinsActiveText.Text = activeBins.ToString(CultureInfo.CurrentCulture);
         BinsBundleText.Text = _imports.Count.ToString(CultureInfo.CurrentCulture);
+        BinsActivatedText.Text = CurrentShiftActivationCount().ToString(CultureInfo.CurrentCulture);
         RefreshBinsShiftSalesMetric();
 
         if (_selectedBinBundles.Count == 0)
@@ -8707,6 +8708,7 @@ public sealed partial class MainWindow : Window
             ? "First recorded interval"
             : IntervalStart.ToString("g", CultureInfo.CurrentCulture);
         public string SalesText => SalesAmount.ToString("C", CultureInfo.CurrentCulture);
+        public string SalesHeaderText => SalesAmount.ToString("C0", CultureInfo.CurrentCulture);
         public string ExpectedCashText => ExpectedCashAmount.ToString("C", CultureInfo.CurrentCulture);
         public string OnlineSaleText => OnlineSaleAmount.ToString("C", CultureInfo.CurrentCulture);
         public string OnlineCashoutText => OnlineCashoutAmount.ToString("C", CultureInfo.CurrentCulture);

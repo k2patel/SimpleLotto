@@ -313,6 +313,8 @@ Dashboard bin behavior:
 
 Bins is the operator-first display page. It should show the working bin layout, active games, available ticket ranges, and current selling status. Operators should be able to understand what is loaded and where without opening multiple screens. Bin state supports display and workflow correction; it must not be treated as more important than preserving accurate sales activity.
 
+The Bins header must show the total bundles activated in the current open close interval, meaning activations recorded since the most recent completed shift closing.
+
 Bins must support multiple bundles in the same bin. The latest bundle in the bin is the one shown on Rdisplay.
 
 Bundle activation definition:

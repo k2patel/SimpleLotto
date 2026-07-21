@@ -78,6 +78,12 @@
                                 <TextBlock Text="Sales" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
                             </StackPanel>
                         </Border>
+                        <Border Width="120" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsActivatedText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Activated bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal"
@@ -100,9 +106,9 @@
                     <StackPanel Orientation="Horizontal"
                                 Spacing="8"
                                 Visibility="{Binding Visibility, ElementName=ClosingContent}">
-                        <Border Width="88" Style="{StaticResource SlHeaderMetricCardStyle}">
+                        <Border Width="120" Style="{StaticResource SlHeaderMetricCardStyle}">
                             <StackPanel Spacing="1">
-                                <TextBlock x:Name="ClosingSalesText" Text="$0.00" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock x:Name="ClosingSalesText" Text="$0" Style="{StaticResource SlMetricTextStyle}"/>
                                 <TextBlock Text="Sales" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
                             </StackPanel>
                         </Border>
