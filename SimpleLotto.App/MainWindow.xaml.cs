@@ -87,6 +87,8 @@ public sealed partial class MainWindow : Window
     private readonly SemaphoreSlim _speechGate = new(1, 1);
     private static readonly HttpClient ImageHttpClient = CreateImageHttpClient();
     private const string DefaultGameImageUri = "ms-appx:///Assets/SimpleLottoLogo64.png";
+    private const string ClosingGameInformationIssueTitle = "Verify game information";
+    private const string ClosingBackwardCorrectionIssueTitle = "Reverse correction required";
     private readonly IntPtr _hwnd;
     private readonly SubclassProc _subclassProc;
     private IntPtr _trayIconHandle;
@@ -5937,11 +5939,27 @@ public sealed partial class MainWindow : Window
                     out var backfill,
                     out var rangeError))
             {
-                _closingScanRows.Insert(0, new ClosingScanRow(raw, "Outside bundle range"));
-                AddClosingScanIssue(raw, "Ticket outside bundle range", rangeError);
-                TryRecordAudit("closing", "Closing scan rejected", rangeError);
-                statusText.Text = "Scan error: ticket is outside the configured bundle range.";
-                _ = SpeakAsync("Scan again.");
+                var issueTitle = ClosingGameInformationIssueTitle;
+                var rowStatus = "Verify game information";
+                var guidance = $"{rangeError} Verify the game name, Game ID, Bundle ID, ticket price, derived ticket range, stored current ticket, and scanned ticket in Game Information.";
+                if (TryParseTicketSerial(ticket.Ticket, out var scannedSerial) &&
+                    TryParseTicketSerial(closingBundle.Ticket, out var currentSerial) &&
+                    scannedSerial < currentSerial)
+                {
+                    issueTitle = ClosingBackwardCorrectionIssueTitle;
+                    rowStatus = "Reverse correction";
+                    guidance = $"Reverse correction required for game {ticket.GameId}, bundle {ticket.BundleId}: void/correct tickets {FormatTicketSerial(scannedSerial, TicketSerialWidth(ticket.Ticket))}-{FormatTicketSerial(currentSerial - 1, TicketSerialWidth(closingBundle.Ticket))}; scanned ticket {ticket.Ticket} becomes the available ticket.";
+                }
+
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, rowStatus));
+                AddClosingScanIssue(raw, issueTitle, guidance);
+                TryRecordAudit("closing", "Closing scan requires reconciliation", guidance);
+                statusText.Text = issueTitle == ClosingBackwardCorrectionIssueTitle
+                    ? "Reverse correction required. Resolve the correction before finalizing."
+                    : "Verify this game's price and derived ticket range in Game Information.";
+                _ = SpeakAsync(issueTitle == ClosingBackwardCorrectionIssueTitle
+                    ? "Reverse correction required."
+                    : "Verify game information.");
                 return;
             }
 
@@ -6068,7 +6086,10 @@ public sealed partial class MainWindow : Window
             _closingUnmatchedTickets.Count > 0
                 ? "Continue Closing Scan"
                 : "Start Closing Scan";
-        ResolveClosingIssuesButton.IsEnabled = licenseAvailable && _closingUnmatchedTickets.Count > 0;
+        ResolveClosingIssuesButton.IsEnabled = licenseAvailable &&
+            (_closingUnmatchedTickets.Count > 0 ||
+             _closingScanIssues.Any(issue =>
+                 string.Equals(issue.Title, ClosingGameInformationIssueTitle, StringComparison.Ordinal)));
         FinalizeClosingButton.IsEnabled = licenseAvailable &&
             _closingScanCaptured &&
             _closingScanIssues.Count == 0 &&
@@ -6082,6 +6103,20 @@ public sealed partial class MainWindow : Window
 
         if (_closingScanIssues.Count > 0)
         {
+            if (_closingScanIssues.Any(issue =>
+                    string.Equals(issue.Title, ClosingGameInformationIssueTitle, StringComparison.Ordinal)))
+            {
+                ClosingExceptionText.Text = "A scanned ticket does not fit its derived range. Select Resolve Closing Issues to verify or correct the price in Game Information.";
+                return;
+            }
+
+            if (_closingScanIssues.Any(issue =>
+                    string.Equals(issue.Title, ClosingBackwardCorrectionIssueTitle, StringComparison.Ordinal)))
+            {
+                ClosingExceptionText.Text = "A lower physical ticket requires an auditable reverse correction before Closing can finalize.";
+                return;
+            }
+
             ClosingExceptionText.Text = "One or more rejected scans remain. Continue Closing Scan, then rescan the correct ticket or discard the selected error.";
             return;
         }
@@ -6260,8 +6295,189 @@ public sealed partial class MainWindow : Window
                 $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}, assigned bin {bin}");
         }
 
+        while (_closingScanIssues.FirstOrDefault(issue =>
+                   string.Equals(issue.Title, ClosingGameInformationIssueTitle, StringComparison.Ordinal)) is { } gameIssue)
+        {
+            var ticket = TryParseImportTicket(gameIssue.Raw);
+            var activeBundle = ticket is null ? null : FindActiveBundle(ticket);
+            if (ticket is null || activeBundle is null)
+                break;
+
+            if (!await ShowClosingGameInformationDialogAsync(ticket, activeBundle))
+            {
+                ClosingStatusText.Text = "Game Information verification cancelled. Closing remains blocked.";
+                break;
+            }
+
+            _closingScanIssues.Remove(gameIssue);
+            foreach (var row in _closingScanRows.Where(row =>
+                         string.Equals(row.Raw, gameIssue.Raw, StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(row.Status, "Verify game information", StringComparison.OrdinalIgnoreCase)).ToList())
+            {
+                _closingScanRows.Remove(row);
+            }
+
+            ProcessClosingScanSegment(gameIssue.Raw, ClosingStatusText);
+        }
+
         RefreshClosingBins();
         RefreshClosingActionState();
+    }
+
+    private async Task<bool> ShowClosingGameInformationDialogAsync(
+        ImportTicket ticket,
+        ImportLine activeBundle)
+    {
+        if (!RequireManagerAccess("correcting Game Information during closing"))
+        {
+            ClosingStatusText.Text = "Manager access is required to correct Game Information. Closing remains blocked.";
+            return false;
+        }
+
+        var existingGame = FindKnownGame(ticket.GameId);
+        var priceBox = new NumberBox
+        {
+            Header = "Ticket price ($)",
+            Value = existingGame?.PriceCents > 0
+                ? existingGame.PriceCents / 100d
+                : double.NaN,
+            Minimum = 1,
+            SmallChange = 1,
+            LargeChange = 5,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+        };
+        AutomationProperties.SetAutomationId(priceBox, "ClosingGameInformationPrice");
+
+        var derivedRangeText = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var validationText = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        bool TryReadPrice(out long priceCents, out string error)
+        {
+            priceCents = 0;
+            error = string.Empty;
+            if (double.IsNaN(priceBox.Value) ||
+                priceBox.Value <= 0 ||
+                priceBox.Value > long.MaxValue / 100d ||
+                priceBox.Value != Math.Truncate(priceBox.Value))
+            {
+                error = "Enter a positive whole-dollar ticket price.";
+                return false;
+            }
+
+            priceCents = checked((long)priceBox.Value * 100);
+            return true;
+        }
+
+        void RefreshDerivedRange()
+        {
+            if (!TryReadPrice(out var priceCents, out var priceError))
+            {
+                derivedRangeText.Text = $"Derived range unavailable: {priceError}";
+                return;
+            }
+
+            var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
+            if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var error))
+            {
+                derivedRangeText.Text = $"Derived range unavailable: {error}";
+                return;
+            }
+
+            var ticketCount = bundlePriceCents / priceCents;
+            var lastTicket = checked(_globalFirstTicketSerial + (int)ticketCount - 1);
+            var width = Math.Max(TicketSerialWidth(activeBundle.Ticket), TicketSerialWidth(ticket.Ticket));
+            derivedRangeText.Text = $"Derived bundle total: {MoneyText(bundlePriceCents)} | Derived ticket range: {FormatTicketSerial(_globalFirstTicketSerial, width)}-{FormatTicketSerial(lastTicket, width)}";
+        }
+        priceBox.ValueChanged += (_, _) => RefreshDerivedRange();
+        RefreshDerivedRange();
+
+        var content = new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Verify the saved game information against the physical ticket before continuing closing.",
+                    TextWrapping = TextWrapping.Wrap
+                },
+                new TextBlock
+                {
+                    Text = $"Game name: {GameDisplayName(ticket.GameId)}\nGame ID: {ticket.GameId}\nBundle ID: {ticket.BundleId}\nStored current available ticket: {activeBundle.Ticket}\nScanned ticket: {ticket.Ticket}",
+                    TextWrapping = TextWrapping.Wrap
+                },
+                priceBox,
+                derivedRangeText,
+                validationText
+            }
+        };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = "Verify Game Information",
+            Content = content,
+            PrimaryButtonText = "Save and Recheck",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        var saved = false;
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (!TryReadPrice(out var priceCents, out var priceError))
+            {
+                args.Cancel = true;
+                validationText.Text = priceError;
+                return;
+            }
+
+            var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
+            if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var error))
+            {
+                args.Cancel = true;
+                validationText.Text = error;
+                return;
+            }
+
+            var record = existingGame is null
+                ? new GameCatalogRecord(
+                    ticket.GameId,
+                    GameDisplayName(ticket.GameId),
+                    priceCents,
+                    bundlePriceCents,
+                    "Closing reconciliation",
+                    DefaultGameImageUri,
+                    "Image not uploaded")
+                : existingGame with
+                {
+                    PriceCents = priceCents,
+                    BundlePriceCents = bundlePriceCents,
+                    Source = "Closing reconciliation"
+                };
+            if (UpsertManualGameRecord(record))
+            {
+                saved = true;
+                TryRecordAudit(
+                    "closing",
+                    "Game information verified",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, stored current {activeBundle.Ticket}, scanned {ticket.Ticket}, ticket price {MoneyText(priceCents)}, derived bundle total {MoneyText(bundlePriceCents)}");
+                return;
+            }
+
+            args.Cancel = true;
+            validationText.Text = "Game Information could not be saved. Closing remains blocked.";
+        };
+        dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
+
+        _isWorkflowDialogOpen = true;
+        try
+        {
+            var result = await ShowResponsiveDialogAsync(dialog);
+            return result == ContentDialogResult.Primary && saved;
+        }
+        finally
+        {
+            _isWorkflowDialogOpen = false;
+        }
     }
 
     private async void FinalizeClosingButton_Click(object sender, RoutedEventArgs e)

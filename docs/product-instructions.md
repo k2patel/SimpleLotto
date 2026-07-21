@@ -212,7 +212,7 @@ Bundle completion rules:
 - A bundle is complete when its sold ticket count/value reaches the automatically derived bundle total.
 - When the final valid ticket is sold, keep the bundle assigned to its bin and mark it `Sold out`/grey in Bins and Rdisplay. Its displayed ticket remains the final valid ticket; it must never advance to a non-existent serial (for example, `$20`/`$300`, start `000`: `000`-`014`, never `015`).
 - The sales ledger records only the ticket or inclusive ticket range actually sold. The bin/Rdisplay current-ticket state is operational inventory state and is stored separately.
-- A ticket serial may be recorded only once for a placed bundle. Re-scanning a serial below the current ticket, including during a backfill or closing scan, must be rejected and must not change sales totals. SQLite must retain a unique per-bundle ticket claim so concurrent/repeated scan events cannot bypass this rule.
+- A ticket serial may be recorded only once for a placed bundle during normal sales/backfill. During Closing, a scanned ticket below the stored current available ticket is backward physical evidence, not a duplicate-sale rejection: stage an auditable reverse correction for the inclusive series from the scanned ticket through one less than the stored current available ticket, and make the scanned ticket the available ticket after the correction is committed.
 - A sale can be voided once only. The void is an auditable reversing ledger entry; a second void of the same sale and a void of that correction are rejected.
 - A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift; retain that bin placement as grey `Sold out` after recording the closing gap-fill range.
 - Closing-generated sold-out handling must be recorded separately from normal scanned sales so reports can explain the difference.
@@ -486,6 +486,7 @@ Closing scan rules:
 - In reconciliation context, "game bundle" means Bundle ID.
 - Every reconciliation interaction must show at minimum: game name, Bundle ID, and game ID.
 - Reconciliation interactions should also show bundle ID, current/expected bin, scanned ticket/current ticket, price, and status when available.
+- When a closing scan falls outside the range derived from Game Information, open a bounded custom reconciliation dialog showing game name, Game ID, Bundle ID, configured ticket price, derived bundle total/range, stored current available ticket, and scanned ticket. With Manager access, allow the operator to correct the whole-dollar ticket price, save it to Game Information, recalculate the range, and re-evaluate the same scan. Cancelling, insufficient role, or an invalid price leaves Closing blocked.
 - During closing reconciliation, dormant bundles in a bin that are not represented in the scanned physical state should be considered sold as appropriate for close-interval accountability.
 - The sold-out fill created by closing must be distinguishable from ordinary scan sales in audit/reporting.
 - If a bundle reaches its automatically derived bundle total before closing, it is considered complete/sold out.
