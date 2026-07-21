@@ -201,6 +201,7 @@ Bundle price rules:
 Ticket numbering rules:
 
 - Inventory game setup must provide one global choice for whether every bundle starts at `000` or `001`. First-ticket mode is not stored or edited per game or per bundle.
+- When upgrading a database that predates the global setting, initialize it from the existing per-game first-ticket value used by the majority of configured games; if there are no configured games, use `000`. The operator can then explicitly save a different global value.
 - End ticket is calculated from game price, the automatically derived bundle total, and the global first-ticket mode.
 - If first ticket is `000`, end ticket is `ticket_count - 1`.
 - If first ticket is `001`, end ticket is `ticket_count`.

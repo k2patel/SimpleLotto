@@ -372,7 +372,16 @@ public sealed partial class MainWindow : Window
         _storeCity = ReadSetting(state, "store_city");
         _databaseSchemaVersion = ReadSetting(state, "schema_version");
         _configuredBinCount = Math.Clamp(ReadIntSetting(state, "configured_bin_count", 90), 1, 500);
-        _globalFirstTicketSerial = Math.Clamp(ReadIntSetting(state, GlobalFirstTicketSerialSettingKey, 0), 0, 1);
+        var savedGlobalFirstTicket = ReadSetting(state, GlobalFirstTicketSerialSettingKey);
+        _globalFirstTicketSerial = savedGlobalFirstTicket is "0" or "1"
+            ? int.Parse(savedGlobalFirstTicket, CultureInfo.InvariantCulture)
+            : state.ManualGames
+                .Where(game => game.FirstTicketSerial is 0 or 1)
+                .GroupBy(game => game.FirstTicketSerial)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => group.Key)
+                .FirstOrDefault();
         _scanPairTimeoutSeconds = Math.Clamp(ReadIntSetting(state, ScanPairTimeoutSettingKey, 5), 1, 30);
         _displayBurnInEnabled = ReadBoolSetting(state, DisplayBurnInEnabledSettingKey, true);
         _displayBurnInIntervalMinutes = Math.Clamp(ReadIntSetting(state, DisplayBurnInIntervalSettingKey, 15), 1, 1440);
