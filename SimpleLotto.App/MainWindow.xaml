@@ -2359,7 +2359,8 @@
               IsTabStop="True">
             <Border x:Name="ClosingScanOverlayPanel"
                     MinWidth="320"
-                    MinHeight="360"
+                    MinHeight="280"
+                    Margin="16"
                     Padding="16"
                     Style="{StaticResource SlPanelBorderStyle}"
                     HorizontalAlignment="Center"

@@ -104,6 +104,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Reconnecting the paired scanner changes Settings and Dashboard status to listening; unplugging it shows a clear not-detected status.
    - Paired and unpaired keyboard-class scanners preserve the complete digit sequence regardless of inter-character timing and dispatch exactly once on Enter, matching the known-good `main` behavior. No inter-character or idle timer splits, emits, or discards barcode input.
    - With a paired scanner, focused Receiving and Closing use the `main` WinUI `KeyDown` path and suppress the background Raw Input callback for the session. Confirm the displayed scan exactly matches the printed barcode and each physical scan is processed once.
+   - Resize the app while Receiving and Closing scan overlays are open. Confirm the header and all footer actions remain visible/clickable, only the scan list scrolls, and narrow layouts stack buttons without horizontal or vertical clipping.
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
    - Receiving and Closing reject bin and price commands with `Ticket only.` Receiving finalizes through `Update Inventory`; Closing retains `Close Scanning`.
    - A price label can populate the activation and receiving game-price field while normal manual price entry remains possible.

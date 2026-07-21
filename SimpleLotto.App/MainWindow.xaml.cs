@@ -5018,8 +5018,6 @@ public sealed partial class MainWindow : Window
 
         var content = new Grid
         {
-            MinWidth = 320,
-            MinHeight = 360,
             RowSpacing = 12,
             ColumnSpacing = 12,
             IsTabStop = true
@@ -5107,11 +5105,12 @@ public sealed partial class MainWindow : Window
         void ApplyResponsiveLayout(double width)
         {
             var stacked = width > 0 && width < 640;
-            content.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
             if (stacked)
             {
                 if (content.RowDefinitions.Count == 3)
-                    content.RowDefinitions.Insert(2, new RowDefinition { Height = GridLength.Auto });
+                    content.RowDefinitions.Insert(2, new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                content.RowDefinitions[1].Height = GridLength.Auto;
+                content.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
                 Grid.SetRow(totalPanel, 1);
                 Grid.SetColumn(totalPanel, 0);
                 Grid.SetColumnSpan(totalPanel, 2);
@@ -5123,6 +5122,7 @@ public sealed partial class MainWindow : Window
             {
                 while (content.RowDefinitions.Count > 3)
                     content.RowDefinitions.RemoveAt(2);
+                content.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
                 Grid.SetRow(listPanel, 1);
                 Grid.SetColumnSpan(listPanel, 1);
                 Grid.SetRow(totalPanel, 1);
@@ -5138,12 +5138,9 @@ public sealed partial class MainWindow : Window
         {
             var width = ClosingScanOverlay.ActualWidth > 0 ? ClosingScanOverlay.ActualWidth : RootGrid.ActualWidth;
             var height = ClosingScanOverlay.ActualHeight > 0 ? ClosingScanOverlay.ActualHeight : RootGrid.ActualHeight;
-            ClosingScanOverlayPanel.Width = Math.Max(360, Math.Min(1120, width - 96));
-            ClosingScanOverlayPanel.Height = Math.Max(420, Math.Min(760, height - 120));
-            content.Width = Math.Max(320, ClosingScanOverlayPanel.Width - 32);
-            content.Height = Math.Max(360, ClosingScanOverlayPanel.Height - 84);
-            scanList.MaxHeight = Math.Max(180, content.Height - 100);
-            ApplyResponsiveLayout(content.Width);
+            ClosingScanOverlayPanel.Width = Math.Max(320, Math.Min(1120, width - 32));
+            ClosingScanOverlayPanel.Height = Math.Max(280, Math.Min(760, height - 32));
+            ApplyResponsiveLayout(ClosingScanOverlayPanel.Width - 32);
         }
 
         var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -5538,25 +5535,8 @@ public sealed partial class MainWindow : Window
         }
 
         var rootSize = Content.XamlRoot?.Size ?? new Windows.Foundation.Size(0, 0);
-        var availableDialogWidth = rootSize.Width > 0
-            ? Math.Max(360, rootSize.Width - 128)
-            : 1180;
-        var availableDialogHeight = rootSize.Height > 0
-            ? Math.Max(320, rootSize.Height - 180)
-            : 760;
-        var dialogMinWidth = rootSize.Width > 0
-            ? Math.Min(520, availableDialogWidth)
-            : 520;
-        var dialogMaxWidth = rootSize.Width > 0
-            ? Math.Min(1180, availableDialogWidth)
-            : 1180;
-        var dialogMinHeight = rootSize.Height > 0
-            ? Math.Min(420, availableDialogHeight)
-            : 420;
         var content = new Grid
         {
-            MinHeight = dialogMinHeight,
-            MaxHeight = availableDialogHeight,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             IsTabStop = true,
@@ -5652,20 +5632,40 @@ public sealed partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             MinWidth = 148
         };
-        var footer = new Grid { ColumnSpacing = 12 };
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        statusText.MaxLines = 2;
+        statusText.TextTrimming = TextTrimming.CharacterEllipsis;
+        var footerButtons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 12,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        footerButtons.Children.Add(discardSelectedScanButton);
+        footerButtons.Children.Add(cancelButton);
+        var footer = new Grid { RowSpacing = 8 };
+        footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         footer.Children.Add(statusText);
-        Grid.SetColumn(discardSelectedScanButton, 1);
-        footer.Children.Add(discardSelectedScanButton);
-        Grid.SetColumn(cancelButton, 2);
-        footer.Children.Add(cancelButton);
+        Grid.SetRow(footerButtons, 1);
+        footer.Children.Add(footerButtons);
         content.Children.Add(footer);
 
         void ApplyResponsiveDialogLayout(double width)
         {
             var stacked = width > 0 && width < 560;
+            var verticalFooterButtons = width > 0 && width < 400;
+            footerButtons.Orientation = verticalFooterButtons
+                ? Orientation.Vertical
+                : Orientation.Horizontal;
+            footerButtons.HorizontalAlignment = verticalFooterButtons
+                ? HorizontalAlignment.Stretch
+                : HorizontalAlignment.Right;
+            discardSelectedScanButton.HorizontalAlignment = verticalFooterButtons
+                ? HorizontalAlignment.Stretch
+                : HorizontalAlignment.Right;
+            cancelButton.HorizontalAlignment = verticalFooterButtons
+                ? HorizontalAlignment.Stretch
+                : HorizontalAlignment.Right;
             content.ColumnDefinitions[0].Width = new GridLength(2, GridUnitType.Star);
             content.ColumnDefinitions[1].Width = stacked
                 ? new GridLength(0)
@@ -5698,32 +5698,15 @@ public sealed partial class MainWindow : Window
 
         void ApplyDialogSize(Windows.Foundation.Size size)
         {
-            availableDialogWidth = size.Width > 0
-                ? Math.Max(360, size.Width - 128)
-                : 1180;
-            availableDialogHeight = size.Height > 0
-                ? Math.Max(320, size.Height - 180)
-                : 760;
-            dialogMinWidth = size.Width > 0
-                ? Math.Min(520, availableDialogWidth)
-                : 520;
-            dialogMaxWidth = size.Width > 0
-                ? Math.Min(1180, availableDialogWidth)
-                : 1180;
-            dialogMinHeight = size.Height > 0
-                ? Math.Min(420, availableDialogHeight)
-                : 420;
-
-            var panelWidth = dialogMaxWidth;
-            var panelHeight = availableDialogHeight;
+            var panelWidth = size.Width > 0
+                ? Math.Max(320, Math.Min(1180, size.Width - 32))
+                : 1120;
+            var panelHeight = size.Height > 0
+                ? Math.Max(280, Math.Min(760, size.Height - 32))
+                : 680;
             ClosingScanOverlayPanel.Width = panelWidth;
             ClosingScanOverlayPanel.Height = panelHeight;
-            content.Width = Math.Max(160, panelWidth - 32);
-            content.Height = Math.Max(160, panelHeight - 84);
-            content.MinHeight = dialogMinHeight;
-            content.MaxHeight = Math.Max(160, panelHeight - 84);
-            scanList.MaxHeight = Math.Max(180, panelHeight - 220);
-            ApplyResponsiveDialogLayout(size.Width);
+            ApplyResponsiveDialogLayout(panelWidth - 32);
         }
 
         ApplyDialogSize(rootSize);
