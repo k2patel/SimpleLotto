@@ -1574,7 +1574,7 @@
                                 <TextBlock Text="Settings"
                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                 <TextBlock x:Name="SettingsSubtitleText"
-                                           Text="Store, scanner, display, and game setup controls for the current installation."
+                                           Text="Store, users, scanner, display, and game setup controls for the current installation."
                                            Style="{StaticResource SlCaptionTextStyle}"/>
                             </StackPanel>
 
@@ -1750,6 +1750,105 @@
                                             </Border>
                                         </Grid>
                                     </Grid>
+                                </TabViewItem>
+
+                                <TabViewItem x:Name="UserSettingsTab"
+                                             Header="Users"
+                                             AutomationProperties.AutomationId="UserSettingsTab"
+                                             IsClosable="False">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <Grid RowSpacing="14">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock x:Name="PinSettingsTitleText"
+                                                           Text="Users and PINs"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock x:Name="PinSettingsDescriptionText"
+                                                           Text="Change your PIN or create/reset the optional Clerk login. Every PIN contains exactly four digits."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+
+                                            <Grid Grid.Row="1"
+                                                  ColumnSpacing="14">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <Border x:Name="OwnPinPanel"
+                                                        Style="{StaticResource SlPanelBorderStyle}">
+                                                    <StackPanel Spacing="10">
+                                                        <TextBlock x:Name="OwnPinTitleText"
+                                                                   Text="Your PIN"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="OwnPinInstructionText"
+                                                                   Text="Confirm your current PIN before replacing it."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <PasswordBox x:Name="CurrentUserPinBox"
+                                                                     Header="Current 4-digit PIN"
+                                                                     AutomationProperties.AutomationId="CurrentUserPin"
+                                                                     MaxLength="4"/>
+                                                        <PasswordBox x:Name="NewUserPinBox"
+                                                                     Header="New 4-digit PIN"
+                                                                     AutomationProperties.AutomationId="NewUserPin"
+                                                                     MaxLength="4"/>
+                                                        <PasswordBox x:Name="ConfirmUserPinBox"
+                                                                     Header="Confirm new PIN"
+                                                                     AutomationProperties.AutomationId="ConfirmUserPin"
+                                                                     MaxLength="4"/>
+                                                        <Button x:Name="ChangeOwnPinButton"
+                                                                Content="Change My PIN"
+                                                                AutomationProperties.AutomationId="ChangeOwnPin"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="ChangeOwnPinButton_Click"/>
+                                                        <TextBlock x:Name="OwnPinStatusText"
+                                                                   Text="Enter your current and new PINs."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <Border x:Name="ClerkResetPanel"
+                                                        Grid.Column="1"
+                                                        Style="{StaticResource SlPanelBorderStyle}">
+                                                    <StackPanel Spacing="10">
+                                                        <TextBlock Text="Reset Clerk PIN"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="ClerkAccountStatusText"
+                                                                   Text="No Clerk login is configured."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBox x:Name="ClerkNameSettingsBox"
+                                                                 Header="Clerk name"
+                                                                 AutomationProperties.AutomationId="ClerkLoginName"
+                                                                 MaxLength="64"/>
+                                                        <PasswordBox x:Name="NewClerkPinSettingsBox"
+                                                                     Header="New 4-digit PIN"
+                                                                     AutomationProperties.AutomationId="NewClerkPin"
+                                                                     MaxLength="4"/>
+                                                        <PasswordBox x:Name="ConfirmClerkPinSettingsBox"
+                                                                     Header="Confirm new PIN"
+                                                                     AutomationProperties.AutomationId="ConfirmClerkPin"
+                                                                     MaxLength="4"/>
+                                                        <Button x:Name="ResetClerkPinButton"
+                                                                Content="Reset Clerk PIN"
+                                                                AutomationProperties.AutomationId="ResetClerkPin"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="ResetClerkPinButton_Click"/>
+                                                        <TextBlock x:Name="ClerkResetStatusText"
+                                                                   Text="Enter a Clerk name and matching four-digit PIN."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+                                        </Grid>
+                                    </ScrollViewer>
                                 </TabViewItem>
 
                                 <TabViewItem x:Name="ScannerDisplaySettingsTab"
@@ -2399,11 +2498,18 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <PasswordBox x:Name="ManagerPasswordBox"
-                                             Header="Manager password"/>
+                                             Header="Manager 4-digit PIN"
+                                             AutomationProperties.AutomationId="ManagerSetupPin"
+                                             MaxLength="4"/>
                                 <PasswordBox x:Name="ClerkPasswordBox"
                                              Grid.Column="1"
-                                             Header="Clerk password (optional)"/>
+                                             Header="Clerk 4-digit PIN (optional)"
+                                             AutomationProperties.AutomationId="ClerkSetupPin"
+                                             MaxLength="4"/>
                             </Grid>
+
+                            <TextBlock Text="Each PIN must contain exactly four digits."
+                                       Style="{StaticResource SlCaptionTextStyle}"/>
 
                             <TextBox x:Name="ClerkNameBox"
                                      Header="Clerk name"
@@ -2541,10 +2647,13 @@
 
                         <ComboBox x:Name="LoginUserComboBox"
                                   Header="User"
-                                  HorizontalAlignment="Stretch"/>
+                                  AutomationProperties.AutomationId="LoginUser"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="LoginUserComboBox_SelectionChanged"/>
 
                         <PasswordBox x:Name="LoginPasswordBox"
                                      Header="Password"
+                                     AutomationProperties.AutomationId="LoginPassword"
                                      KeyDown="LoginPasswordBox_KeyDown"/>
                     </StackPanel>
 
@@ -2556,7 +2665,7 @@
                         </Grid.ColumnDefinitions>
 
                         <TextBlock x:Name="StartupStatusText"
-                                   Text="Select the store state and create the Manager password."
+                                   Text="Select the store state and create the Manager PIN."
                                    Style="{StaticResource SlCaptionTextStyle}"
                                    VerticalAlignment="Center"
                                    TextWrapping="Wrap"/>

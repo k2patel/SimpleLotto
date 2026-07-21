@@ -35,7 +35,7 @@ SimpleLotto has only two possible roles:
 
 Role-based access is always enabled. Do not build a setting to turn role-based access on or off.
 
-First-install setup must require creation of a Manager password before the system can be used. A Manager account is mandatory.
+First-install setup must require creation of a Manager PIN before the system can be used. A Manager account is mandatory.
 
 Clerk accounts are optional. The first-install workflow may allow the installer to create a Clerk account, but it must not require one.
 
@@ -43,7 +43,13 @@ Login expectations:
 
 - A login screen is always shown after setup is complete.
 - Any valid user can log in.
-- The password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
+- The Password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
+- During the PIN migration release, keep the existing Password field and unrestricted login input so every installed legacy password remains usable for its required one-time migration.
+- After any legacy password verifies successfully, do not enter the application yet. Require the user to create and confirm a different four-digit ASCII PIN, persist its versioned PBKDF2 hash, and only then complete login.
+- Validate and capture the new PIN before the required `ContentDialog` closes. Invalid, mismatched, or unchanged values must keep the same dialog open with inline feedback; do not close and recreate the dialog or read cleared password controls after closing.
+- New setup credentials, user-initiated credential changes, and Manager-authorized Clerk resets must create exactly four-digit ASCII PINs.
+- Do not add password-composition rules beyond the four-digit PIN requirement, failed-login delays, or account lockouts.
+- Release a later strict PIN-enforcement version only after the migration release has given installed Manager and Clerk accounts the opportunity to convert. That later version may limit the login field itself to four digits.
 - Logging in controls access only. It does not start, end, or otherwise define a financial shift/close interval.
 - SimpleLotto is a single-computer, single-active-user application.
 - Only one user is actively operating the application at a time.
@@ -53,12 +59,12 @@ Login expectations:
 - The same logged-in user may close multiple times in the same day.
 - Manager access is required for sensitive system settings and user management.
 - Clerk access, when configured, should support normal sales, bin, inventory, and shift-closing workflows unless a specific action is manager-sensitive.
-- Settings is Manager-only except Clerk may see a limited Settings page with Scanner and Display tabs.
-- Additional Clerk-visible Settings information may be added later, but current scope is Scanner and Display only.
+- Settings is Manager-only except Clerk may see a limited Settings page with PIN and Scanner and Display tabs.
+- Manager and Clerk may verify their current PIN and change their own PIN. A Clerk must never see Manager-only store, user-reset, backup, email, audit, or game settings.
 
 First-install workflow:
 
-1. Create required Manager password.
+1. Create required four-digit Manager PIN.
 2. Optionally create a Clerk user.
 3. Scan the initial bin and bundle/ticket placements.
 4. Before initial import can finish, enter and persist the ticket price and bundle price once for every distinct imported Game ID that is not already configured.
@@ -490,7 +496,7 @@ Closing page bin status:
 
 ### Settings
 
-Settings owns configuration and system management. This includes store setup, display setup, scanner/display connectivity, users/permissions if needed later, backup options, and any technical diagnostics.
+Settings owns configuration and system management. This includes store setup, display setup, scanner/display connectivity, Manager/Clerk PIN management, backup options, and any technical diagnostics.
 
 Settings must include state setup and technical setup:
 
@@ -499,6 +505,9 @@ Settings must include state setup and technical setup:
 - Displays: handles Rdisplay registration, health, config, and diagnostics.
 - Scanner: handles scanner pairing, health, config, and diagnostics.
 - Settings > Scanner and Display should present scanner controls and display registration as two noticeable cards, with registered displays listed below as individual display cards.
+- Settings > Users/PIN lets the active Manager or Clerk change their own PIN. This requires the active user's current PIN plus a different, matching four-digit replacement.
+- Only a Manager sees the Clerk reset controls. A Manager may create or reset the optional Clerk login by saving a Clerk name and matching four-digit PIN; the Clerk's previous PIN is not required.
+- PIN changes take effect for the next login without ending the current close interval or forcing the active user to log out.
 - Backup and email settings belong here when available.
 - Game setup does not live under Settings; it belongs under Inventory.
 
@@ -784,7 +793,10 @@ Reliability and recovery rules:
 
 Security rules:
 
-- Manager/Clerk passwords must be stored as salted password hashes, never plaintext.
+- Manager/Clerk PINs must be stored as versioned, salted PBKDF2-HMAC-SHA256 hashes, never plaintext. New hashes store their format version and work factor so they can be upgraded later.
+- Existing salted SHA-256 login hashes remain readable only for backward-compatible verification during the PIN migration release. After any successful legacy login, require a different four-digit PIN and replace only the selected account's stored hash with the current PBKDF2 format before completing login.
+- Do not silently reuse an existing four-digit legacy password as the new PIN. The required migration must collect and confirm a different PIN so the password change is explicit.
+- Keep the existing `manager_password_hash` and `clerk_password_hash` setting keys for database compatibility even though the product terminology is PIN.
 - Email SMTP passwords and display tokens must be stored securely.
 - Scanner/display diagnostics visible to Clerk must not expose secrets.
 - Audit privileged actions: setup, login, closing, corrections, settings changes, display pairing, and inventory removal.
