@@ -10,6 +10,8 @@ namespace SimpleLotto.App.Services;
 
 public sealed class LocalStore
 {
+    public const int RecentAuditLogLimit = 200;
+
     private const int SchemaVersion = 17;
     private const string SystemActorId = "system";
     private const string LegacyActorId = "legacy-migration";
@@ -2606,7 +2608,9 @@ public sealed class LocalStore
             SELECT occurred_at_utc, category, action, actor, detail, actor_id
             FROM audit_log
             ORDER BY occurred_at_utc DESC
+            LIMIT $limit
             """;
+        cmd.Parameters.AddWithValue("$limit", RecentAuditLogLimit);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

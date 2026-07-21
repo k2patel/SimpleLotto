@@ -1576,7 +1576,8 @@
                             <TabView x:Name="SettingsTabs"
                                      Grid.Row="1"
                                      IsAddTabButtonVisible="False"
-                                     CanDragTabs="False">
+                                     CanDragTabs="False"
+                                     SelectionChanged="SettingsTabs_SelectionChanged">
                                 <TabViewItem x:Name="StoreSettingsTab"
                                              Header="Store"
                                              IsClosable="False">
@@ -2278,11 +2279,13 @@
                                                 <ListView x:Name="AuditLogListView"
                                                           Grid.Row="3"
                                                           MinHeight="220"
+                                                          MaxHeight="360"
+                                                          VerticalAlignment="Top"
                                                           SelectionMode="None"
                                                           SizeChanged="PagedList_SizeChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
-                                                            <Grid MinHeight="44"
+                                                            <Grid Height="44"
                                                                   Padding="12,8"
                                                                   ColumnSpacing="12">
                                                                 <Grid.ColumnDefinitions>
@@ -2299,14 +2302,17 @@
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 <TextBlock Grid.Column="2"
                                                                            Text="{Binding Action}"
+                                                                           TextTrimming="CharacterEllipsis"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
                                                                 <TextBlock Grid.Column="3"
                                                                            Text="{Binding Actor}"
+                                                                           TextTrimming="CharacterEllipsis"
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 <TextBlock Grid.Column="4"
                                                                            Text="{Binding Detail}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
-                                                                           TextWrapping="Wrap"/>
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           TextWrapping="NoWrap"/>
                                                             </Grid>
                                                         </DataTemplate>
                                                     </ListView.ItemTemplate>

@@ -630,8 +630,9 @@ Scanner rules:
 
 Capture, classification, and routing contract:
 
-- There is one scanner input layer. It captures raw barcode characters first, identifies the complete scan, classifies it, and only then routes the classified value to the active workflow. Receiving, Closing, startup import, activation, and normal sales must not implement separate scanner stacks.
+- There is one scanner routing contract with two capture adapters: focused WinUI `KeyDown` for dedicated Receiving/Closing and paired Raw Input for dashboard/background/tray operation. Each adapter identifies one complete Enter-terminated scan before routing it, and only one adapter may own a physical scan at a time.
 - A paired scanner uses a background Raw Input message window filtered to the selected HID device identity (VID/PID/serial). It remains active when the window is unfocused or minimized to the tray and must not capture ordinary keyboard text from another device.
+- Focused dedicated Receiving and Closing workflows use the same WinUI `KeyDown` capture path as the known-good `main` implementation. While either workflow owns scanner input, suppress the paired background Raw Input callback so the same physical scan cannot be translated differently or processed twice. Background Raw Input remains for dashboard and tray workflows.
 - A keyboard-class scanner scan is grouped exactly like the known-good `main` workflow: accumulate every mapped key and dispatch the complete sequence only when the scanner sends Enter (the usual carriage-return keyboard-wedge suffix). Do not split, emit, or discard barcode input using inter-character, burst, or idle timers.
 - The configurable bin/bundle activation scan-pair window is separate from barcode grouping. Its default remains five seconds and groups already completed bin, ticket/bundle, and price scans for one placement workflow.
 - Unpaired fallback has no device identity. It may handle a scanner while the app is focused, but it must not be relied on for simultaneous/interleaved use of two scanners; pair the operating scanner for background and device-isolated capture.
@@ -645,6 +646,7 @@ Audit rules:
 - Audit is part of the operational accountability surface, not optional diagnostics.
 - Record scanner activity, rejected/unrecognized scans, sale records, bundle activations, bin placements, opening/initial placements, corrections, settings changes, login/logout, display registration changes, license checks, and closing finalization.
 - Audit entries should include enough detail to reconstruct what happened: active user or system actor, timestamp, workflow/source, game ID, bundle ID, bin, ticket/range, quantity, amount, next ticket where relevant, and failure reason when rejected.
+- Persist the complete audit trail in SQLite, but keep the Settings Audit surface bounded: load only a fixed recent window into UI memory, show only the rows that fit one constrained page, truncate long cell text visually, and use Previous/Next rather than an ever-growing vertical page. Recording an audit event must not repeatedly sort the lifetime audit history while the Audit tab is closed.
 - Focused receiving and closing sessions must audit session start, accepted scans, rejected scans, cancellation/close outcome, finalization, and reconciliation decisions. Receiving duplicates remain the explicit exception because they are audio-only no-op input.
 - Game price/name/image setup changes and inventory removals must be audited after successful persistence. Audit detail must state that inventory removal preserves prior sales and activation history.
 - Audit write failures must not block clerk workflow, but they must be logged to the application log so the failure itself can be diagnosed.

@@ -103,6 +103,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - With the paired scanner active and SimpleLotto hidden in the tray, scanning an unknown bundle restores and foregrounds the app before the activation-bin dialog; a missing-price activation also restores before its price dialog. Configured-game sales that need no dialog leave the app in the tray.
    - Reconnecting the paired scanner changes Settings and Dashboard status to listening; unplugging it shows a clear not-detected status.
    - Paired and unpaired keyboard-class scanners preserve the complete digit sequence regardless of inter-character timing and dispatch exactly once on Enter, matching the known-good `main` behavior. No inter-character or idle timer splits, emits, or discards barcode input.
+   - With a paired scanner, focused Receiving and Closing use the `main` WinUI `KeyDown` path and suppress the background Raw Input callback for the session. Confirm the displayed scan exactly matches the printed barcode and each physical scan is processed once.
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
    - Receiving and Closing reject bin and price commands with `Ticket only.` Receiving finalizes through `Update Inventory`; Closing retains `Close Scanning`.
    - A price label can populate the activation and receiving game-price field while normal manual price entry remains possible.
@@ -125,6 +126,10 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - `Move Bundle` shows the selected Game ID/Bundle ID, accepts only a whole configured destination bin, rejects the current bin, and provides `OK` and `Cancel`.
    - Cancelling changes nothing. Confirming changes only the active placement bin while preserving current ticket, sold-out state, sales, activation history, and close-interval history.
    - After a successful move, Bins, Inventory, Closing, Rdisplay, and Audit show the destination bin and the old-to-new movement.
+21. Verify the Settings Audit viewport and performance:
+   - Seed more than 200 audit rows and confirm startup loads only the latest 200 into UI memory while every row remains stored in SQLite.
+   - Confirm the Audit list stays within one screen-height page, long detail text is ellipsized, and Previous/Next changes pages without creating an unbounded outer vertical scroll.
+   - Record scanner and workflow audit events while another page is open and confirm the Audit page refresh is deferred until it is opened.
 
 ## Missing Follow-Up Work
 

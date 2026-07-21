@@ -126,8 +126,10 @@ public sealed partial class MainWindow : Window
     private bool _initialImportComplete;
     private bool _isWindowInitialized;
     private bool _isScannerPaired;
+    private bool _useFocusedScannerCapture;
     private bool _automaticUpgradeCheckRunning;
     private bool _loginInProgress;
+    private bool _auditLogPageDirty;
     private string _lastAutomaticUpgradeCheckDate = string.Empty;
     private ImportBin? _pendingImportBin;
     private ImportTicket? _pendingImportTicket;
@@ -557,14 +559,30 @@ public sealed partial class MainWindow : Window
         try
         {
             _store.InsertAudit(record);
-            _auditLogRows.Insert(0, AuditLogRow.From(record));
-            ApplyAuditLogPage(resetPage: true);
+            AddAuditLogRowToUi(record);
         }
         catch (Exception ex)
         {
             // Audit failures should not block the operator workflow.
             AppLog.Error("Audit insert failed.", ex);
         }
+    }
+
+    private void AddAuditLogRowToUi(StoredAuditRecord record)
+    {
+        _auditLogRows.Insert(0, AuditLogRow.From(record));
+        while (_auditLogRows.Count > LocalStore.RecentAuditLogLimit)
+            _auditLogRows.RemoveAt(_auditLogRows.Count - 1);
+
+        if (SettingsContent.Visibility == Visibility.Visible &&
+            ReferenceEquals(SettingsTabs.SelectedItem, AuditSettingsTab))
+        {
+            ApplyAuditLogPage(resetPage: true);
+            _auditLogPageDirty = false;
+            return;
+        }
+
+        _auditLogPageDirty = true;
     }
 
     private static string TruncateAuditDetail(string detail)
@@ -827,6 +845,9 @@ public sealed partial class MainWindow : Window
 
     private void ScannerInput_ScanReceived(string raw)
     {
+        if (_useFocusedScannerCapture)
+            return;
+
         try
         {
             if (!TryClassifyScan(raw, out var scan))
@@ -2079,7 +2100,7 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
             {
-                if (!_scannerInput.IsActivelyCapturing)
+                if (_useFocusedScannerCapture || !_scannerInput.IsActivelyCapturing)
                     ObserveFocusedCommandScanKey(args, priceScanBuffer, scan =>
                         _scannerScanOverride?.Invoke(scan) == true);
             }),
@@ -2905,6 +2926,11 @@ public sealed partial class MainWindow : Window
         InventoryContent.Visibility = section == "Inventory" ? Visibility.Visible : Visibility.Collapsed;
         ClosingContent.Visibility = section == "Closing" ? Visibility.Visible : Visibility.Collapsed;
         SettingsContent.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
+        if (section == "Settings" && ReferenceEquals(SettingsTabs.SelectedItem, AuditSettingsTab))
+        {
+            ApplyAuditLogPage(resetPage: _auditLogPageDirty);
+            _auditLogPageDirty = false;
+        }
         SetSelectedNav(section);
         StatusText.Text = section;
     }
@@ -3524,7 +3550,10 @@ public sealed partial class MainWindow : Window
             _pagedAuditLogRows.Add(row);
         }
 
-        AuditLogCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} of {_auditLogRows.Count.ToString(CultureInfo.CurrentCulture)} action{(_auditLogRows.Count == 1 ? string.Empty : "s")}";
+        var recentWindowText = _auditLogRows.Count == LocalStore.RecentAuditLogLimit
+            ? $"latest {LocalStore.RecentAuditLogLimit.ToString(CultureInfo.CurrentCulture)}"
+            : $"{_auditLogRows.Count.ToString(CultureInfo.CurrentCulture)} recent";
+        AuditLogCountText.Text = $"{filtered.Count.ToString(CultureInfo.CurrentCulture)} matching of {recentWindowText} action{(_auditLogRows.Count == 1 ? string.Empty : "s")}";
         AuditLogPageStatusText.Text = $"Page {_auditLogPage.ToString(CultureInfo.CurrentCulture)} of {totalPages.ToString(CultureInfo.CurrentCulture)}";
         AuditLogPreviousPageButton.IsEnabled = _auditLogPage > 1;
         AuditLogNextPageButton.IsEnabled = _auditLogPage < totalPages;
@@ -3786,6 +3815,15 @@ public sealed partial class MainWindow : Window
     private void AuditLogSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyAuditLogPage(resetPage: true);
+    }
+
+    private void SettingsTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(SettingsTabs.SelectedItem, AuditSettingsTab))
+            return;
+
+        ApplyAuditLogPage(resetPage: _auditLogPageDirty);
+        _auditLogPageDirty = false;
     }
 
     private void ClosingManualTotalBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -4940,15 +4978,15 @@ public sealed partial class MainWindow : Window
 
         void AcceptScan(string raw)
         {
-            if (!TryClassifyScan(raw, out var scan) || scan.Kind != ScanKind.Ticket)
+            if (finishing)
             {
-                statusText.Text = "Scan error: scan a configured-state ticket barcode.";
-                TryRecordAudit("scanner", "Receiving scan rejected", $"Unrecognized scan {raw}");
+                statusText.Text = "Scan error: inventory update is in progress.";
+                TryRecordAudit("scanner", "Receiving scan rejected", $"Received while finalizing: {raw}");
                 _ = SpeakAsync("Scan again.");
                 return;
             }
 
-            foreach (var segment in new[] { scan.Raw })
+            foreach (var segment in SplitImportScanInput(raw))
             {
                 var ticket = TryParseImportTicket(segment);
                 if (ticket is null)
@@ -4994,10 +5032,7 @@ public sealed partial class MainWindow : Window
         content.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
-            {
-                if (!_scannerInput.IsActivelyCapturing)
-                    CaptureGlobalScanKey(args, dialogScanBuffer, AcceptScan, statusText);
-            }),
+                CaptureGlobalScanKey(args, dialogScanBuffer, AcceptScan, statusText)),
             handledEventsToo: true);
 
         var promptText = new TextBlock
@@ -5224,28 +5259,8 @@ public sealed partial class MainWindow : Window
         cancelButton.Click += cancelHandler;
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
         _isWorkflowDialogOpen = true;
-        var previousScannerOverride = _scannerScanOverride;
-        _scannerScanOverride = scan =>
-        {
-            if (finishing)
-            {
-                statusText.Text = "Scan error: inventory update is in progress.";
-                TryRecordAudit("scanner", "Receiving scan rejected", $"Received while finalizing: {scan.Raw}");
-                _ = SpeakAsync("Scan again.");
-                return true;
-            }
-
-            if (scan.Kind != ScanKind.Ticket)
-            {
-                statusText.Text = "Receiving accepts ticket barcodes only.";
-                TryRecordAudit("scanner", "Receiving scan rejected", $"Expected ticket barcode: {scan.Raw}");
-                _ = SpeakAsync("Ticket only.");
-                return true;
-            }
-
-            AcceptScan(scan.Raw);
-            return true;
-        };
+        var previousFocusedScannerCapture = _useFocusedScannerCapture;
+        _useFocusedScannerCapture = true;
         try
         {
             TryRecordAudit("inventory", "Receiving scan started", "Focused receiving session opened");
@@ -5276,7 +5291,7 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlayCloseButton.Content = "Close Scanning";
             ClosingScanOverlayCloseButton.IsEnabled = true;
             dialogScanBuffer.Clear();
-            _scannerScanOverride = previousScannerOverride;
+            _useFocusedScannerCapture = previousFocusedScannerCapture;
             _isWorkflowDialogOpen = false;
         }
     }
@@ -5309,7 +5324,7 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
             {
-                if (!_scannerInput.IsActivelyCapturing)
+                if (_useFocusedScannerCapture || !_scannerInput.IsActivelyCapturing)
                     ObserveFocusedCommandScanKey(args, priceScanBuffer, scan =>
                         _scannerScanOverride?.Invoke(scan) == true);
             }),
@@ -5492,19 +5507,22 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                if (!TryClassifyScan(raw, out var scan) || scan.Kind != ScanKind.Ticket)
-                {
-                    statusText.Text = "Scan error: closing accepts ticket barcodes only.";
-                    TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
-                    _ = SpeakAsync("Ticket only.");
+                raw = raw.Trim();
+                if (string.IsNullOrWhiteSpace(raw))
                     return;
-                }
 
-                raw = scan.Raw;
                 AppLog.Info($"Closing scan received: {raw}");
                 _closingScanCaptured = true;
-                AppLog.Info($"Closing scan segment: {raw}");
-                ProcessClosingScanSegment(raw, statusText);
+                var processed = false;
+                foreach (var segment in SplitImportScanInput(raw))
+                {
+                    processed = true;
+                    AppLog.Info($"Closing scan segment: {segment}");
+                    ProcessClosingScanSegment(segment, statusText);
+                }
+
+                if (!processed)
+                    statusText.Text = "Scan was empty.";
 
                 RefreshDialogTotals();
                 RefreshClosingBins();
@@ -5556,10 +5574,7 @@ public sealed partial class MainWindow : Window
         content.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
-            {
-                if (!_scannerInput.IsActivelyCapturing)
-                    CaptureGlobalScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText);
-            }),
+                CaptureGlobalScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText)),
             handledEventsToo: true);
 
         var totalView = new Viewbox
@@ -5756,20 +5771,8 @@ public sealed partial class MainWindow : Window
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
 
         _isWorkflowDialogOpen = true;
-        var previousScannerOverride = _scannerScanOverride;
-        _scannerScanOverride = scan =>
-        {
-            if (scan.Kind != ScanKind.Ticket)
-            {
-                statusText.Text = "Closing accepts ticket barcodes only.";
-                TryRecordAudit("closing", "Closing scan rejected", $"Expected ticket barcode: {scan.Raw}");
-                _ = SpeakAsync("Ticket only.");
-                return true;
-            }
-
-            AcceptDialogScan(scan.Raw);
-            return true;
-        };
+        var previousFocusedScannerCapture = _useFocusedScannerCapture;
+        _useFocusedScannerCapture = true;
         try
         {
             AppLog.Info("Closing scan overlay opened.");
@@ -5813,7 +5816,7 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlay.Visibility = Visibility.Collapsed;
             ClosingScanOverlayContent.Children.Clear();
             dialogScanBuffer.Clear();
-            _scannerScanOverride = previousScannerOverride;
+            _useFocusedScannerCapture = previousFocusedScannerCapture;
             _isWorkflowDialogOpen = false;
             RefreshClosingBins();
             RefreshClosingActionState();
@@ -6394,8 +6397,7 @@ public sealed partial class MainWindow : Window
         _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
         ApplyClosingHistoryPage(resetPage: true);
         ClosingHistoryListView.SelectedItem = _pagedClosingHistoryRows.FirstOrDefault();
-        _auditLogRows.Insert(0, AuditLogRow.From(auditRecord));
-        ApplyAuditLogPage(resetPage: true);
+        AddAuditLogRowToUi(auditRecord);
         _sales.Clear();
         ClosingOnlineSaleBox.Value = 0;
         ClosingOnlineCashoutBox.Value = 0;
