@@ -439,6 +439,10 @@ Closing scan rules:
 - The scan dialog should accept barcode scans and show a live count of scanned barcodes.
 - The scan dialog should show enough live feedback for the user to know scans are being captured, but it should not finalize reconciliation while the user is still scanning.
 - The scan dialog should allow the user to finish/close the scanning session.
+- Closing the scan dialog must preserve all collected valid evidence. Reopening `Start Closing Scan` resumes that same in-progress evidence instead of resetting it.
+- Only the explicit `Cancel Closing Scan` > `Discard` confirmation, a successful finalized close, or an explicit selected-error discard may remove in-progress closing evidence.
+- A correct rescan for the same physical bundle must replace its earlier rejected scan state without deleting valid scans for other bundles.
+- The scan dialog must allow the operator to select and discard a rejected/error row. Accepted scan rows are not individually discardable, and discarding an error must not clear accepted evidence.
 - During the scan dialog, the user scans ticket barcodes only.
 - During the scan dialog, the user does not scan bin barcodes.
 - During the scan dialog, the user does not click/select a bin to tell the system where the ticket belongs.
@@ -628,7 +632,7 @@ Capture, classification, and routing contract:
 
 - There is one scanner input layer. It captures raw barcode characters first, identifies the complete scan, classifies it, and only then routes the classified value to the active workflow. Receiving, Closing, startup import, activation, and normal sales must not implement separate scanner stacks.
 - A paired scanner uses a background Raw Input message window filtered to the selected HID device identity (VID/PID/serial). It remains active when the window is unfocused or minimized to the tray and must not capture ordinary keyboard text from another device.
-- An unpaired scanner is a focused fallback only. It accepts a barcode-shaped burst with a maximum 50 ms gap between characters and at least four characters. Enter/Tab completes the burst; a 400 ms idle period also completes a burst for scanners that do not send a terminator. An incomplete fragment is discarded after five seconds.
+- A keyboard-class scanner scan is grouped by its configured terminator, not by inter-character timing. Accumulate the complete key sequence and dispatch it only when the scanner sends Enter/Tab (the usual CR/LF-style keyboard-wedge suffix). Do not split or emit barcodes using 50 ms/400 ms burst or idle heuristics. A paired partial sequence with no terminator may be discarded after five seconds, but it must never be emitted as a barcode fragment.
 - The five-second incomplete-raw-buffer cleanup is independent from the configurable bin/bundle activation scan-pair window. The default activation scan-pair window remains five seconds and groups valid bin, ticket/bundle, and price inputs for one placement workflow.
 - Unpaired fallback has no device identity. It may handle a scanner while the app is focused, but it must not be relied on for simultaneous/interleaved use of two scanners; pair the operating scanner for background and device-isolated capture.
 - The supported non-ticket command labels are `BIN-<1-4 digits>` and `PRICE-<1-5 digits>`. A price label payload is cents. Ticket scans must pass the configured state barcode parser. Any other character sequence is not a SimpleLotto barcode and must never be interpreted by stripping characters or extracting a numeric suffix.

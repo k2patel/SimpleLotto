@@ -93,6 +93,8 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - A manual run with `publish_update_manifest` enabled uploads the manifest and the installed app's Check for Upgrade action discovers that exact build.
 16. Verify closing scan cancellation:
    - `Close scanning` keeps temporary evidence available for review and finalization.
+   - Reopening `Start Closing Scan` resumes the same valid scan rows, matched bins, generated closing ranges, unmatched scans, and errors instead of resetting them.
+   - Rescanning the correct ticket for a bundle replaces that bundle's earlier rejected error. Selecting `Discard Selected Error` removes only that rejected row; valid scans remain and can still finalize.
    - `Cancel Closing Scan` with evidence asks whether to discard or keep scanning.
    - Discard clears closing rows, matched bins, issues, unmatched scans, reconciliation changes, and generated closing sales without changing persisted shift data.
    - Cancellation is audited with discarded counts.
@@ -100,8 +102,8 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - A paired HID scanner records valid scans while the app is unfocused and while it is minimized to the tray; normal keyboard typing from a different device does not create a scan or audit row.
    - With the paired scanner active and SimpleLotto hidden in the tray, scanning an unknown bundle restores and foregrounds the app before the activation-bin dialog; a missing-price activation also restores before its price dialog. Configured-game sales that need no dialog leave the app in the tray.
    - Reconnecting the paired scanner changes Settings and Dashboard status to listening; unplugging it shows a clear not-detected status.
-   - An unpaired scanner completes a valid fast barcode both with Enter/Tab and after 400 ms idle; ordinary typing in text, password, search, rich-text, and number fields does not become a scan.
-   - An incomplete unpaired or paired fragment is discarded after five seconds without affecting the separate configurable activation bin/bundle pairing window.
+   - Paired and unpaired keyboard-class scanners preserve the complete digit sequence regardless of inter-character timing and dispatch exactly once on Enter/Tab. No 50 ms split or 400 ms idle emission creates barcode fragments.
+   - An incomplete paired Raw Input fragment with no terminator is discarded after five seconds without being emitted as a barcode or affecting the separate configurable activation bin/bundle pairing window.
    - `BIN-<digits>`, `PRICE-<cents>`, and a configured-state ticket are classified before routing. Email-like text or any other non-barcode sequence is rejected, audited with its raw value, and says `Scan again.`
    - Receiving and Closing reject bin and price commands with `Ticket only.` Receiving finalizes through `Update Inventory`; Closing retains `Close Scanning`.
    - A price label can populate the activation and receiving game-price field while normal manual price entry remains possible.

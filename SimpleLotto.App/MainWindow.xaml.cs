@@ -144,8 +144,6 @@ public sealed partial class MainWindow : Window
     private int _auditLogPage = 1;
     private readonly StringBuilder _startupScanBuffer = new();
     private readonly StringBuilder _focusedScanBuffer = new();
-    private readonly ScanBurstState _startupScanBurst = new();
-    private readonly ScanBurstState _focusedScanBurst = new();
     private string _dashboardPendingBin = string.Empty;
     private ImportTicket? _dashboardPendingTicket;
     private long? _dashboardPendingPriceCents;
@@ -201,21 +199,6 @@ public sealed partial class MainWindow : Window
         long? PriceCents = null);
 
     private sealed record ActivationBinSelection(int BinNumber, long? PriceCents);
-
-    private sealed class ScanBurstState
-    {
-        public DateTime LastCharacterAtUtc { get; set; } = DateTime.MinValue;
-
-        public int Version { get; private set; }
-
-        public int Advance() => ++Version;
-
-        public void Reset()
-        {
-            LastCharacterAtUtc = DateTime.MinValue;
-            Version++;
-        }
-    }
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -835,11 +818,11 @@ public sealed partial class MainWindow : Window
         if (StartupOverlay.Visibility == Visibility.Visible)
         {
             if (_startupStage == StartupStage.Import)
-                CaptureGlobalScanKey(e, _startupScanBuffer, _startupScanBurst, ProcessImportScanInput, ImportScanStatusText);
+                CaptureGlobalScanKey(e, _startupScanBuffer, ProcessImportScanInput, ImportScanStatusText);
             return;
         }
 
-        CaptureGlobalScanKey(e, _focusedScanBuffer, _focusedScanBurst, ProcessFocusedScanInput, DashboardScannerStatusText);
+        CaptureGlobalScanKey(e, _focusedScanBuffer, ProcessFocusedScanInput, DashboardScannerStatusText);
     }
 
     private void ScannerInput_ScanReceived(string raw)
@@ -935,21 +918,18 @@ public sealed partial class MainWindow : Window
     private void CaptureGlobalScanKey(
         KeyRoutedEventArgs e,
         StringBuilder buffer,
-        ScanBurstState state,
         Action<string> processScan,
         TextBlock? statusText)
     {
-        const int maxInterCharacterMilliseconds = 50;
         const int minimumBarcodeCharacters = 4;
 
-        if (e.Key == VirtualKey.Enter)
+        if (e.Key is VirtualKey.Enter or VirtualKey.Tab)
         {
             if (buffer.Length == 0)
                 return;
 
             var raw = buffer.ToString();
             buffer.Clear();
-            state.Reset();
             if (raw.Length < minimumBarcodeCharacters)
                 return;
 
@@ -961,74 +941,18 @@ public sealed partial class MainWindow : Window
         if (!TryMapScanKey(e.Key, out var character))
             return;
 
-        var now = DateTime.UtcNow;
-        if (buffer.Length > 0 &&
-            (now - state.LastCharacterAtUtc).TotalMilliseconds > maxInterCharacterMilliseconds)
-        {
-            buffer.Clear();
-        }
-
-        state.LastCharacterAtUtc = now;
         buffer.Append(character);
         e.Handled = true;
         if (buffer.Length >= minimumBarcodeCharacters && statusText is not null)
             statusText.Text = "Scanning...";
 
-        ScheduleGlobalScanFlush(buffer, state, processScan, statusText, minimumBarcodeCharacters);
-    }
-
-    private void ScheduleGlobalScanFlush(
-        StringBuilder buffer,
-        ScanBurstState state,
-        Action<string> processScan,
-        TextBlock? statusText,
-        int minimumBarcodeCharacters)
-    {
-        const int idleFlushMilliseconds = 400;
-        const int staleDropMilliseconds = 5000;
-        var version = state.Advance();
-        _ = Task.Delay(idleFlushMilliseconds).ContinueWith(_ =>
-        {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (version != state.Version || buffer.Length == 0)
-                    return;
-
-                if (buffer.Length >= minimumBarcodeCharacters)
-                {
-                    var raw = buffer.ToString();
-                    buffer.Clear();
-                    state.Reset();
-                    processScan(raw);
-                    return;
-                }
-
-                _ = Task.Delay(staleDropMilliseconds - idleFlushMilliseconds).ContinueWith(_ =>
-                {
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        if (version != state.Version || buffer.Length == 0)
-                            return;
-
-                        var droppedLength = buffer.Length;
-                        buffer.Clear();
-                        state.Reset();
-                        AppLog.Info($"Discarded incomplete unpaired scanner input after {staleDropMilliseconds} ms (length {droppedLength}).");
-                        if (statusText is not null)
-                            statusText.Text = "Ready to scan.";
-                    });
-                });
-            });
-        });
     }
 
     private void ObserveFocusedCommandScanKey(
         KeyRoutedEventArgs e,
         StringBuilder buffer,
-        ScanBurstState state,
         Func<ClassifiedScan, bool> routeScan)
     {
-        const int maxInterCharacterMilliseconds = 50;
         const int minimumBarcodeCharacters = 4;
 
         if (e.Key is VirtualKey.Enter or VirtualKey.Tab)
@@ -1036,13 +960,11 @@ public sealed partial class MainWindow : Window
             if (buffer.Length < minimumBarcodeCharacters)
             {
                 buffer.Clear();
-                state.Reset();
                 return;
             }
 
             var raw = buffer.ToString();
             buffer.Clear();
-            state.Reset();
             if (TryClassifyScan(raw, out var scan) && routeScan(scan))
                 e.Handled = true;
             return;
@@ -1051,30 +973,7 @@ public sealed partial class MainWindow : Window
         if (!TryMapScanKey(e.Key, out var character))
             return;
 
-        var now = DateTime.UtcNow;
-        if (buffer.Length > 0 &&
-            (now - state.LastCharacterAtUtc).TotalMilliseconds > maxInterCharacterMilliseconds)
-        {
-            buffer.Clear();
-        }
-
-        state.LastCharacterAtUtc = now;
         buffer.Append(character);
-        var version = state.Advance();
-        _ = Task.Delay(400).ContinueWith(_ =>
-        {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (version != state.Version || buffer.Length < minimumBarcodeCharacters)
-                    return;
-
-                var raw = buffer.ToString();
-                buffer.Clear();
-                state.Reset();
-                if (TryClassifyScan(raw, out var scan))
-                    routeScan(scan);
-            });
-        });
     }
 
     private void ImportBinsGridView_ItemClick(object sender, ItemClickEventArgs e)
@@ -1087,7 +986,6 @@ public sealed partial class MainWindow : Window
     {
         ClearImportFailure();
         _startupScanBuffer.Clear();
-        _startupScanBurst.Reset();
         StartupStatusText.Text = "Failure resolved. Scan the corrected bin or ticket.";
         ImportScanStatusText.Text = "Scan BIN barcode and ticket barcode in either order.";
         _ = SpeakAsync("Failure resolved.");
@@ -1373,8 +1271,6 @@ public sealed partial class MainWindow : Window
         DashboardScannerStatusText.Text = "Login required before scanner input.";
         _focusedScanBuffer.Clear();
         _startupScanBuffer.Clear();
-        _focusedScanBurst.Reset();
-        _startupScanBurst.Reset();
     }
 
     private void ShowSetupStage()
@@ -1852,7 +1748,6 @@ public sealed partial class MainWindow : Window
         int? selectedBin = null;
         long? scannedPriceCents = null;
         var commandScanBuffer = new StringBuilder();
-        var commandScanBurst = new ScanBurstState();
 
         var dialog = new ContentDialog
         {
@@ -1903,7 +1798,7 @@ public sealed partial class MainWindow : Window
                 if (_scannerInput.IsActivelyCapturing)
                     return;
 
-                ObserveFocusedCommandScanKey(args, commandScanBuffer, commandScanBurst, scan =>
+                ObserveFocusedCommandScanKey(args, commandScanBuffer, scan =>
                 {
                     if (scan.Kind == ScanKind.Price)
                         binBox.Text = string.Empty;
@@ -1971,7 +1866,6 @@ public sealed partial class MainWindow : Window
         finally
         {
             commandScanBuffer.Clear();
-            commandScanBurst.Reset();
             _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
         }
@@ -2192,13 +2086,12 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
-        var priceScanBurst = new ScanBurstState();
         priceBox.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
             {
                 if (!_scannerInput.IsActivelyCapturing)
-                    ObserveFocusedCommandScanKey(args, priceScanBuffer, priceScanBurst, scan =>
+                    ObserveFocusedCommandScanKey(args, priceScanBuffer, scan =>
                         _scannerScanOverride?.Invoke(scan) == true);
             }),
             handledEventsToo: true);
@@ -2278,7 +2171,6 @@ public sealed partial class MainWindow : Window
         finally
         {
             priceScanBuffer.Clear();
-            priceScanBurst.Reset();
             _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
         }
@@ -5034,7 +4926,6 @@ public sealed partial class MainWindow : Window
         var stagedRows = new ObservableCollection<ReceivingScanRow>();
         var stagedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var dialogScanBuffer = new StringBuilder();
-        var dialogScanBurst = new ScanBurstState();
         var finishing = false;
         var statusText = new TextBlock
         {
@@ -5116,7 +5007,7 @@ public sealed partial class MainWindow : Window
             new KeyEventHandler((_, args) =>
             {
                 if (!_scannerInput.IsActivelyCapturing)
-                    CaptureGlobalScanKey(args, dialogScanBuffer, dialogScanBurst, AcceptScan, statusText);
+                    CaptureGlobalScanKey(args, dialogScanBuffer, AcceptScan, statusText);
             }),
             handledEventsToo: true);
 
@@ -5396,7 +5287,6 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlayCloseButton.Content = "Close Scanning";
             ClosingScanOverlayCloseButton.IsEnabled = true;
             dialogScanBuffer.Clear();
-            dialogScanBurst.Reset();
             _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
         }
@@ -5426,13 +5316,12 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
-        var priceScanBurst = new ScanBurstState();
         priceBox.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
             {
                 if (!_scannerInput.IsActivelyCapturing)
-                    ObserveFocusedCommandScanKey(args, priceScanBuffer, priceScanBurst, scan =>
+                    ObserveFocusedCommandScanKey(args, priceScanBuffer, scan =>
                         _scannerScanOverride?.Invoke(scan) == true);
             }),
             handledEventsToo: true);
@@ -5495,7 +5384,6 @@ public sealed partial class MainWindow : Window
         finally
         {
             priceScanBuffer.Clear();
-            priceScanBurst.Reset();
             _scannerScanOverride = previousScannerOverride;
         }
 
@@ -5532,16 +5420,25 @@ public sealed partial class MainWindow : Window
 
         ExitClosingReportContext();
         ClosingTabs.SelectedItem = ClosingScanEvidenceTab;
-        ResetClosingScanState();
+        var isResuming = _closingScanRows.Count > 0 ||
+            _closingScannedBins.Count > 0 ||
+            _closingScanIssues.Count > 0 ||
+            _closingUnmatchedTickets.Count > 0;
         RefreshClosingActionState();
         RefreshClosingBins();
-        ClosingStatusText.Text = "Closing scan started. Scan the current ticket from each physical bin.";
-        AppLog.Info("Closing scan overlay starting.");
-        TryRecordAudit("closing", "Closing scan started", $"{ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture)} active bins expected");
-        _ = SpeakAsync("Start scanning.");
+        ClosingStatusText.Text = isResuming
+            ? $"Closing scan resumed with {_closingScanRows.Count.ToString(CultureInfo.CurrentCulture)} existing scan row{(_closingScanRows.Count == 1 ? string.Empty : "s")}."
+            : "Closing scan started. Scan the current ticket from each physical bin.";
+        AppLog.Info(isResuming ? "Closing scan overlay resuming." : "Closing scan overlay starting.");
+        TryRecordAudit(
+            "closing",
+            isResuming ? "Closing scan resumed" : "Closing scan started",
+            isResuming
+                ? $"Rows {_closingScanRows.Count.ToString(CultureInfo.InvariantCulture)}, scanned bins {_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)}, issues {_closingScanIssues.Count.ToString(CultureInfo.InvariantCulture)}, unmatched {_closingUnmatchedTickets.Count.ToString(CultureInfo.InvariantCulture)}"
+                : $"{ActiveClosingBinCount().ToString(CultureInfo.InvariantCulture)} active bins expected");
+        _ = SpeakAsync(isResuming ? "Continue scanning." : "Start scanning.");
 
         var dialogScanBuffer = new StringBuilder();
-        var dialogScanBurst = new ScanBurstState();
         var scanPromptText = new TextBlock
         {
             Text = "Ready for ticket scans",
@@ -5564,9 +5461,17 @@ public sealed partial class MainWindow : Window
         var scanList = new ListView
         {
             ItemsSource = _closingScanRows,
-            DisplayMemberPath = "ScannedText",
+            DisplayMemberPath = "DisplayText",
+            SelectionMode = ListViewSelectionMode.Single,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
+        };
+        var discardSelectedScanButton = new Button
+        {
+            Content = "Discard Selected Error",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MinWidth = 172,
+            IsEnabled = false
         };
 
         void RefreshDialogTotals()
@@ -5575,6 +5480,24 @@ public sealed partial class MainWindow : Window
             if (_selectedClosingReport is null)
                 ClosingEvidenceText.Text = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} / {ActiveClosingBinCount().ToString(CultureInfo.CurrentCulture)}";
         }
+
+        scanList.SelectionChanged += (_, _) =>
+        {
+            discardSelectedScanButton.IsEnabled =
+                scanList.SelectedItem is ClosingScanRow { CanDiscard: true };
+        };
+        discardSelectedScanButton.Click += (_, _) =>
+        {
+            if (scanList.SelectedItem is not ClosingScanRow { CanDiscard: true } selectedRow)
+                return;
+
+            DiscardClosingScanError(selectedRow);
+            scanList.SelectedItem = null;
+            statusText.Text = "Selected rejected scan was discarded. Existing valid scans were kept.";
+            RefreshDialogTotals();
+            RefreshClosingBins();
+            RefreshClosingActionState();
+        };
 
         void AcceptDialogScan(string raw)
         {
@@ -5646,7 +5569,7 @@ public sealed partial class MainWindow : Window
             new KeyEventHandler((_, args) =>
             {
                 if (!_scannerInput.IsActivelyCapturing)
-                    CaptureGlobalScanKey(args, dialogScanBuffer, dialogScanBurst, AcceptDialogScan, statusText);
+                    CaptureGlobalScanKey(args, dialogScanBuffer, AcceptDialogScan, statusText);
             }),
             handledEventsToo: true);
 
@@ -5728,8 +5651,11 @@ public sealed partial class MainWindow : Window
         var footer = new Grid { ColumnSpacing = 12 };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.Children.Add(statusText);
-        Grid.SetColumn(cancelButton, 1);
+        Grid.SetColumn(discardSelectedScanButton, 1);
+        footer.Children.Add(discardSelectedScanButton);
+        Grid.SetColumn(cancelButton, 2);
         footer.Children.Add(cancelButton);
         content.Children.Add(footer);
 
@@ -5898,7 +5824,6 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlay.Visibility = Visibility.Collapsed;
             ClosingScanOverlayContent.Children.Clear();
             dialogScanBuffer.Clear();
-            dialogScanBurst.Reset();
             _scannerScanOverride = previousScannerOverride;
             _isWorkflowDialogOpen = false;
             RefreshClosingBins();
@@ -5984,7 +5909,7 @@ public sealed partial class MainWindow : Window
                     out var rangeError))
             {
                 _closingScanRows.Insert(0, new ClosingScanRow(raw, "Outside bundle range"));
-                AddClosingScanIssue("Ticket outside bundle range", rangeError);
+                AddClosingScanIssue(raw, "Ticket outside bundle range", rangeError);
                 TryRecordAudit("closing", "Closing scan rejected", rangeError);
                 statusText.Text = "Scan error: ticket is outside the configured bundle range.";
                 _ = SpeakAsync("Scan again.");
@@ -5993,6 +5918,7 @@ public sealed partial class MainWindow : Window
 
             _closingScannedBins.Add(binNumber);
             _closingScannedBundleKeys.Add(BundleKey(activeBundle));
+            ClearClosingScanErrorsForBundle(ticket);
             UpsertClosingScanSale(BundleKey(activeBundle), backfill.Sale);
             ReplaceClosingCurrentPlacement(activeBundle with
             {
@@ -6001,7 +5927,10 @@ public sealed partial class MainWindow : Window
             });
             _closingScanRows.Insert(0, new ClosingScanRow(
                 $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {backfill.Sale.Ticket}",
-                "Scanned"));
+                "Scanned")
+            {
+                Raw = raw
+            });
             TryRecordAudit(
                 "closing",
                 "Closing scan captured",
@@ -6025,6 +5954,7 @@ public sealed partial class MainWindow : Window
 
         _closingScanRows.Insert(0, new ClosingScanRow(raw, "Unrecognized"));
         AddClosingScanIssue(
+            raw,
             "Unrecognized scan",
             $"Scan {raw} was not recognized as a ticket barcode. Re-scan the ticket or resolve before finalizing.");
         TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
@@ -6032,8 +5962,57 @@ public sealed partial class MainWindow : Window
         _ = SpeakAsync("Scan again.");
     }
 
-    private void AddClosingScanIssue(string title, string detail) =>
-        _closingScanIssues.Add(new ClosingScanIssue(title, detail));
+    private void AddClosingScanIssue(string raw, string title, string detail) =>
+        _closingScanIssues.Add(new ClosingScanIssue(raw, title, detail));
+
+    private void ClearClosingScanErrorsForBundle(ImportTicket ticket)
+    {
+        foreach (var row in _closingScanRows
+                     .Where(row => row.CanDiscard && ClosingRowMatchesBundle(row, ticket))
+                     .ToList())
+        {
+            _closingScanRows.Remove(row);
+        }
+
+        _closingScanIssues.RemoveAll(issue =>
+            TryParseImportTicket(issue.Raw) is { } issueTicket &&
+            SamePhysicalBundle(issueTicket, ticket));
+        _closingUnmatchedTickets.RemoveAll(unmatched => SamePhysicalBundle(unmatched, ticket));
+    }
+
+    private void DiscardClosingScanError(ClosingScanRow row)
+    {
+        _closingScanRows.Remove(row);
+        _closingScanIssues.RemoveAll(issue =>
+            string.Equals(issue.Raw, row.Raw, StringComparison.OrdinalIgnoreCase));
+
+        if (TryParseImportTicket(row.Raw) is { } ticket &&
+            !_closingScanRows.Any(candidate =>
+                candidate.CanDiscard && ClosingRowMatchesBundle(candidate, ticket)))
+        {
+            _closingUnmatchedTickets.RemoveAll(unmatched => SamePhysicalBundle(unmatched, ticket));
+        }
+
+        if (_closingScanRows.Count == 0 &&
+            _closingScannedBins.Count == 0 &&
+            _closingUnmatchedTickets.Count == 0 &&
+            _closingScanIssues.Count == 0)
+        {
+            _closingScanCaptured = false;
+        }
+
+        TryRecordAudit(
+            "closing",
+            "Closing scan error discarded",
+            $"Raw {row.Raw}, status {row.Status}; valid closing evidence retained");
+    }
+
+    private bool ClosingRowMatchesBundle(ClosingScanRow row, ImportTicket ticket) =>
+        TryParseImportTicket(row.Raw) is { } rowTicket && SamePhysicalBundle(rowTicket, ticket);
+
+    private static bool SamePhysicalBundle(ImportTicket left, ImportTicket right) =>
+        string.Equals(left.GameId, right.GameId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.BundleId, right.BundleId, StringComparison.OrdinalIgnoreCase);
 
     private void UpsertClosingScanSale(string bundleKey, SaleLine sale)
     {
@@ -6054,6 +6033,12 @@ public sealed partial class MainWindow : Window
     {
         RefreshTotals();
         var licenseAvailable = IsLicenseAvailableForOperation();
+        StartClosingScanButton.Content = _closingScanRows.Count > 0 ||
+            _closingScannedBins.Count > 0 ||
+            _closingScanIssues.Count > 0 ||
+            _closingUnmatchedTickets.Count > 0
+                ? "Continue Closing Scan"
+                : "Start Closing Scan";
         ResolveClosingIssuesButton.IsEnabled = licenseAvailable && _closingUnmatchedTickets.Count > 0;
         FinalizeClosingButton.IsEnabled = licenseAvailable &&
             _closingScanCaptured &&
@@ -6068,7 +6053,7 @@ public sealed partial class MainWindow : Window
 
         if (_closingScanIssues.Count > 0)
         {
-            ClosingExceptionText.Text = "One or more scans were not recognized. Restart the closing scan and scan ticket barcodes only.";
+            ClosingExceptionText.Text = "One or more rejected scans remain. Continue Closing Scan, then rescan the correct ticket or discard the selected error.";
             return;
         }
 
@@ -6263,7 +6248,7 @@ public sealed partial class MainWindow : Window
 
         if (_closingScanIssues.Count > 0)
         {
-            ClosingStatusText.Text = "Restart the closing scan before finalizing. One or more scans were not recognized.";
+            ClosingStatusText.Text = "Continue Closing Scan and rescan the correct ticket, or discard each rejected scan before finalizing.";
             return;
         }
 
@@ -8685,9 +8670,16 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private sealed record ClosingScanRow(string ScannedText, string Status);
+    private sealed record ClosingScanRow(string ScannedText, string Status)
+    {
+        public string Raw { get; init; } = ScannedText;
 
-    private sealed record ClosingScanIssue(string Title, string Detail);
+        public string DisplayText => $"{ScannedText} — {Status}";
+
+        public bool CanDiscard => !string.Equals(Status, "Scanned", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record ClosingScanIssue(string Raw, string Title, string Detail);
 
     private sealed record ClosingScanSale(string BundleKey, SaleLine Sale);
 

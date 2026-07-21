@@ -23,7 +23,7 @@ internal sealed class ScannerInputService : IDisposable
     private string _pid = string.Empty;
     private string _serial = string.Empty;
     private IntPtr _deviceHandle;
-    private int _idleFlushVersion;
+    private int _partialScanVersion;
     private bool _registered;
     private bool _disposed;
 
@@ -47,7 +47,7 @@ internal sealed class ScannerInputService : IDisposable
         _pid = pid?.Trim() ?? string.Empty;
         _serial = serial?.Trim() ?? string.Empty;
         _scanBuffer.Clear();
-        _idleFlushVersion++;
+        _partialScanVersion++;
 
         if (string.IsNullOrWhiteSpace(_vid) || string.IsNullOrWhiteSpace(_pid))
         {
@@ -174,7 +174,7 @@ internal sealed class ScannerInputService : IDisposable
 
             var raw = _scanBuffer.ToString();
             _scanBuffer.Clear();
-            _idleFlushVersion++;
+            _partialScanVersion++;
             DispatchScan(raw);
             return;
         }
@@ -182,47 +182,31 @@ internal sealed class ScannerInputService : IDisposable
         if (TryMapKey(key, out var character))
         {
             _scanBuffer.Append(character);
-            ScheduleIdleFlush();
+            ScheduleStalePartialDrop();
         }
     }
 
-    private void ScheduleIdleFlush()
+    private void ScheduleStalePartialDrop()
     {
-        const int idleFlushMilliseconds = 400;
         const int staleDropMilliseconds = 5000;
-        var version = ++_idleFlushVersion;
-        _ = Task.Delay(idleFlushMilliseconds).ContinueWith(_ =>
+        var version = ++_partialScanVersion;
+        _ = Task.Delay(staleDropMilliseconds).ContinueWith(_ =>
         {
             _dispatcherQueue.TryEnqueue(() =>
             {
-                if (version != _idleFlushVersion || _scanBuffer.Length == 0)
-                    return;
-
-                if (_scanBuffer.Length >= 4)
-                {
-                    var raw = _scanBuffer.ToString();
-                    _scanBuffer.Clear();
-                    _idleFlushVersion++;
-                    DispatchScan(raw);
-                    return;
-                }
-
-                _ = Task.Delay(staleDropMilliseconds - idleFlushMilliseconds).ContinueWith(_ =>
-                {
-                    _dispatcherQueue.TryEnqueue(() => DropStalePartialScan(version, staleDropMilliseconds));
-                });
+                DropStalePartialScan(version, staleDropMilliseconds);
             });
         });
     }
 
     private void DropStalePartialScan(int version, int staleDropMilliseconds)
     {
-        if (version != _idleFlushVersion || _scanBuffer.Length == 0)
+        if (version != _partialScanVersion || _scanBuffer.Length == 0)
             return;
 
         var droppedLength = _scanBuffer.Length;
         _scanBuffer.Clear();
-        _idleFlushVersion++;
+        _partialScanVersion++;
         AppLog.Info($"Discarded incomplete paired scanner input after {staleDropMilliseconds} ms (length {droppedLength}).");
     }
 
@@ -254,7 +238,7 @@ internal sealed class ScannerInputService : IDisposable
             return;
 
         _disposed = true;
-        _idleFlushVersion++;
+        _partialScanVersion++;
         _scanBuffer.Clear();
         Unregister();
         if (_messageWindow is not null)
