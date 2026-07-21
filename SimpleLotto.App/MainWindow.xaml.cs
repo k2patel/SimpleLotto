@@ -4986,34 +4986,35 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            foreach (var segment in SplitImportScanInput(raw))
+            var segment = raw.Trim();
+            if (segment.Length == 0)
+                return;
+
+            var ticket = TryParseImportTicket(segment);
+            if (ticket is null)
             {
-                var ticket = TryParseImportTicket(segment);
-                if (ticket is null)
-                {
-                    statusText.Text = "Scan error: barcode was not recognized for the configured state.";
-                    TryRecordAudit("scanner", "Receiving scan rejected", $"Unrecognized scan {segment}");
-                    _ = SpeakAsync("Scan error.");
-                    continue;
-                }
-
-                var key = BundleKey(ticket);
-                var duplicate = stagedKeys.Contains(key) || PhysicalBundleExists(ticket.GameId, ticket.BundleId);
-                if (duplicate)
-                {
-                    _ = SpeakAsync("Duplicate");
-                    continue;
-                }
-
-                stagedKeys.Add(key);
-                stagedRows.Insert(0, new ReceivingScanRow(ticket.GameId, ticket.BundleId));
-                totalText.Text = stagedRows.Count.ToString(CultureInfo.CurrentCulture);
-                statusText.Text = $"Game {ticket.GameId}, bundle {ticket.BundleId} added.";
-                TryRecordAudit(
-                    "scanner",
-                    "Receiving scan captured",
-                    $"Game {ticket.GameId}, bundle {ticket.BundleId}; staged for receiving");
+                statusText.Text = "Scan error: barcode was not recognized for the configured state.";
+                TryRecordAudit("scanner", "Receiving scan rejected", $"Unrecognized scan {segment}");
+                _ = SpeakAsync("Scan error.");
+                return;
             }
+
+            var key = BundleKey(ticket);
+            var duplicate = stagedKeys.Contains(key) || PhysicalBundleExists(ticket.GameId, ticket.BundleId);
+            if (duplicate)
+            {
+                _ = SpeakAsync("Duplicate");
+                return;
+            }
+
+            stagedKeys.Add(key);
+            stagedRows.Insert(0, new ReceivingScanRow(ticket.GameId, ticket.BundleId));
+            totalText.Text = stagedRows.Count.ToString(CultureInfo.CurrentCulture);
+            statusText.Text = $"Game {ticket.GameId}, bundle {ticket.BundleId} added.";
+            TryRecordAudit(
+                "scanner",
+                "Receiving scan captured",
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}; staged for receiving");
         }
 
         var content = new Grid
@@ -5510,16 +5511,8 @@ public sealed partial class MainWindow : Window
 
                 AppLog.Info($"Closing scan received: {raw}");
                 _closingScanCaptured = true;
-                var processed = false;
-                foreach (var segment in SplitImportScanInput(raw))
-                {
-                    processed = true;
-                    AppLog.Info($"Closing scan segment: {segment}");
-                    ProcessClosingScanSegment(segment, statusText);
-                }
-
-                if (!processed)
-                    statusText.Text = "Scan was empty.";
+                AppLog.Info($"Closing scan barcode: {raw}");
+                ProcessClosingScanSegment(raw, statusText);
 
                 RefreshDialogTotals();
                 RefreshClosingBins();
