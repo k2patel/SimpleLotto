@@ -921,19 +921,14 @@ public sealed partial class MainWindow : Window
         Action<string> processScan,
         TextBlock? statusText)
     {
-        const int minimumBarcodeCharacters = 4;
-
-        if (e.Key is VirtualKey.Enter or VirtualKey.Tab)
+        if (e.Key == VirtualKey.Enter)
         {
             if (buffer.Length == 0)
                 return;
 
+            e.Handled = true;
             var raw = buffer.ToString();
             buffer.Clear();
-            if (raw.Length < minimumBarcodeCharacters)
-                return;
-
-            e.Handled = true;
             processScan(raw);
             return;
         }
@@ -941,11 +936,10 @@ public sealed partial class MainWindow : Window
         if (!TryMapScanKey(e.Key, out var character))
             return;
 
-        buffer.Append(character);
         e.Handled = true;
-        if (buffer.Length >= minimumBarcodeCharacters && statusText is not null)
+        buffer.Append(character);
+        if (statusText is not null)
             statusText.Text = "Scanning...";
-
     }
 
     private void ObserveFocusedCommandScanKey(
@@ -953,15 +947,10 @@ public sealed partial class MainWindow : Window
         StringBuilder buffer,
         Func<ClassifiedScan, bool> routeScan)
     {
-        const int minimumBarcodeCharacters = 4;
-
-        if (e.Key is VirtualKey.Enter or VirtualKey.Tab)
+        if (e.Key == VirtualKey.Enter)
         {
-            if (buffer.Length < minimumBarcodeCharacters)
-            {
-                buffer.Clear();
+            if (buffer.Length == 0)
                 return;
-            }
 
             var raw = buffer.ToString();
             buffer.Clear();

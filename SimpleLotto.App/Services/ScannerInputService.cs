@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading.Tasks;
 using SimpleLotto.App.Models;
 using SimpleLotto.App.Services.Win32;
 using Windows.System;
@@ -23,7 +22,6 @@ internal sealed class ScannerInputService : IDisposable
     private string _pid = string.Empty;
     private string _serial = string.Empty;
     private IntPtr _deviceHandle;
-    private int _partialScanVersion;
     private bool _registered;
     private bool _disposed;
 
@@ -47,7 +45,6 @@ internal sealed class ScannerInputService : IDisposable
         _pid = pid?.Trim() ?? string.Empty;
         _serial = serial?.Trim() ?? string.Empty;
         _scanBuffer.Clear();
-        _partialScanVersion++;
 
         if (string.IsNullOrWhiteSpace(_vid) || string.IsNullOrWhiteSpace(_pid))
         {
@@ -167,47 +164,19 @@ internal sealed class ScannerInputService : IDisposable
 
     private void ProcessKey(VirtualKey key)
     {
-        if (key is VirtualKey.Enter or VirtualKey.Tab)
+        if (key == VirtualKey.Enter)
         {
             if (_scanBuffer.Length == 0)
                 return;
 
             var raw = _scanBuffer.ToString();
             _scanBuffer.Clear();
-            _partialScanVersion++;
             DispatchScan(raw);
             return;
         }
 
         if (TryMapKey(key, out var character))
-        {
             _scanBuffer.Append(character);
-            ScheduleStalePartialDrop();
-        }
-    }
-
-    private void ScheduleStalePartialDrop()
-    {
-        const int staleDropMilliseconds = 5000;
-        var version = ++_partialScanVersion;
-        _ = Task.Delay(staleDropMilliseconds).ContinueWith(_ =>
-        {
-            _dispatcherQueue.TryEnqueue(() =>
-            {
-                DropStalePartialScan(version, staleDropMilliseconds);
-            });
-        });
-    }
-
-    private void DropStalePartialScan(int version, int staleDropMilliseconds)
-    {
-        if (version != _partialScanVersion || _scanBuffer.Length == 0)
-            return;
-
-        var droppedLength = _scanBuffer.Length;
-        _scanBuffer.Clear();
-        _partialScanVersion++;
-        AppLog.Info($"Discarded incomplete paired scanner input after {staleDropMilliseconds} ms (length {droppedLength}).");
     }
 
     private void DispatchScan(string raw)
@@ -238,7 +207,6 @@ internal sealed class ScannerInputService : IDisposable
             return;
 
         _disposed = true;
-        _partialScanVersion++;
         _scanBuffer.Clear();
         Unregister();
         if (_messageWindow is not null)
