@@ -122,6 +122,26 @@ public sealed class LocalStore
         tx.Commit();
     }
 
+    public void SaveGlobalFirstTicketSerial(int firstTicketSerial)
+    {
+        if (firstTicketSerial is not 0 and not 1)
+            throw new ArgumentOutOfRangeException(nameof(firstTicketSerial));
+
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        UpsertSetting(
+            conn,
+            tx,
+            "global_first_ticket_serial",
+            firstTicketSerial.ToString(CultureInfo.InvariantCulture));
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "UPDATE manual_games SET first_ticket_serial = $first_ticket_serial";
+        cmd.Parameters.AddWithValue("$first_ticket_serial", firstTicketSerial);
+        cmd.ExecuteNonQuery();
+        tx.Commit();
+    }
+
     public void SaveClerkCredentials(string clerkName, string clerkPinHash)
     {
         using var conn = Open();

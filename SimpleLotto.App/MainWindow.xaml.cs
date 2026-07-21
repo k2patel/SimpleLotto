@@ -111,6 +111,7 @@ public sealed partial class MainWindow : Window
     private string _databaseSchemaVersion = string.Empty;
     private ClosingHistoryRow? _selectedClosingReport;
     private int _configuredBinCount = 90;
+    private int _globalFirstTicketSerial;
     private int _scanPairTimeoutSeconds = 5;
     private bool _displayBurnInEnabled = true;
     private int _displayBurnInIntervalMinutes = 15;
@@ -160,6 +161,9 @@ public sealed partial class MainWindow : Window
     private const string DisplayBurnInEnabledSettingKey = "display_burn_in_enabled";
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
     private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
+    private const string GlobalFirstTicketSerialSettingKey = "global_first_ticket_serial";
+    private const long StandardBundlePriceCents = 50_000;
+    private const long FiftyDollarBundlePriceCents = 90_000;
     private const int LicenseExpiryWarningDays = 7;
     private const string EmailSendClosingSettingKey = "email_send_closing";
     private const string EmailIncludeShiftSummarySettingKey = "email_include_shift_summary";
@@ -368,6 +372,7 @@ public sealed partial class MainWindow : Window
         _storeCity = ReadSetting(state, "store_city");
         _databaseSchemaVersion = ReadSetting(state, "schema_version");
         _configuredBinCount = Math.Clamp(ReadIntSetting(state, "configured_bin_count", 90), 1, 500);
+        _globalFirstTicketSerial = Math.Clamp(ReadIntSetting(state, GlobalFirstTicketSerialSettingKey, 0), 0, 1);
         _scanPairTimeoutSeconds = Math.Clamp(ReadIntSetting(state, ScanPairTimeoutSettingKey, 5), 1, 30);
         _displayBurnInEnabled = ReadBoolSetting(state, DisplayBurnInEnabledSettingKey, true);
         _displayBurnInIntervalMinutes = Math.Clamp(ReadIntSetting(state, DisplayBurnInIntervalSettingKey, 15), 1, 1440);
@@ -390,6 +395,7 @@ public sealed partial class MainWindow : Window
         StoreStreetBox.Text = _storeStreet;
         StoreCityBox.Text = _storeCity;
         BinCountBox.Value = _configuredBinCount;
+        GlobalFirstTicketEditComboBox.SelectedIndex = _globalFirstTicketSerial;
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
@@ -481,8 +487,7 @@ public sealed partial class MainWindow : Window
                 game.GameId,
                 string.IsNullOrWhiteSpace(game.Name) ? $"Game {game.GameId}" : game.Name,
                 game.PriceCents,
-                game.BundlePriceCents,
-                game.FirstTicketSerial,
+                AutomaticBundlePriceCents(game.PriceCents),
                 string.IsNullOrWhiteSpace(game.Source) ? "Manual" : game.Source,
                 string.IsNullOrWhiteSpace(game.ImageUri) ? "ms-appx:///Assets/SimpleLottoLogo64.png" : game.ImageUri,
                 string.IsNullOrWhiteSpace(game.ImageStatus) ? "Image not cached" : game.ImageStatus));
@@ -1451,18 +1456,18 @@ public sealed partial class MainWindow : Window
                 string.Equals(line.Source, "initial_import", StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(line.GameId, gameId, StringComparison.OrdinalIgnoreCase));
             var ticket = new ImportTicket(sample.GameId, sample.BundleId, sample.Ticket, sample.Ticket);
-            StartupStatusText.Text = $"Ticket price and bundle price are required for game {gameId} before initial import can finish.";
+            StartupStatusText.Text = $"Ticket price is required for game {gameId} before initial import can finish.";
             if (!await ShowActivationGameSetupDialogAsync(
                     sample.Bin,
                     ticket,
                     setupSource: "Initial import") ||
                 !HasCompleteGameSetup(gameId))
             {
-                StartupStatusText.Text = $"Initial import remains open. Enter and save the ticket price and bundle price for game {gameId}.";
+                StartupStatusText.Text = $"Initial import remains open. Enter and save the ticket price for game {gameId}.";
                 TryRecordAudit(
                     "import",
                     "Initial import finalization paused",
-                    $"Game {gameId} still requires complete ticket and bundle price setup");
+                    $"Game {gameId} still requires ticket price setup");
                 _ = SpeakAsync("Game setup required.");
                 return;
             }
@@ -1715,7 +1720,7 @@ public sealed partial class MainWindow : Window
             {
                 DashboardScannerStatusText.Text = $"Game setup required for game {activeBundle.GameId}.";
                 DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | setup incomplete";
-                StatusText.Text = $"Enter the ticket price and bundle price before recording sales for game {activeBundle.GameId}.";
+                StatusText.Text = $"Enter the ticket price before recording sales for game {activeBundle.GameId}.";
                 TryRecordAudit(
                     "sale",
                     "Sale blocked",
@@ -1724,7 +1729,7 @@ public sealed partial class MainWindow : Window
                 if (!setupSaved || !HasCompleteGameSetup(activeBundle.GameId))
                 {
                     DashboardScannerStatusText.Text = $"Game setup required for game {activeBundle.GameId}. Sale not recorded.";
-                    StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} needs a valid ticket price and bundle price.";
+                    StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} needs a valid ticket price.";
                     _ = SpeakAsync("Game setup required.");
                     return;
                 }
@@ -1747,7 +1752,7 @@ public sealed partial class MainWindow : Window
             {
                 DashboardScannerStatusText.Text = $"Game setup is invalid for game {activeBundle.GameId}. Sale not recorded.";
                 DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | setup invalid";
-                StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} calculated {line.AmountText}. Verify its ticket and bundle prices.";
+                StatusText.Text = $"Sale not recorded because game {activeBundle.GameId} calculated {line.AmountText}. Verify its ticket price.";
                 TryRecordAudit(
                     "sale",
                     "Sale blocked",
@@ -2027,7 +2032,7 @@ public sealed partial class MainWindow : Window
                     ClearDashboardPendingScanPair();
                 }
 
-                StatusText.Text = $"Enter the ticket price and bundle price before activating game {ticket.GameId}.";
+                StatusText.Text = $"Enter the ticket price before activating game {ticket.GameId}.";
                 _ = SpeakAsync("Game setup required.");
                 return false;
             }
@@ -2172,20 +2177,9 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
-        var bundlePriceBox = new NumberBox
-        {
-            Header = "Bundle price ($)",
-            Value = existingGame is { PriceCents: > 0, BundlePriceCents: > 0 }
-                ? existingGame.BundlePriceCents / 100d
-                : double.NaN,
-            Minimum = 1,
-            SmallChange = 25,
-            LargeChange = 100,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
-        };
         var statusText = new TextBlock
         {
-            Text = "Enter both the ticket price and bundle price. You may scan the ticket price while the game price box is focused.",
+            Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $500.",
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
@@ -2226,7 +2220,6 @@ public sealed partial class MainWindow : Window
             content.Children.Add(image);
         content.Children.Add(nameBox);
         content.Children.Add(priceBox);
-        content.Children.Add(bundlePriceBox);
         content.Children.Add(statusText);
 
         var dialog = new ContentDialog
@@ -2241,7 +2234,7 @@ public sealed partial class MainWindow : Window
         dialog.PrimaryButtonClick += (_, args) =>
         {
             var priceCents = PriceCentsFromNumberBox(priceBox);
-            var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
+            var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
             if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
@@ -2282,7 +2275,7 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
+        var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
             StatusText.Text = $"Game {ticket.GameId} was not saved: {configurationError}";
@@ -2297,7 +2290,6 @@ public sealed partial class MainWindow : Window
             name,
             priceCents,
             bundlePriceCents,
-            existingGame?.FirstTicketSerial is 1 ? 1 : 0,
             setupSource,
             existingGame?.ImageUri ?? "ms-appx:///Assets/SimpleLottoLogo64.png",
             existingGame?.ImageStatus ?? "Image not uploaded");
@@ -3203,7 +3195,7 @@ public sealed partial class MainWindow : Window
                 game.Name,
                 game.PriceCents,
                 game.BundlePriceCents,
-                game.FirstTicketSerial,
+                _globalFirstTicketSerial,
                 game.Source,
                 game.ImageUri,
                 game.ImageStatus));
@@ -3218,6 +3210,10 @@ public sealed partial class MainWindow : Window
 
     private bool UpsertManualGameRecord(GameCatalogRecord game)
     {
+        game = game with
+        {
+            BundlePriceCents = AutomaticBundlePriceCents(game.PriceCents)
+        };
         if (!SaveManualGame(game))
             return false;
 
@@ -3236,7 +3232,7 @@ public sealed partial class MainWindow : Window
         TryRecordAudit(
             "inventory",
             "Game setup saved",
-            $"Game {game.GameId}, name {game.Name}, ticket price {MoneyText(game.PriceCents)}, bundle price {MoneyText(game.BundlePriceCents)}, first ticket {(game.FirstTicketSerial == 1 ? "001" : "000")}, source {game.Source}, image status {game.ImageStatus}");
+            $"Game {game.GameId}, name {game.Name}, ticket price {MoneyText(game.PriceCents)}, automatic bundle total {MoneyText(game.BundlePriceCents)}, global first ticket {(_globalFirstTicketSerial == 1 ? "001" : "000")}, source {game.Source}, image status {game.ImageStatus}");
         return true;
     }
 
@@ -5124,11 +5120,11 @@ public sealed partial class MainWindow : Window
                         string.Equals(row.GameId, gameId, StringComparison.OrdinalIgnoreCase));
                     if (!await ShowReceivingGameSetupDialogAsync(sample))
                     {
-                        statusText.Text = $"Ticket price and bundle price are required for game {gameId}. Receiving remains open.";
+                        statusText.Text = $"Ticket price is required for game {gameId}. Receiving remains open.";
                         TryRecordAudit(
                             "inventory",
                             "Receiving finalization paused",
-                            $"Game {gameId} still requires complete ticket and bundle price setup; no bundles committed");
+                            $"Game {gameId} still requires ticket price setup; no bundles committed");
                         _ = content.Focus(FocusState.Programmatic);
                         return;
                     }
@@ -5285,20 +5281,9 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
-        var bundlePriceBox = new NumberBox
-        {
-            Header = "Bundle price ($)",
-            Value = existingGame is { PriceCents: > 0, BundlePriceCents: > 0 }
-                ? existingGame.BundlePriceCents / 100d
-                : double.NaN,
-            Minimum = 1,
-            SmallChange = 25,
-            LargeChange = 100,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
-        };
         var statusText = new TextBlock
         {
-            Text = "Enter both the ticket price and bundle price before receiving this game.",
+            Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $500.",
             TextWrapping = TextWrapping.Wrap
         };
         var priceScanBuffer = new StringBuilder();
@@ -5328,7 +5313,6 @@ public sealed partial class MainWindow : Window
                     },
                     nameBox,
                     priceBox,
-                    bundlePriceBox,
                     statusText
                 }
             },
@@ -5339,7 +5323,7 @@ public sealed partial class MainWindow : Window
         dialog.PrimaryButtonClick += (_, args) =>
         {
             var priceCents = PriceCentsFromNumberBox(priceBox);
-            var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
+            var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
             if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
@@ -5377,7 +5361,7 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
+        var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
             StatusText.Text = $"Game {bundle.GameId} was not saved: {configurationError}";
@@ -5389,7 +5373,6 @@ public sealed partial class MainWindow : Window
             string.IsNullOrWhiteSpace(nameBox.Text) ? $"Game {bundle.GameId}" : nameBox.Text.Trim(),
             priceCents,
             bundlePriceCents,
-            existingGame?.FirstTicketSerial is 1 ? 1 : 0,
             "Receiving",
             existingGame?.ImageUri ?? DefaultGameImageUri,
             existingGame?.ImageStatus ?? "Image not uploaded"));
@@ -7214,20 +7197,6 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
-        var bundlePriceBox = new NumberBox
-        {
-            Header = "Bundle price ($)",
-            Minimum = 1,
-            SmallChange = 5,
-            LargeChange = 25,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
-        };
-        var firstTicketBox = new ComboBox
-        {
-            Header = "First ticket",
-            SelectedIndex = 0,
-            ItemsSource = new[] { "000", "001" }
-        };
         var content = new StackPanel
         {
             Spacing = 12,
@@ -7236,8 +7205,11 @@ public sealed partial class MainWindow : Window
                 gameIdBox,
                 nameBox,
                 priceBox,
-                bundlePriceBox,
-                firstTicketBox
+                new TextBlock
+                {
+                    Text = "Bundle total is automatic: $900 for a $50 ticket; otherwise $500. Ticket numbering uses the global setting.",
+                    TextWrapping = TextWrapping.Wrap
+                }
             }
         };
 
@@ -7266,7 +7238,7 @@ public sealed partial class MainWindow : Window
             ? $"Game {gameId}"
             : nameBox.Text.Trim();
         var priceCents = PriceCentsFromNumberBox(priceBox);
-        var bundlePriceCents = PriceCentsFromNumberBox(bundlePriceBox);
+        var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
             GameCatalogStatusText.Text = configurationError;
@@ -7278,7 +7250,6 @@ public sealed partial class MainWindow : Window
             name,
             priceCents,
             bundlePriceCents,
-            firstTicketBox.SelectedIndex == 1 ? 1 : 0,
             "Manual",
             "ms-appx:///Assets/SimpleLottoLogo64.png",
             "Image not uploaded");
@@ -7299,16 +7270,12 @@ public sealed partial class MainWindow : Window
             GameIdEditBox.Text = string.Empty;
             GameNameEditBox.Text = string.Empty;
             GamePriceEditBox.Value = 0;
-            GameBundlePriceEditBox.Value = 0;
-            GameFirstTicketEditComboBox.SelectedIndex = 0;
             return;
         }
 
         GameIdEditBox.Text = game.GameId;
         GameNameEditBox.Text = game.Name;
         GamePriceEditBox.Value = game.PriceCents / 100d;
-        GameBundlePriceEditBox.Value = game.BundlePriceCents / 100d;
-        GameFirstTicketEditComboBox.SelectedIndex = game.FirstTicketSerial == 1 ? 1 : 0;
         GameCatalogStatusText.Text = $"Selected game {game.GameId}.";
     }
 
@@ -7331,7 +7298,7 @@ public sealed partial class MainWindow : Window
         }
 
         var priceCents = PriceCentsFromNumberBox(GamePriceEditBox);
-        var bundlePriceCents = PriceCentsFromNumberBox(GameBundlePriceEditBox);
+        var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
             GameCatalogStatusText.Text = configurationError;
@@ -7343,7 +7310,6 @@ public sealed partial class MainWindow : Window
             Name = name,
             PriceCents = priceCents,
             BundlePriceCents = bundlePriceCents,
-            FirstTicketSerial = GameFirstTicketEditComboBox.SelectedIndex == 1 ? 1 : 0,
             Source = "Manual"
         };
         if (!UpsertManualGameRecord(updated))
@@ -7353,6 +7319,35 @@ public sealed partial class MainWindow : Window
         }
 
         GameCatalogStatusText.Text = $"Game {updated.GameId} details saved.";
+    }
+
+    private void SaveGlobalFirstTicketButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireManagerAccess("global ticket numbering"))
+            return;
+
+        var selectedFirstTicket = GlobalFirstTicketEditComboBox.SelectedIndex == 1 ? 1 : 0;
+        try
+        {
+            _store.SaveGlobalFirstTicketSerial(selectedFirstTicket);
+            _globalFirstTicketSerial = selectedFirstTicket;
+
+            foreach (var game in _manualGameCatalog)
+                ReopenBundlesExtendedByGameSetup(game);
+
+            RefreshGameCatalog();
+            SyncRdisplayTiles();
+            GameCatalogStatusText.Text = $"All games now start at {(selectedFirstTicket == 1 ? "001" : "000")}.";
+            TryRecordAudit(
+                "inventory",
+                "Global first ticket saved",
+                $"All games start at {(selectedFirstTicket == 1 ? "001" : "000")}");
+        }
+        catch (Exception ex)
+        {
+            GlobalFirstTicketEditComboBox.SelectedIndex = _globalFirstTicketSerial;
+            GameCatalogStatusText.Text = $"Global first ticket could not be saved: {ex.Message}";
+        }
     }
 
     private async void UploadGameImageButton_Click(object sender, RoutedEventArgs e)
@@ -8200,11 +8195,21 @@ public sealed partial class MainWindow : Window
         return game?.PriceCents ?? 0;
     }
 
+    private static long AutomaticBundlePriceCents(long ticketPriceCents) =>
+        ticketPriceCents <= 0
+            ? 0
+            : ticketPriceCents == 5_000
+                ? FiftyDollarBundlePriceCents
+                : StandardBundlePriceCents;
+
     private bool HasCompleteGameSetup(string gameId)
     {
         var game = FindKnownGame(gameId);
         return game is not null &&
-            TryValidateGameTicketConfiguration(game.PriceCents, game.BundlePriceCents, out _);
+            TryValidateGameTicketConfiguration(
+                game.PriceCents,
+                AutomaticBundlePriceCents(game.PriceCents),
+                out _);
     }
 
     private static bool TryValidateGameTicketConfiguration(long ticketPriceCents, long bundlePriceCents, out string error)
@@ -8218,13 +8223,13 @@ public sealed partial class MainWindow : Window
 
         if (bundlePriceCents <= 0)
         {
-            error = "Enter a positive bundle price.";
+            error = "The automatic bundle total could not be calculated.";
             return false;
         }
 
         if (bundlePriceCents % ticketPriceCents != 0)
         {
-            error = "Bundle price must divide evenly by the ticket price.";
+            error = "The automatic bundle total must divide evenly by the ticket price.";
             return false;
         }
 
@@ -8244,22 +8249,23 @@ public sealed partial class MainWindow : Window
         lastTicket = 0;
         error = string.Empty;
         var game = FindKnownGame(gameId);
-        if (game is null || !TryValidateGameTicketConfiguration(game.PriceCents, game.BundlePriceCents, out error))
+        var bundlePriceCents = AutomaticBundlePriceCents(game?.PriceCents ?? 0);
+        if (game is null || !TryValidateGameTicketConfiguration(game.PriceCents, bundlePriceCents, out error))
         {
             error = string.IsNullOrWhiteSpace(error)
-                ? $"Game {gameId} needs ticket and bundle price setup."
+                ? $"Game {gameId} needs ticket price setup."
                 : $"Game {gameId}: {error}";
             return false;
         }
 
-        var ticketCount = game.BundlePriceCents / game.PriceCents;
+        var ticketCount = bundlePriceCents / game.PriceCents;
         if (ticketCount > int.MaxValue)
         {
             error = $"Game {gameId} bundle ticket count is too large.";
             return false;
         }
 
-        firstTicket = game.FirstTicketSerial == 1 ? 1 : 0;
+        firstTicket = _globalFirstTicketSerial;
         lastTicket = checked(firstTicket + (int)ticketCount - 1);
         return true;
     }
@@ -8483,7 +8489,6 @@ public sealed partial class MainWindow : Window
         string Name,
         long PriceCents,
         long BundlePriceCents,
-        int FirstTicketSerial,
         string Source,
         string ImageUri,
         string ImageStatus)
@@ -8493,17 +8498,10 @@ public sealed partial class MainWindow : Window
             ? "Not set"
             : (PriceCents / 100m).ToString("C0", CultureInfo.CurrentCulture);
 
-        public string BundlePriceText => BundlePriceCents <= 0
-            ? "Not set"
-            : (BundlePriceCents / 100m).ToString("C0", CultureInfo.CurrentCulture);
-
-        public string TicketStartText => FirstTicketSerial == 1 ? "001" : "000";
-
         public static GameCatalogRecord FromImport(string gameId) =>
             new(
                 gameId,
                 "Name not set",
-                0,
                 0,
                 0,
                 "Initial import",

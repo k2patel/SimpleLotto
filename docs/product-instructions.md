@@ -67,7 +67,7 @@ First-install workflow:
 1. Create required four-digit Manager PIN.
 2. Optionally create a Clerk user.
 3. Scan the initial bin and bundle/ticket placements.
-4. Before initial import can finish, enter and persist the ticket price and bundle price once for every distinct imported Game ID that is not already configured.
+4. Before initial import can finish, enter and persist the ticket price once for every distinct imported Game ID that is not already configured. Derive the bundle total automatically from that ticket price.
 5. Continue into the first login screen only after all imported Game IDs have valid saved pricing.
 6. Successful login enters the currently open financial close interval.
 
@@ -129,7 +129,7 @@ Cash summary rules:
 
 ## Game, Bundle, and Ticket Rules
 
-Inventory must let the user define game prices and bundle prices. Game price and bundle price together determine how many tickets are in a bundle.
+Inventory must let the user define the per-ticket price for each Game ID. The app derives the bundle total from that price and uses both values to determine how many tickets are in a bundle.
 
 Default supported game prices should include:
 
@@ -139,10 +139,9 @@ Default supported game prices should include:
 - $10
 - $20
 - $25
-- $30
 - $50
 
-The user must be able to add new game prices, such as $40, from Inventory game setup.
+The user may add another ticket price from Inventory game setup when it divides evenly into its automatically derived bundle total.
 
 Game price rules:
 
@@ -152,21 +151,21 @@ Game price rules:
 - Each game type has a price per ticket.
 - Game ID, game name, game price, and related game metadata are stable once defined and should not change during normal operations. Game name may be established or corrected through explicit user edit or license-server sync rules.
 - New game types require the user to set a positive price before the game can be used operationally.
-- If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm both the per-ticket game price and the total bundle price before that workflow can finalize.
-- Regular bundle activation follows the same missing-configuration rule as inventory receiving. If the scanned bundle's game ID is new or has no valid positive ticket price and bundle price, activation must pause and open a required game-setup dialog before assigning the bundle to the bin.
-- If the scanned bundle's game ID already has a saved valid ticket price and bundle price, activation must reuse them and must not ask for prices again; after the bin is selected/scanned, activation should continue. A missing display name may be corrected separately and must not cause valid saved prices to be requested again.
-- The activation game-setup dialog should show the game ID, bundle ID, selected/scanned bin, ticket-price field, bundle-price field, any fetched/manual game name, and any fetched/manual image when available.
+- If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm the per-ticket game price before that workflow can finalize. Do not ask for a bundle price.
+- Regular bundle activation follows the same missing-configuration rule as inventory receiving. If the scanned bundle's Game ID is new or has no valid positive ticket price, activation must pause and open a required game-setup dialog before assigning the bundle to the bin.
+- If the scanned bundle's Game ID already has a saved valid ticket price, activation must reuse it and must not ask for pricing again; after the bin is selected/scanned, activation should continue. A missing display name may be corrected separately and must not cause a valid saved price to be requested again.
+- The activation game-setup dialog should show the game ID, bundle ID, selected/scanned bin, ticket-price field, automatically derived bundle total, and any fetched/manual game name and image when available.
 - The activation game-setup dialog must allow the operator to enter or scan the ticket price into the same game price field; do not add a separate price-scan text field.
-- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, ticket price, bundle price, and game name; do not add separate barcode-focused text boxes for values that are already captured by the scanner workflow.
-- Entering missing ticket and bundle prices during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without them.
-- Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether every scanned game ID has both a valid positive ticket price and a valid positive bundle price.
+- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, ticket price, and game name; do not add a bundle-price field or separate barcode-focused text boxes for values already captured by the scanner workflow.
+- Entering a missing ticket price during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without it.
+- Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether every scanned Game ID has a valid positive ticket price.
 - If receiving includes any new or incompletely configured game IDs, the app must present a required game-setup dialog for each missing game before finalizing receiving.
-- The receiving game-setup dialog should show the game ID, ticket-price field, bundle-price field, any fetched/manual game name, and any fetched/manual image when available.
+- The receiving game-setup dialog should show the game ID, ticket-price field, automatically derived bundle total, and any fetched/manual game name and image when available.
 - The app may attempt a best-effort price lookup using the same state/game setup source used for names and images, but an auto-found price is only a suggestion. The user must confirm or correct the price before saving.
 - Price lookup failure must not block manual setup; the user must be able to enter the game price manually.
 - Auto-fetched game names and images should reuse the already-wired state setup mechanism from `../WindowsPOS`.
 - Auto-fetch failures must not block manual setup. The user must be able to enter or correct the lotto name and image manually.
-- Initial import may collect bin and bundle/ticket placement pairs before asking for prices. When the operator continues to login, the app must validate every distinct imported Game ID and present the same required ticket-price and bundle-price setup for each unconfigured Game ID.
+- Initial import may collect bin and bundle/ticket placement pairs before asking for prices. When the operator continues to login, the app must validate every distinct imported Game ID and present the same required ticket-price setup for each unconfigured Game ID.
 - Multiple initially imported bundles with the same Game ID share one saved game configuration. Initial import must prompt at most once for that Game ID and reuse the persisted prices for all of its bundles.
 - Cancelling a required initial-import game setup, entering invalid prices, or failing to persist the game/setup state must keep the initial import open and must not continue to login.
 
@@ -190,26 +189,26 @@ Ticket barcode parsing:
 
 Bundle price rules:
 
-- Bundle price is configured based on the game price.
-- Ticket count per bundle is calculated as: `bundle price / game price`.
-- New game setup has no default bundle price. The operator must explicitly enter the actual bundle price, such as `$300` or `$500`, and the saved per-game bundle price is authoritative for every later bundle with that Game ID.
+- Bundle total is derived automatically from the per-ticket game price. It is not entered for each game or bundle.
+- For now, a `$50` ticket price always derives a `$900` bundle total. Every other positive ticket price derives a `$500` bundle total.
+- A future bundle-type creator may replace this hardcoded mapping, but do not expose per-game or per-bundle bundle-total entry in the current workflow.
+- Ticket count per bundle is calculated as: `automatic bundle total / ticket price`.
 - Bundle price must produce a whole ticket count. If it does not, the system must reject the value or require correction before saving.
-- Bundle price options must be editable in Inventory game setup.
 - Bundle price is used for ticket range calculation, sold-out detection, and closing accountability.
 - Price setup is complete only after the game configuration is successfully persisted. A SQLite save failure must leave activation or receiving blocked and must not be reported as a successful price setup.
-- Missing or invalid ticket price, bundle price, ticket count, current ticket serial, or configured ticket range must block activation, normal sales, and closing-generated sales. Financial workflows must never substitute a one-ticket or `$0` fallback ledger row.
+- Missing or invalid ticket price, derived bundle total, ticket count, current ticket serial, or configured ticket range must block activation, normal sales, and closing-generated sales. Financial workflows must never substitute a one-ticket or `$0` fallback ledger row.
 
 Ticket numbering rules:
 
-- Inventory game setup must allow the user to choose whether the first ticket starts at `000` or `001`.
-- End ticket is calculated from game price, bundle price, and the selected first-ticket mode.
+- Inventory game setup must provide one global choice for whether every bundle starts at `000` or `001`. First-ticket mode is not stored or edited per game or per bundle.
+- End ticket is calculated from game price, the automatically derived bundle total, and the global first-ticket mode.
 - If first ticket is `000`, end ticket is `ticket_count - 1`.
 - If first ticket is `001`, end ticket is `ticket_count`.
 - Ticket range calculations must stay consistent across sales, inventory, Rdisplay, and closing.
 
 Bundle completion rules:
 
-- A bundle is complete when its sold ticket count/value reaches the configured bundle price.
+- A bundle is complete when its sold ticket count/value reaches the automatically derived bundle total.
 - When the final valid ticket is sold, keep the bundle assigned to its bin and mark it `Sold out`/grey in Bins and Rdisplay. Its displayed ticket remains the final valid ticket; it must never advance to a non-existent serial (for example, `$20`/`$300`, start `000`: `000`-`014`, never `015`).
 - The sales ledger records only the ticket or inclusive ticket range actually sold. The bin/Rdisplay current-ticket state is operational inventory state and is stored separately.
 - A ticket serial may be recorded only once for a placed bundle. Re-scanning a serial below the current ticket, including during a backfill or closing scan, must be rejected and must not change sales totals. SQLite must retain a unique per-bundle ticket claim so concurrent/repeated scan events cannot bypass this rule.
@@ -362,12 +361,12 @@ Regular bundle activation:
 
 Inventory is the stock management page. It should handle receiving books, assigning inventory, moving books between bins, reviewing active or pending inventory, and managing lotto game setup.
 
-Inventory owns game setup because game identity, game price, bundle price, ticket numbering, and game images are part of inventory/book setup. Do not duplicate these controls under Settings.
+Inventory owns game setup because game identity, game price, automatic bundle-total rules, global ticket numbering, and game images are part of inventory/book setup. Do not duplicate these controls under Settings.
 
 Inventory should organize stock and game setup into these tabs, in this order:
 
 1. Receiving: scan unopened new bundles received into inventory. Receiving is the first tab because it is the recurring stock intake workflow.
-2. Game Prices: shows game ID, image, lotto/game name, price per game, bundle price setup, and ticket numbering setup.
+2. Game Prices: shows game ID, image, lotto/game name, price per ticket, the automatic bundle-total rule, and one global ticket-numbering setting.
 3. Open / Active Bundles: shows bundles currently open, active in bins, dormant behind another bundle, or otherwise inactive/pending resolution.
 
 The active/open bundle tab should be last. Operators should be able to review active and inactive inventory from the Inventory menu without confusing it with unopened receiving.
@@ -383,9 +382,9 @@ Inventory list behavior:
 - Receiving, Open / Active Bundles, and Game Prices should use paging instead of one long vertical scrolling list.
 - Page size should be calculated from the visible list space so page counts grow or shrink with the window size; do not hard-code one fixed row count.
 - Paging controls must show the current page and total pages when known.
-- The Game Prices section must require a price before a new game type can be used. The Bundle Prices section must let the user add a new game price/bundle price combination.
+- The Game Prices section must require a ticket price before a new game type can be used. It must show the hardcoded automatic bundle-total rule without asking the user to enter a bundle total.
 - The Game Prices tab must include a control to view the selected game's currently cached image.
-- From the cached-image view, the user must be able to remove the cached image when it is wrong or no longer wanted. Removing the image should not remove the game ID, game name, price, bundle price, or ticket-numbering setup.
+- From the cached-image view, the user must be able to remove the cached image when it is wrong or no longer wanted. Removing the image should not remove the game ID, game name, ticket price, automatic bundle-total rule, or global ticket-numbering setup.
 
 Inventory receiving records bundles into stock without assigning them to bins. Receiving scans should create or update inventory records, but they should not create active bin assignments and should not be counted as bundle activation.
 
@@ -478,7 +477,7 @@ Closing scan rules:
 - Reconciliation interactions should also show bundle ID, current/expected bin, scanned ticket/current ticket, price, and status when available.
 - During closing reconciliation, dormant bundles in a bin that are not represented in the scanned physical state should be considered sold as appropriate for close-interval accountability.
 - The sold-out fill created by closing must be distinguishable from ordinary scan sales in audit/reporting.
-- If a bundle reaches its configured bundle price before closing, it is considered complete/sold out.
+- If a bundle reaches its automatically derived bundle total before closing, it is considered complete/sold out.
 - Closing should make unscanned-bundle sold-out consequences clear before final submit.
 - Closing scan prompts should use real-time text-to-speech so the operator hears the next action immediately.
 
@@ -567,7 +566,7 @@ State game-name sync rules:
 - Only sync names changed by the user to something other than the system default/generated name.
 - Example: if the user changes `Game 1822` to `20X Luck`, that user-defined name can sync to the server only if the server does not already have that state/game entry.
 - Do not use local sync to overwrite an existing server game-name entry.
-- Game price, bundle price, and ticket numbering are local operational configuration and must not be overwritten by this game-name sync unless a future scoped requirement explicitly adds that.
+- Game price, the automatic bundle-total rule, and global ticket numbering are local operational configuration and must not be overwritten by this game-name sync unless a future scoped requirement explicitly adds that.
 - Game-name sync should be best-effort and must not block sales, closing, or local game setup.
 - Sync results and failures should be logged for support.
 
@@ -612,7 +611,7 @@ Scanner rules:
 - Focused/on-demand scan capture is used only inside explicit workflows that ask the user to scan, such as add bundle, inventory receiving, closing scan, setup/import, and correction dialogs.
 - Paired scanner input should be monitored regardless of which page is currently visible.
 - Scanner input should continue to be monitored when the main window is minimized to the tray.
-- If a background scan requires an operator dialog, such as selecting an activation bin or completing missing ticket/bundle price setup, SimpleLotto must restore and foreground the main window before showing that dialog. Configured-game sales that require no operator input should remain background-capable without restoring the window.
+- If a background scan requires an operator dialog, such as selecting an activation bin or completing missing ticket-price setup, SimpleLotto must restore and foreground the main window before showing that dialog. Configured-game sales that require no operator input should remain background-capable without restoring the window.
 - Scanner routing must respect the current workflow state: global normal sale/activation, focused add-bundle capture, focused inventory receiving, focused closing scan, setup/import, or correction.
 - Scan events should be captured with timestamp, active user, current close interval/shift reference, raw barcode, parsed meaning, page/workflow state, and result.
 - Scanner monitoring should not depend on keyboard focus inside a specific text field.
@@ -741,7 +740,7 @@ Recommended module boundaries:
 - Rdisplay: Windows-side API/snapshot/event contract compatible with `../windowsPOS` Rdisplay.
 - License/Game Sync: license call-home, signed response validation, game-name sync by state, license-server update-token posts.
 - Persistence: SQLite schema, repositories, migrations, backup/restore, audit trail.
-- Settings: state setup, game prices, bundle prices, ticket numbering, scanner/display, email, TTS.
+- Settings: state setup, scanner/display, email, TTS. Game prices, automatic bundle totals, and global ticket numbering remain under Inventory.
 
 Dependency rules:
 
@@ -766,7 +765,7 @@ SQLite/schema requirements for first deliverable:
 - A migration that assigns ledger identities to an existing database must first create an online SQLite backup beside the active database in a migration-backup folder.
 - Historical interval inference may use stored timestamps only during migration and must verify each inferred group against its saved closing row count, ticket count, and sales cents. Exact matches become verified closed-interval history; mismatches are preserved in a `legacy_unresolved` interval and written to both a structured migration-conflict table and Audit.
 - Historical ticket claims must be rebuilt from persistent sale rows. Duplicate, malformed, quantity-mismatched, missing-bundle, orphan-claim, and ambiguous-void history must be preserved and reported as migration conflicts rather than silently rewritten or discarded.
-- Use explicit tables for users, close intervals/shifts, games, bundle price rules, bundles, bins, bin bundle state, scan events, sales ledger, inventory ledger, closing records, closing reconciliation issues, reports, settings, display registrations, and audit log.
+- Use explicit tables for users, close intervals/shifts, games, bundle-type rules when introduced, bundles, bins, bin bundle state, scan events, sales ledger, inventory ledger, closing records, closing reconciliation issues, reports, settings, display registrations, and audit log.
 - Use cents/integer money values, not floating point, for all prices and totals.
 - Store timestamps in UTC and display in local time.
 - Add indexes for `shift_id`/`close_interval_id`, `game_id`, `bundle_id`, `bin_id`, `closed_at`, and scan timestamp.

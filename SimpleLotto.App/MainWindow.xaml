@@ -1046,17 +1046,13 @@
                                                         <ColumnDefinition Width="110"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="80"/>
-                                                        <ColumnDefinition Width="90"/>
-                                                        <ColumnDefinition Width="72"/>
                                                         <ColumnDefinition Width="140"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Image" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game ID" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Name" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="3" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="4" Text="Bundle" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="5" Text="Starts" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="6" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="4" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <ListView x:Name="GameCatalogListView"
                                                           Grid.Row="2"
@@ -1074,8 +1070,6 @@
                                                                     <ColumnDefinition Width="110"/>
                                                                     <ColumnDefinition Width="*"/>
                                                                     <ColumnDefinition Width="80"/>
-                                                                    <ColumnDefinition Width="90"/>
-                                                                    <ColumnDefinition Width="72"/>
                                                                     <ColumnDefinition Width="140"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <Border Width="44"
@@ -1104,14 +1098,6 @@
                                                                            Foreground="{ThemeResource SlTextBrush}"
                                                                            VerticalAlignment="Center"/>
                                                                 <TextBlock Grid.Column="4"
-                                                                           Text="{Binding BundlePriceText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"
-                                                                           VerticalAlignment="Center"/>
-                                                                <TextBlock Grid.Column="5"
-                                                                           Text="{Binding TicketStartText}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"
-                                                                           VerticalAlignment="Center"/>
-                                                                <TextBlock Grid.Column="6"
                                                                            Text="{Binding ImageStatus}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                                            VerticalAlignment="Center"/>
@@ -1138,17 +1124,17 @@
                                                            SmallChange="1"
                                                            LargeChange="5"
                                                            SpinButtonPlacementMode="Compact"/>
-                                                <NumberBox x:Name="GameBundlePriceEditBox"
-                                                           Header="Bundle price ($)"
-                                                           Minimum="1"
-                                                           SmallChange="5"
-                                                           LargeChange="25"
-                                                           SpinButtonPlacementMode="Compact"/>
-                                                <ComboBox x:Name="GameFirstTicketEditComboBox"
-                                                          Header="First ticket">
+                                                <TextBlock Text="Bundle total is automatic: $900 for a $50 ticket; otherwise $500."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                                <ComboBox x:Name="GlobalFirstTicketEditComboBox"
+                                                          Header="First ticket for all games">
                                                     <ComboBoxItem Content="000" Tag="0"/>
                                                     <ComboBoxItem Content="001" Tag="1"/>
                                                 </ComboBox>
+                                                <Button Content="Save Global Ticket Start"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="SaveGlobalFirstTicketButton_Click"/>
                                                 <Button Content="Save Game Details"
                                                         HorizontalAlignment="Stretch"
                                                         Click="SaveGameDetailsButton_Click"/>
