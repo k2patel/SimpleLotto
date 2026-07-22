@@ -2445,6 +2445,25 @@
                                        Style="{StaticResource SlCaptionTextStyle}"
                                        TextWrapping="Wrap"/>
 
+                            <Border Background="{ThemeResource SlSurfaceAltBrush}"
+                                    BorderBrush="{ThemeResource SlBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{StaticResource ControlCornerRadius}"
+                                    Padding="12">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Registration ID"
+                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <TextBlock x:Name="SetupRegistrationIdText"
+                                               Text="Calculating device registration ID..."
+                                               IsTextSelectionEnabled="True"
+                                               TextWrapping="Wrap"
+                                               AutomationProperties.Name="Device registration ID"/>
+                                    <TextBlock Text="Provide this ID to the license administrator before checking the license. It is derived from this Windows device and does not depend on setup or login."
+                                               Style="{StaticResource SlCaptionTextStyle}"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>

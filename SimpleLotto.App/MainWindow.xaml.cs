@@ -132,6 +132,7 @@ public sealed partial class MainWindow : Window
     private bool _useFocusedScannerCapture;
     private Func<string, bool>? _rawScannerScanOverride;
     private bool _automaticUpgradeCheckRunning;
+    private bool _initialLicenseCheckStarted;
     private bool _loginInProgress;
     private bool _auditLogPageDirty;
     private string _lastAutomaticUpgradeCheckDate = string.Empty;
@@ -291,6 +292,7 @@ public sealed partial class MainWindow : Window
         _license.StatusChanged += License_StatusChanged;
         _subclassProc = TraySubclassProc;
         InitializeComponent();
+        RefreshSetupRegistrationId();
         _hwnd = WindowNative.GetWindowHandle(this);
         _scannerInput = new ScannerInputService(DispatcherQueue);
         _scannerInput.ScanReceived += ScannerInput_ScanReceived;
@@ -322,6 +324,7 @@ public sealed partial class MainWindow : Window
         _ = WarmAudioEngineAsync();
         _isWindowInitialized = true;
         LoadApplicationState();
+        QueueInitialLicenseCheck("application startup");
         RefreshTotals();
         QueueScheduledUpgradeCheck();
     }
@@ -1193,6 +1196,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        QueueInitialLicenseCheck("first-install setup");
         ShowImportStage();
     }
 
@@ -4304,6 +4308,55 @@ public sealed partial class MainWindow : Window
     private void RefreshLicenseRegistrationStatus()
     {
         ApplyLicenseStatus(_license.CheckLicense());
+    }
+
+    private void RefreshSetupRegistrationId()
+    {
+        try
+        {
+            SetupRegistrationIdText.Text = _license.RegistrationId;
+        }
+        catch (Exception ex)
+        {
+            SetupRegistrationIdText.Text = "Registration ID unavailable. Check the application log.";
+            AppLog.Error("Device registration ID could not be calculated during setup.", ex);
+        }
+    }
+
+    private void QueueInitialLicenseCheck(string source)
+    {
+        if (_initialLicenseCheckStarted ||
+            !_setupComplete ||
+            string.IsNullOrWhiteSpace(_storeName) ||
+            string.IsNullOrWhiteSpace(_storeState))
+        {
+            return;
+        }
+
+        _initialLicenseCheckStarted = true;
+        _ = RunInitialLicenseCheckAsync(source);
+    }
+
+    private async Task RunInitialLicenseCheckAsync(string source)
+    {
+        try
+        {
+            var status = await _license.PhoneHomeAsync(CurrentLicenseStoreInfo());
+            ApplyLicenseStatus(status);
+            TryRecordAudit(
+                "license",
+                "Automatic license check",
+                $"Source {source}; status {status.Status}; {status.Message}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Automatic license check failed after {source}.", ex);
+            ApplyLicenseStatus(_license.CheckLicense());
+            TryRecordAudit(
+                "license",
+                "Automatic license check failed",
+                $"Source {source}; {ex.Message}");
+        }
     }
 
     private void ApplyLicenseStatus(LicenseStatus status)

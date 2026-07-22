@@ -547,6 +547,9 @@ License management rules:
 - Use the same license-info update mechanism where the server provides a short-lived update token after authorized call-home.
 - License check failures should not corrupt local state; preserve the existing valid/grace/expired behavior.
 - License management belongs under Manager Settings unless a visible license warning/banner is needed in the shell.
+- The 64-character registration ID is computed locally from the Windows device identity and must be visible on the first-install setup screen before setup, import, or login completes so the device can be preregistered on the license server.
+- Registration-ID compatibility is permanent: preserve the existing WindowsPOS/SimpleLotto `HMAC-SHA256(pepper, "<MachineGuid>:<preferred-active-MAC>")` algorithm, MAC selection/formatting, lowercase hexadecimal output, and pepper behavior. Setup display, automatic call-home, manual Check License, and license-info updates must all use that same value; an application update must not give an unchanged machine a different registration ID.
+- On first install, start one non-blocking license call-home immediately after the required store/setup information is successfully persisted; initial inventory import must not delay the check. On later launches, start one non-blocking call-home after persisted store information is loaded. A failed or unknown-device response must not block setup or corrupt previously valid cached state.
 
 SimpleLotto license expiry lifecycle:
 

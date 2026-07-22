@@ -37,6 +37,9 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Scanner input, rejected scans, ticket sales, bundle activations, opening placements, and bin placements appear in Audit.
 7. Verify license workflow:
    - Store > Registration shows the 64-character registration ID before first check.
+   - A fresh first-install screen shows the same selectable 64-character registration ID before setup continues. After valid store/setup information is saved, confirm one non-blocking call-home runs while initial import remains usable; an unknown or unreachable server leaves setup usable and shows an actionable pending status.
+   - Record the registration ID from the previously published application, install the new build on the same unchanged Windows machine, and confirm setup display, automatic call-home, manual Check License, and license-server logs all use that exact existing ID.
+   - On an already-configured installation, confirm startup performs one non-blocking call-home after loading the saved store identity, without requiring login or opening Settings and without issuing duplicate startup requests.
    - Check License calls the WindowsPOS-compatible license endpoint and updates status, last check, and subscription expiry.
    - Authorized responses remain valid when a later network/server check fails.
    - Expired registration blocks scanner sales, bundle activation, voids, and closing while Settings remains available.
@@ -151,7 +154,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Renew-soon banner starts 7 days before signed `expires_at`.
    - Signed `expires_at` date starts a 7-day grace period while the app remains usable.
    - Full operational lock starts after `expires_at + 7 days`, not immediately on `expires_at`.
-   - Automatic license refresh should run non-blocking at startup and recovery points such as login/license-sensitive actions when near expiry, in grace, or locked.
+   - Startup phone-home is implemented. Add recovery-point refreshes at login and license-sensitive actions when the license is near expiry, in grace, or locked without duplicating an in-flight startup request.
 2. Rdisplay expiry/grace banner is not implemented:
    - Current display payload only sends `license_status`.
    - Rdisplay client/renderer must be extended with banner text, expiry/grace fields, and daily opacity changes before transparent display banners can work.
