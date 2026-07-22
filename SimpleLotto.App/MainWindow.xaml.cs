@@ -2141,7 +2141,7 @@ public sealed partial class MainWindow : Window
             {
                 args.Cancel = true;
                 statusText.Text = priceError;
-                _ = priceBox.Focus(FocusState.Programmatic);
+                priceBox.Focus(FocusState.Programmatic);
                 return;
             }
 
@@ -2151,7 +2151,7 @@ public sealed partial class MainWindow : Window
 
             args.Cancel = true;
             statusText.Text = configurationError;
-            _ = priceBox.Focus(FocusState.Programmatic);
+            priceBox.Focus(FocusState.Programmatic);
         };
 
         _isWorkflowDialogOpen = true;
@@ -5376,7 +5376,7 @@ public sealed partial class MainWindow : Window
             {
                 args.Cancel = true;
                 statusText.Text = priceError;
-                _ = priceBox.Focus(FocusState.Programmatic);
+                priceBox.Focus(FocusState.Programmatic);
                 return;
             }
 
@@ -5386,7 +5386,7 @@ public sealed partial class MainWindow : Window
 
             args.Cancel = true;
             statusText.Text = configurationError;
-            _ = priceBox.Focus(FocusState.Programmatic);
+            priceBox.Focus(FocusState.Programmatic);
         };
         dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
 
