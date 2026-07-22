@@ -2067,9 +2067,9 @@ public sealed partial class MainWindow : Window
         var nameBox = new TextBox
         {
             Header = "Game name",
-            Text = existingGame?.Name is { Length: > 0 } existingName ? existingName : $"Game {ticket.GameId}",
-            PlaceholderText = "Display name"
+            Text = GameNameEntryText(existingGame?.Name, ticket.GameId)
         };
+        ConfigureSuggestedGameNameBox(nameBox, ticket.GameId);
         var priceBox = new NumberBox
         {
             Header = "Game price ($)",
@@ -2081,6 +2081,7 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
+        ConfigureRequiredWholeDollarPriceBox(priceBox);
         var statusText = new TextBlock
         {
             Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $300.",
@@ -2136,13 +2137,21 @@ public sealed partial class MainWindow : Window
         };
         dialog.PrimaryButtonClick += (_, args) =>
         {
-            var priceCents = PriceCentsFromNumberBox(priceBox);
+            if (!TryReadRequiredWholeDollarPrice(priceBox, out var priceCents, out var priceError))
+            {
+                args.Cancel = true;
+                statusText.Text = priceError;
+                _ = priceBox.Focus(FocusState.Programmatic);
+                return;
+            }
+
             var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
             if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
             args.Cancel = true;
             statusText.Text = configurationError;
+            _ = priceBox.Focus(FocusState.Programmatic);
         };
 
         _isWorkflowDialogOpen = true;
@@ -2176,7 +2185,12 @@ public sealed partial class MainWindow : Window
             _isWorkflowDialogOpen = false;
         }
 
-        var priceCents = PriceCentsFromNumberBox(priceBox);
+        if (!TryReadRequiredWholeDollarPrice(priceBox, out var priceCents, out var priceError))
+        {
+            StatusText.Text = $"Game {ticket.GameId} was not saved: {priceError}";
+            return false;
+        }
+
         var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
@@ -5305,9 +5319,9 @@ public sealed partial class MainWindow : Window
         var nameBox = new TextBox
         {
             Header = "Game name",
-            Text = existingGame?.Name is { Length: > 0 } existingName ? existingName : $"Game {bundle.GameId}",
-            PlaceholderText = "Display name"
+            Text = GameNameEntryText(existingGame?.Name, bundle.GameId)
         };
+        ConfigureSuggestedGameNameBox(nameBox, bundle.GameId);
         var priceBox = new NumberBox
         {
             Header = "Game price ($)",
@@ -5317,6 +5331,7 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
+        ConfigureRequiredWholeDollarPriceBox(priceBox);
         var statusText = new TextBlock
         {
             Text = "Enter the ticket price. Bundle total is automatic: $900 for a $50 ticket; otherwise $300.",
@@ -5357,13 +5372,21 @@ public sealed partial class MainWindow : Window
         };
         dialog.PrimaryButtonClick += (_, args) =>
         {
-            var priceCents = PriceCentsFromNumberBox(priceBox);
+            if (!TryReadRequiredWholeDollarPrice(priceBox, out var priceCents, out var priceError))
+            {
+                args.Cancel = true;
+                statusText.Text = priceError;
+                _ = priceBox.Focus(FocusState.Programmatic);
+                return;
+            }
+
             var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
             if (TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
                 return;
 
             args.Cancel = true;
             statusText.Text = configurationError;
+            _ = priceBox.Focus(FocusState.Programmatic);
         };
         dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
 
@@ -5394,7 +5417,12 @@ public sealed partial class MainWindow : Window
             _scannerScanOverride = previousScannerOverride;
         }
 
-        var priceCents = PriceCentsFromNumberBox(priceBox);
+        if (!TryReadRequiredWholeDollarPrice(priceBox, out var priceCents, out var priceError))
+        {
+            StatusText.Text = $"Game {bundle.GameId} was not saved: {priceError}";
+            return false;
+        }
+
         var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
         if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var configurationError))
         {
@@ -6385,25 +6413,14 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
         };
+        ConfigureRequiredWholeDollarPriceBox(priceBox);
         AutomationProperties.SetAutomationId(priceBox, "ClosingGameInformationPrice");
 
         var bundleTotalText = new TextBlock { TextWrapping = TextWrapping.Wrap };
         var validationText = new TextBlock { TextWrapping = TextWrapping.Wrap };
         bool TryReadPrice(out long priceCents, out string error)
         {
-            priceCents = 0;
-            error = string.Empty;
-            if (double.IsNaN(priceBox.Value) ||
-                priceBox.Value <= 0 ||
-                priceBox.Value > long.MaxValue / 100d ||
-                priceBox.Value != Math.Truncate(priceBox.Value))
-            {
-                error = "Enter a positive whole-dollar ticket price.";
-                return false;
-            }
-
-            priceCents = checked((long)priceBox.Value * 100);
-            return true;
+            return TryReadRequiredWholeDollarPrice(priceBox, out priceCents, out error);
         }
 
         void RefreshBundleTotal()
@@ -8665,6 +8682,81 @@ public sealed partial class MainWindow : Window
 
         var dollars = Math.Max(0, (int)Math.Round(box.Value, MidpointRounding.AwayFromZero));
         return dollars * 100L;
+    }
+
+    private static string GameNameEntryText(string? existingName, string gameId)
+    {
+        if (string.IsNullOrWhiteSpace(existingName))
+            return string.Empty;
+
+        var suggestedName = $"Game {gameId}";
+        var trimmedName = existingName.Trim();
+        return string.Equals(trimmedName, suggestedName, StringComparison.OrdinalIgnoreCase)
+                ? string.Empty
+                : trimmedName;
+    }
+
+    private static void ConfigureSuggestedGameNameBox(TextBox box, string gameId)
+    {
+        var suggestedName = $"Game {gameId}";
+        box.PlaceholderText = suggestedName;
+        box.GotFocus += (_, _) => box.PlaceholderText = string.Empty;
+        box.LostFocus += (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(box.Text))
+                box.PlaceholderText = suggestedName;
+        };
+    }
+
+    private static void ConfigureRequiredWholeDollarPriceBox(NumberBox box)
+    {
+        box.ValidationMode = NumberBoxValidationMode.Disabled;
+        box.PlaceholderText = "Whole dollars";
+        box.Description = "Currency signs are optional: 20, $20, and 20$ are equivalent.";
+    }
+
+    private static bool TryReadRequiredWholeDollarPrice(
+        NumberBox box,
+        out long priceCents,
+        out string error)
+    {
+        if (!TryParseRequiredWholeDollarPrice(box.Text, out priceCents, out error))
+            return false;
+
+        box.Value = priceCents / 100d;
+        return true;
+    }
+
+    private static bool TryParseRequiredWholeDollarPrice(
+        string? input,
+        out long priceCents,
+        out string error)
+    {
+        priceCents = 0;
+        error = string.Empty;
+        var raw = input?.Trim() ?? string.Empty;
+        if (raw.StartsWith('$'))
+            raw = raw[1..].Trim();
+        else if (raw.EndsWith('$'))
+            raw = raw[..^1].Trim();
+
+        if (raw.Length == 0)
+        {
+            error = "Ticket price is required. Enter whole dollars, such as 20 or $20.";
+            return false;
+        }
+
+        if (!raw.All(char.IsAsciiDigit) ||
+            !long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var dollars) ||
+            dollars <= 0 ||
+            dollars > long.MaxValue / 100)
+        {
+            error = "Enter a positive whole-dollar ticket price, such as 20 or $20.";
+            return false;
+        }
+
+        priceCents = checked(dollars * 100);
+        return true;
     }
 
     private static bool TryReadMoneyCents(NumberBox box, out long cents)
