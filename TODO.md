@@ -154,6 +154,8 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Select an Audit row and confirm its complete timestamp/category/user metadata and wrapped detail are readable and copyable in the bounded detail panel.
 23. Verify application-wide operator input safety:
    - Paste or scan excessively large, malformed, non-finite, over-precision, and out-of-range values into Online Sale, Online Cashout, Instant Cashout, bin count, game price, scanner timeout, display port, burn-in interval, SMTP port, and move-bin fields. Confirm each value is rejected with the last valid value retained, calculated cards remain responsive, and no exception or partial save occurs.
+   - Confirm every static and dialog-created numeric field accepts direct entry without showing increment/decrement spin buttons.
+   - During activation, enter and scan bin `configured bin count + 1`. Confirm the dialog remains open, identifies the valid `1..configured bin count` range, and no placement, sale, or activation record is persisted.
    - Paste overlong values into every editable text/password field and confirm the field enforces its workflow-specific limit without freezing or crashing.
    - Send a raw and focused scanner value longer than the supported scan boundary. Confirm the entire scan is rejected once with a visible/audited reason and no retained prefix is processed as a ticket, bin, price, sale, or activation.
    - Repeat Closing finalization after each rejected value and confirm checked money arithmetic prevents a `Decimal`/integer overflow or first-attempt closing crash.

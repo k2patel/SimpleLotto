@@ -1143,7 +1143,7 @@
                                                            Maximum="300"
                                                            SmallChange="1"
                                                            LargeChange="5"
-                                                           SpinButtonPlacementMode="Compact"/>
+                                                           SpinButtonPlacementMode="Hidden"/>
                                                 <TextBlock Text="Bundle total is automatic: $900 for a $50 ticket; otherwise $300."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
@@ -1941,7 +1941,7 @@
                                                                Maximum="30"
                                                                SmallChange="1"
                                                                LargeChange="5"
-                                                               SpinButtonPlacementMode="Compact"/>
+                                                               SpinButtonPlacementMode="Hidden"/>
                                                     <TextBlock Text="Seconds allowed between a bin scan and a bundle or ticket scan."
                                                                Style="{StaticResource SlCaptionTextStyle}"
                                                                TextWrapping="Wrap"/>
@@ -1990,7 +1990,7 @@
                                                                    Value="5001"
                                                                    Minimum="1"
                                                                    Maximum="65535"
-                                                                   SpinButtonPlacementMode="Compact"/>
+                                                                   SpinButtonPlacementMode="Hidden"/>
                                                     </Grid>
                                                     <Button Content="Register Rdisplay"
                                                             HorizontalAlignment="Stretch"
@@ -2010,7 +2010,7 @@
                                                                    Value="15"
                                                                    Minimum="1"
                                                                    Maximum="1440"
-                                                                   SpinButtonPlacementMode="Compact"/>
+                                                                   SpinButtonPlacementMode="Hidden"/>
                                                     </Grid>
                                                     <TextBlock Text="Burn-in protection periodically runs the Rdisplay sweep to reduce image persistence."
                                                                Style="{StaticResource SlCaptionTextStyle}"
@@ -2166,7 +2166,7 @@
                                                                Value="587"
                                                                Minimum="1"
                                                                Maximum="65535"
-                                                               SpinButtonPlacementMode="Compact"/>
+                                                               SpinButtonPlacementMode="Hidden"/>
                                                     <TextBox x:Name="SmtpUserBox"
                                                              Grid.Column="1"
                                                              Header="SMTP user"
@@ -2578,7 +2578,7 @@
                                            Maximum="500"
                                            SmallChange="1"
                                            LargeChange="10"
-                                           SpinButtonPlacementMode="Inline"/>
+                                           SpinButtonPlacementMode="Hidden"/>
                                 <TextBlock Grid.Column="1"
                                            Text="Initial import will create this many selectable bins. You can still scan BIN barcodes instead of clicking a bin."
                                            Style="{StaticResource SlCaptionTextStyle}"

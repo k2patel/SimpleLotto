@@ -127,6 +127,7 @@ Cash summary rules:
 Operator input safety rules:
 
 - Every editable text, password, and numeric field must have an explicit, workflow-appropriate length or value boundary. Scanner buffers must also have a finite maximum length.
+- Numeric fields must accept direct typed or scanned entry without visible increment/decrement spin buttons. Validation belongs to the field and save workflow, not to spinner-only interaction.
 - Treat pasted, typed, or scanned input as untrusted. Parse with non-throwing validation and reject malformed, non-finite, fractional-when-whole-required, over-precision, out-of-range, and arithmetic-overflow values before changing persisted or calculated state.
 - Rejected input must leave the last valid value in place and show a clear operator-facing message. A validation failure must not crash the app, freeze calculated cards, partially save a workflow, or silently substitute an unrelated default.
 - Calculated money totals must use checked arithmetic. If a source value or result cannot be represented safely, keep the workflow open and require correction instead of finalizing.
@@ -351,6 +352,7 @@ Regular bundle activation:
 - A successful manual move changes only the bundle's current bin assignment. Preserve its Game ID, Bundle ID, current ticket, sold-out state, sales, activation history, and close-interval history; refresh Bins, Inventory, Closing, and Rdisplay and audit the old and new bins.
 - Entering the current bin as the destination must keep the dialog open and require a different bin.
 - If the clerk scans or enters a bin number that does not exist, block activation and ask the clerk to scan the bin again or enter the correct bin number.
+- Activation must validate a manually entered or scanned bin against the configured range `1..configured bin count` both when accepting the activation dialog and immediately before persistence.
 - For an invalid bin, the app should give audio feedback such as `Wrong bin`.
 - Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.
 - After successful activation, the app should give short audio feedback such as `Bundle activated in bin 12`.

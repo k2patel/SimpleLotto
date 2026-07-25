@@ -1967,13 +1967,13 @@ public sealed partial class MainWindow : Window
         {
             if (!TryParseBinNumber(binBox.Text, out var parsedBin))
             {
-                statusText.Text = "Enter or scan a valid bin barcode.";
+                statusText.Text = $"Enter or scan a bin number from 1 through {_configuredBinCount.ToString(CultureInfo.CurrentCulture)}.";
                 return false;
             }
 
             if (!IsConfiguredBin(parsedBin))
             {
-                statusText.Text = $"Wrong bin {parsedBin.ToString(CultureInfo.CurrentCulture)}. Enter or scan a configured bin.";
+                statusText.Text = $"Wrong bin {parsedBin.ToString(CultureInfo.CurrentCulture)}. Enter or scan a bin from 1 through {_configuredBinCount.ToString(CultureInfo.CurrentCulture)}.";
                 _ = SpeakAsync("Wrong bin.");
                 return false;
             }
@@ -2268,7 +2268,7 @@ public sealed partial class MainWindow : Window
             Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
         };
         ConfigureRequiredWholeDollarPriceBox(priceBox);
         var statusText = new TextBlock
@@ -5070,7 +5070,7 @@ public sealed partial class MainWindow : Window
             Maximum = _configuredBinCount,
             SmallChange = 1,
             LargeChange = 10,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
         };
         ConfigureBoundedNumberBox(newBinBox, 1, _configuredBinCount, 0);
         var validationText = new TextBlock
@@ -5652,7 +5652,7 @@ public sealed partial class MainWindow : Window
             Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
         };
         ConfigureRequiredWholeDollarPriceBox(priceBox);
         var statusText = new TextBlock
@@ -6840,7 +6840,7 @@ public sealed partial class MainWindow : Window
             Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
         };
         ConfigureRequiredWholeDollarPriceBox(priceBox);
         AutomationProperties.SetAutomationId(priceBox, "ClosingGameInformationPrice");
@@ -8205,7 +8205,7 @@ public sealed partial class MainWindow : Window
             Minimum = 1,
             SmallChange = 1,
             LargeChange = 5,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
         };
         ConfigureRequiredWholeDollarPriceBox(priceBox);
         var content = new StackPanel
