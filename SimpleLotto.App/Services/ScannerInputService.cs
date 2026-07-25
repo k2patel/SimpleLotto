@@ -15,6 +15,7 @@ namespace SimpleLotto.App.Services;
 /// </summary>
 internal sealed class ScannerInputService : IDisposable
 {
+    private const int MaximumRawScanLength = 512;
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly StringBuilder _scanBuffer = new();
     private ScannerMessageWindow? _messageWindow;
@@ -24,6 +25,7 @@ internal sealed class ScannerInputService : IDisposable
     private IntPtr _deviceHandle;
     private bool _registered;
     private bool _disposed;
+    private bool _scanOverflowed;
 
     public ScannerInputService(DispatcherQueue dispatcherQueue)
     {
@@ -31,6 +33,8 @@ internal sealed class ScannerInputService : IDisposable
     }
 
     public event Action<string>? ScanReceived;
+
+    public event Action<string>? ScanRejected;
 
     public event Action<bool>? CaptureAvailabilityChanged;
 
@@ -45,6 +49,7 @@ internal sealed class ScannerInputService : IDisposable
         _pid = pid?.Trim() ?? string.Empty;
         _serial = serial?.Trim() ?? string.Empty;
         _scanBuffer.Clear();
+        _scanOverflowed = false;
 
         if (string.IsNullOrWhiteSpace(_vid) || string.IsNullOrWhiteSpace(_pid))
         {
@@ -166,6 +171,16 @@ internal sealed class ScannerInputService : IDisposable
     {
         if (key == VirtualKey.Enter)
         {
+            if (_scanOverflowed)
+            {
+                _scanBuffer.Clear();
+                _scanOverflowed = false;
+                var reason = $"Paired scanner input exceeded {MaximumRawScanLength} characters and was rejected.";
+                AppLog.Info(reason);
+                DispatchRejection(reason);
+                return;
+            }
+
             if (_scanBuffer.Length == 0)
                 return;
 
@@ -175,13 +190,27 @@ internal sealed class ScannerInputService : IDisposable
             return;
         }
 
-        if (TryMapKey(key, out var character))
-            _scanBuffer.Append(character);
+        if (!TryMapKey(key, out var character) || _scanOverflowed)
+            return;
+
+        if (_scanBuffer.Length >= MaximumRawScanLength)
+        {
+            _scanBuffer.Clear();
+            _scanOverflowed = true;
+            return;
+        }
+
+        _scanBuffer.Append(character);
     }
 
     private void DispatchScan(string raw)
     {
         _dispatcherQueue.TryEnqueue(() => ScanReceived?.Invoke(raw));
+    }
+
+    private void DispatchRejection(string reason)
+    {
+        _dispatcherQueue.TryEnqueue(() => ScanRejected?.Invoke(reason));
     }
 
     private static bool TryMapKey(VirtualKey key, out char character)
@@ -208,6 +237,7 @@ internal sealed class ScannerInputService : IDisposable
 
         _disposed = true;
         _scanBuffer.Clear();
+        _scanOverflowed = false;
         Unregister();
         if (_messageWindow is not null)
         {

@@ -769,6 +769,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Receiving"
                                                              PlaceholderText="Game, bundle, or ticket"
+                                                             MaxLength="128"
                                                              TextChanged="ReceivingSearchBox_TextChanged"/>
                                                     <Button x:Name="ReceivingPreviousPageButton"
                                                             Grid.Column="2"
@@ -891,6 +892,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Open / Active"
                                                              PlaceholderText="Bin, game, bundle, or ticket"
+                                                             MaxLength="128"
                                                              TextChanged="OpenBundleSearchBox_TextChanged"/>
                                                     <Button x:Name="OpenBundlePreviousPageButton"
                                                             Grid.Column="2"
@@ -1032,6 +1034,7 @@
                                                         <TextBox x:Name="GameSearchBox"
                                                                  Header="Search Game ID"
                                                                  PlaceholderText="Enter game ID"
+                                                                 MaxLength="64"
                                                                  TextChanged="GameSearchBox_TextChanged"/>
                                                         <TextBlock x:Name="GamePageStatusText"
                                                                    Grid.Column="1"
@@ -1132,10 +1135,12 @@
                                                          IsReadOnly="True"/>
                                                 <TextBox x:Name="GameNameEditBox"
                                                          Header="Game name"
+                                                         MaxLength="128"
                                                          PlaceholderText="Display name"/>
                                                 <NumberBox x:Name="GamePriceEditBox"
                                                            Header="Game price ($)"
                                                            Minimum="1"
+                                                           Maximum="300"
                                                            SmallChange="1"
                                                            LargeChange="5"
                                                            SpinButtonPlacementMode="Compact"/>
@@ -1294,6 +1299,7 @@
                                                 <NumberBox x:Name="ClosingOnlineSaleBox"
                                                            Header="Online sale"
                                                            Minimum="0"
+                                                           Maximum="9999999.99"
                                                            Value="0"
                                                            SmallChange="1"
                                                            LargeChange="10"
@@ -1302,6 +1308,7 @@
                                                 <NumberBox x:Name="ClosingOnlineCashoutBox"
                                                            Header="Online cashout"
                                                            Minimum="0"
+                                                           Maximum="9999999.99"
                                                            Value="0"
                                                            SmallChange="1"
                                                            LargeChange="10"
@@ -1310,6 +1317,7 @@
                                                 <NumberBox x:Name="ClosingInstantCashoutBox"
                                                            Header="Instant cashout"
                                                            Minimum="0"
+                                                           Maximum="9999999.99"
                                                            Value="0"
                                                            SmallChange="1"
                                                            LargeChange="10"
@@ -1329,8 +1337,38 @@
                                                            Text="Matched scan evidence auto reconciles. Unscanned active bundles close out when the shift is finalized."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
+                                                <Border x:Name="ClosingPriceIssueBar"
+                                                        Visibility="Collapsed"
+                                                        Background="{ThemeResource SlSurfaceAltBrush}"
+                                                        BorderBrush="{ThemeResource SlDangerBrush}"
+                                                        BorderThickness="2"
+                                                        CornerRadius="6">
+                                                    <Expander x:Name="ClosingPriceIssueExpander"
+                                                              IsExpanded="True"
+                                                              HorizontalAlignment="Stretch"
+                                                              AutomationProperties.AutomationId="ClosingPriceIssueExpander"
+                                                              AutomationProperties.Name="Closing price correction required">
+                                                        <Expander.Header>
+                                                            <TextBlock Text="Price correction required"
+                                                                       Foreground="{ThemeResource SlDangerBrush}"
+                                                                       FontWeight="SemiBold"/>
+                                                        </Expander.Header>
+                                                        <StackPanel Padding="12,0,12,12"
+                                                                    Spacing="10">
+                                                            <TextBlock x:Name="ClosingPriceIssueDetailText"
+                                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                                       TextWrapping="Wrap"/>
+                                                            <Button x:Name="FixClosingPriceButton"
+                                                                    Content="Fix Game Price"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    Click="FixClosingPriceButton_Click"
+                                                                    AutomationProperties.AutomationId="FixClosingPriceButton"
+                                                                    AutomationProperties.Name="Fix closing game price"/>
+                                                        </StackPanel>
+                                                    </Expander>
+                                                </Border>
                                                 <Button x:Name="ResolveClosingIssuesButton"
-                                                        Content="Assign Unmatched Scan"
+                                                        Content="Fix Closing Issue"
                                                         HorizontalAlignment="Stretch"
                                                         IsEnabled="False"
                                                         Click="ResolveClosingIssuesButton_Click"/>
@@ -1380,6 +1418,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Closings"
                                                              PlaceholderText="Shift, date, sales, bins"
+                                                             MaxLength="128"
                                                              TextChanged="ClosingHistorySearchBox_TextChanged"/>
                                                     <Button x:Name="ClosingHistoryPreviousPageButton"
                                                             Grid.Column="2"
@@ -1943,6 +1982,7 @@
                                                         </Grid.ColumnDefinitions>
                                                         <TextBox x:Name="DisplayHostBox"
                                                                  Header="Display host"
+                                                                 MaxLength="256"
                                                                  PlaceholderText="Pi IP or hostname"/>
                                                         <NumberBox x:Name="DisplayPortBox"
                                                                    Grid.Column="1"
@@ -2088,6 +2128,7 @@
                                                        Style="{StaticResource SlSectionTitleTextStyle}"/>
                                             <TextBox x:Name="BackupFolderBox"
                                                      Header="Backup folder"
+                                                     MaxLength="4096"
                                                      PlaceholderText="USB drive or synced folder path"/>
                                             <Button Content="Backup now"
                                                     HorizontalAlignment="Stretch"
@@ -2113,7 +2154,8 @@
                                                 <TextBlock Text="Email Server"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                                 <TextBox x:Name="SmtpHostBox"
-                                                         Header="SMTP host"/>
+                                                         Header="SMTP host"
+                                                         MaxLength="256"/>
                                                 <Grid ColumnSpacing="8">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="120"/>
@@ -2127,13 +2169,16 @@
                                                                SpinButtonPlacementMode="Compact"/>
                                                     <TextBox x:Name="SmtpUserBox"
                                                              Grid.Column="1"
-                                                             Header="SMTP user"/>
+                                                             Header="SMTP user"
+                                                             MaxLength="320"/>
                                                 </Grid>
                                                 <PasswordBox x:Name="SmtpPasswordBox"
                                                              Header="Application password"
+                                                             MaxLength="512"
                                                              PlaceholderText="Leave blank to keep saved password"/>
                                                 <TextBox x:Name="EmailToBox"
-                                                         Header="Closing email recipient"/>
+                                                         Header="Closing email recipient"
+                                                         MaxLength="1024"/>
                                                 <CheckBox x:Name="SettingsEmailSendCheckBox"
                                                           Content="Send closing email"
                                                           Checked="SettingsEmailOptionChanged"
@@ -2218,7 +2263,7 @@
                                     <Grid ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="280"/>
+                                            <ColumnDefinition Width="340"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
                                             <Grid RowSpacing="12">
@@ -2247,6 +2292,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Audit"
                                                              PlaceholderText="Action, user, detail"
+                                                             MaxLength="256"
                                                              TextChanged="AuditLogSearchBox_TextChanged"/>
                                                     <Button x:Name="AuditLogPreviousPageButton"
                                                             Grid.Column="2"
@@ -2287,7 +2333,9 @@
                                                           MinHeight="220"
                                                           MaxHeight="360"
                                                           VerticalAlignment="Top"
-                                                          SelectionMode="None"
+                                                          SelectionMode="Single"
+                                                          SelectionChanged="AuditLogListView_SelectionChanged"
+                                                          AutomationProperties.AutomationId="AuditLogList"
                                                           SizeChanged="PagedList_SizeChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
@@ -2328,12 +2376,28 @@
                                         <Border Grid.Column="1"
                                                 Style="{StaticResource SlPanelBorderStyle}">
                                             <StackPanel Spacing="12">
-                                                <TextBlock Text="Audit Rules"
+                                                <TextBlock Text="Audit Details"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <TextBlock Text="Audit rows record close finalization and settings changes without storing secrets."
+                                                <TextBlock x:Name="AuditDetailTitleText"
+                                                           Text="Select an audit action"
+                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock x:Name="AuditDetailMetadataText"
+                                                           Text="The complete action detail will appear here."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
-                                                <TextBlock Text="Search by action, category, user, or detail."
+                                                <TextBox x:Name="AuditDetailTextBox"
+                                                         Header="Complete detail"
+                                                         MinHeight="180"
+                                                         MaxHeight="300"
+                                                         IsReadOnly="True"
+                                                         AcceptsReturn="True"
+                                                         TextWrapping="Wrap"
+                                                         VerticalScrollBarVisibility="Auto"
+                                                         AutomationProperties.AutomationId="AuditDetailText"
+                                                         AutomationProperties.Name="Complete audit detail"/>
+                                                <TextBlock Text="Select any row to read and copy its complete detail."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
                                             </StackPanel>
@@ -2471,6 +2535,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="StoreNameBox"
                                          Header="Store name"
+                                         MaxLength="128"
                                          PlaceholderText="Used for license server feedback"/>
                                 <ComboBox x:Name="StateComboBox"
                                           Grid.Column="1"
@@ -2487,10 +2552,12 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="StoreStreetBox"
                                          Header="Street"
+                                         MaxLength="256"
                                          PlaceholderText="Street address"/>
                                 <TextBox x:Name="StoreCityBox"
                                          Grid.Column="1"
                                          Header="City"
+                                         MaxLength="128"
                                          PlaceholderText="City"/>
                             </Grid>
 
@@ -2540,6 +2607,7 @@
 
                             <TextBox x:Name="ClerkNameBox"
                                      Header="Clerk name"
+                                     MaxLength="64"
                                      PlaceholderText="Optional"/>
                         </StackPanel>
                     </ScrollViewer>
