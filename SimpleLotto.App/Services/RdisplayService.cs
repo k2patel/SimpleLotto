@@ -619,8 +619,9 @@ public sealed class RdisplayService : IDisposable
             ["game_name"] = tile.GameName,
             ["bin_label"] = tile.BinNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["next_serial"] = nextSerial,
-            ["tickets_remaining"] = Math.Max(0, 100 - nextSerial),
-            ["price_cents"] = tile.PriceCents
+            ["tickets_remaining"] = tile.TicketsRemaining,
+            ["price_cents"] = tile.PriceCents,
+            ["is_sold_out"] = tile.IsSoldOut
         };
     }
 
@@ -942,7 +943,9 @@ public sealed record RdisplayTileState(
     string GameId,
     string GameName,
     string Ticket,
-    int PriceCents);
+    int PriceCents,
+    int TicketsRemaining,
+    bool IsSoldOut);
 
 public sealed record RdisplayRegistration
 {

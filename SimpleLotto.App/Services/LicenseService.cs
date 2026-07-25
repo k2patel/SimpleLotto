@@ -36,7 +36,15 @@ public sealed class LicenseService
     public event Action<LicenseStatus>? StatusChanged;
 
     private LicenseState? _cached;
+    private readonly Lazy<string> _registrationId = new(
+        ComputeDeviceHash,
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
+    public string RegistrationId => _registrationId.Value;
+
+    // Compatibility contract: this must remain byte-for-byte identical to the
+    // previously released WindowsPOS/SimpleLotto registration-ID algorithm.
+    // Existing license-server registrations depend on the resulting hash.
     public static string ComputeDeviceHash()
     {
         var serial = ReadHardwareSerial();
@@ -64,7 +72,7 @@ public sealed class LicenseService
             {
                 Status = "pending",
                 DaysRemaining = GracePeriodDays,
-                RegistrationId = ComputeDeviceHash(),
+                RegistrationId = this.RegistrationId,
                 LastCheck = state.LastCheckAt,
                 SubscriptionExpiresAt = subscriptionExpiresAt,
                 SubscriptionDaysRemaining = subscriptionDaysRemaining,
@@ -84,7 +92,7 @@ public sealed class LicenseService
         else if (elapsed <= 0)
         {
             status = "pending";
-            message = "License check in progress.";
+            message = PendingLicenseMessage(state.LastResult);
         }
         else if (daysRemaining > 0)
         {
@@ -101,13 +109,27 @@ public sealed class LicenseService
         {
             Status = status,
             DaysRemaining = daysRemaining,
-            RegistrationId = ComputeDeviceHash(),
+            RegistrationId = this.RegistrationId,
             LastAuthorized = state.LastAuthorizedAt,
             LastCheck = state.LastCheckAt,
             SubscriptionExpiresAt = subscriptionExpiresAt,
             SubscriptionDaysRemaining = subscriptionDaysRemaining,
             Message = message
         };
+    }
+
+    private static string PendingLicenseMessage(string? lastResult)
+    {
+        if (string.IsNullOrWhiteSpace(lastResult))
+            return "License check in progress.";
+
+        if (string.Equals(lastResult, "unknown", StringComparison.OrdinalIgnoreCase))
+            return "This registration ID is not registered on the license server yet.";
+
+        if (string.Equals(lastResult, "authorized", StringComparison.OrdinalIgnoreCase))
+            return "License authorized.";
+
+        return $"License check did not authorize this device: {lastResult}.";
     }
 
     public async Task<LicenseStatus> PhoneHomeAsync(
@@ -124,7 +146,7 @@ public sealed class LicenseService
         string registrationId;
         try
         {
-            registrationId = ComputeDeviceHash();
+            registrationId = RegistrationId;
             Trace($"computed registration_id len={registrationId.Length} prefix={registrationId[..Math.Min(8, registrationId.Length)]}");
         }
         catch (Exception ex)

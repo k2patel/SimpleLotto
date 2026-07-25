@@ -18,9 +18,10 @@
                 Background="{ThemeResource SlSurfaceBrush}"
                 BorderBrush="{ThemeResource SlBorderBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="16,14">
-            <Grid ColumnSpacing="16">
+                Padding="16,8">
+            <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
@@ -47,19 +48,111 @@
 
                 <StackPanel Grid.Column="2"
                             Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
                             Spacing="8">
-                    <Button x:Name="ScanNewInventoryButton"
-                            Content="Scan New Inventory"
-                            MinWidth="148"
-                            Visibility="{Binding Visibility, ElementName=InventoryContent}"
-                            Click="ScanNewInventoryButton_Click"/>
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding Visibility, ElementName=BinsContent}">
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsTotalText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Total bins" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsActiveText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Active bins" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsBundleText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="108" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsShiftSalesText" Text="$0.00" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Sales" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="120" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="BinsActivatedText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Activated bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding Visibility, ElementName=InventoryContent}">
+                        <Border Width="132" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="InventoryReceivingCountText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Unopened bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="132" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="InventoryBundleCountText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Active bin bundles" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding Visibility, ElementName=ClosingContent}">
+                        <Border Width="120" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingSalesText" Text="$0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Sales" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingTicketsText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Total tickets" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="96" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingEvidenceText" Text="0 / 0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Bins scanned" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="82" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingActivatedText" Text="0" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Activated" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Width="110" Style="{StaticResource SlHeaderMetricCardStyle}">
+                            <StackPanel Spacing="1">
+                                <TextBlock x:Name="ClosingExpectedCashText" Text="$0.00" Style="{StaticResource SlMetricTextStyle}"/>
+                                <TextBlock Text="Expected cash" Style="{StaticResource SlHeaderMetricCaptionTextStyle}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="3"
+                            VerticalAlignment="Center"
+                            Spacing="4">
                     <Button x:Name="CloseShiftButton"
                             Content="Close Shift"
-                            MinWidth="108"
+                            Style="{StaticResource SlShiftActionButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            ToolTipService.ToolTip="Close the current shift"
                             Click="CloseShiftButton_Click"/>
                     <Button x:Name="LogoutButton"
                             Content="Logout"
-                            MinWidth="84"
+                            Style="{StaticResource SlLogoutActionButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            ToolTipService.ToolTip="Log out of SimpleLotto"
                             Click="LogoutButton_Click"/>
                 </StackPanel>
             </Grid>
@@ -97,7 +190,7 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                    <ColumnDefinition x:Name="NavColumn" Width="190"/>
+                <ColumnDefinition x:Name="NavColumn" Width="190"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -369,66 +462,20 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <Grid>
                         <Grid x:Name="BinsContent"
-                              RowSpacing="16">
+                              RowSpacing="16"
+                              Visibility="Collapsed">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="160"/>
-                                </Grid.ColumnDefinitions>
+                            <Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Bins"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
                                     <TextBlock Text="Active and dormant bundle display state. Placement scans assign unplaced bundles; moves are manual from a bin."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsTotalText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Total bins"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsActiveText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Active bins"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="3"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsBundleText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Bundles"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="4"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="BinsShiftSalesText"
-                                                   Text="$0.00"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Sales"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
                             </Grid>
 
                             <Grid Grid.Row="1"
@@ -583,7 +630,8 @@
                                                   MaxHeight="340"
                                                   Padding="0"
                                                   VerticalAlignment="Top"
-                                                  SelectionMode="None">
+                                                  SelectionMode="Single"
+                                                  SelectionChanged="BinBundlesListView_SelectionChanged">
                                             <ListView.ItemContainerStyle>
                                                 <Style TargetType="ListViewItem">
                                                     <Setter Property="Padding" Value="0"/>
@@ -646,12 +694,20 @@
                                                 </DataTemplate>
                                             </ListView.ItemTemplate>
                                         </ListView>
-                                        <Button x:Name="AddBundleToBinButton"
-                                                Grid.Row="2"
-                                                Content="Add Bundle"
-                                                HorizontalAlignment="Stretch"
-                                                IsEnabled="False"
-                                                Click="AddBundleToBinButton_Click"/>
+                                        <StackPanel Grid.Row="2"
+                                                    Spacing="8">
+                                            <Button x:Name="MoveSelectedBundleButton"
+                                                    Content="Move Bundle"
+                                                    HorizontalAlignment="Stretch"
+                                                    Visibility="Collapsed"
+                                                    IsEnabled="False"
+                                                    Click="MoveSelectedBundleButton_Click"/>
+                                            <Button x:Name="AddBundleToBinButton"
+                                                    Content="Add Bundle"
+                                                    HorizontalAlignment="Stretch"
+                                                    IsEnabled="False"
+                                                    Click="AddBundleToBinButton_Click"/>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
                             </Grid>
@@ -664,38 +720,13 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="180"/>
-                                </Grid.ColumnDefinitions>
+                            <Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Inventory"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
                                     <TextBlock Text="Receiving is unopened stock intake. Initial import and activation are active bin placement records."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="InventoryReceivingCountText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Unopened bundles"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="InventoryBundleCountText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Active bin bundles"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
                             </Grid>
 
                             <TabView x:Name="InventoryTabs"
@@ -738,6 +769,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Receiving"
                                                              PlaceholderText="Game, bundle, or ticket"
+                                                             MaxLength="128"
                                                              TextChanged="ReceivingSearchBox_TextChanged"/>
                                                     <Button x:Name="ReceivingPreviousPageButton"
                                                             Grid.Column="2"
@@ -831,7 +863,7 @@
                                           ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="280"/>
+                                            <ColumnDefinition Width="300"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
                                             <Grid RowSpacing="12">
@@ -860,6 +892,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Open / Active"
                                                              PlaceholderText="Bin, game, bundle, or ticket"
+                                                             MaxLength="128"
                                                              TextChanged="OpenBundleSearchBox_TextChanged"/>
                                                     <Button x:Name="OpenBundlePreviousPageButton"
                                                             Grid.Column="2"
@@ -1001,6 +1034,7 @@
                                                         <TextBox x:Name="GameSearchBox"
                                                                  Header="Search Game ID"
                                                                  PlaceholderText="Enter game ID"
+                                                                 MaxLength="64"
                                                                  TextChanged="GameSearchBox_TextChanged"/>
                                                         <TextBlock x:Name="GamePageStatusText"
                                                                    Grid.Column="1"
@@ -1035,7 +1069,7 @@
                                                     <TextBlock Text="Image" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="1" Text="Game ID" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="2" Text="Name" Style="{StaticResource SlCaptionTextStyle}"/>
-                                                    <TextBlock Grid.Column="3" Text="Price" Style="{StaticResource SlCaptionTextStyle}"/>
+                                                    <TextBlock Grid.Column="3" Text="Ticket" Style="{StaticResource SlCaptionTextStyle}"/>
                                                     <TextBlock Grid.Column="4" Text="Image status" Style="{StaticResource SlCaptionTextStyle}"/>
                                                 </Grid>
                                                 <ListView x:Name="GameCatalogListView"
@@ -1101,13 +1135,26 @@
                                                          IsReadOnly="True"/>
                                                 <TextBox x:Name="GameNameEditBox"
                                                          Header="Game name"
+                                                         MaxLength="128"
                                                          PlaceholderText="Display name"/>
                                                 <NumberBox x:Name="GamePriceEditBox"
                                                            Header="Game price ($)"
                                                            Minimum="1"
+                                                           Maximum="300"
                                                            SmallChange="1"
                                                            LargeChange="5"
                                                            SpinButtonPlacementMode="Compact"/>
+                                                <TextBlock Text="Bundle total is automatic: $900 for a $50 ticket; otherwise $300."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                                <ComboBox x:Name="GlobalFirstTicketEditComboBox"
+                                                          Header="First ticket for all games">
+                                                    <ComboBoxItem Content="000" Tag="0"/>
+                                                    <ComboBoxItem Content="001" Tag="1"/>
+                                                </ComboBox>
+                                                <Button Content="Save Global Ticket Start"
+                                                        HorizontalAlignment="Stretch"
+                                                        Click="SaveGlobalFirstTicketButton_Click"/>
                                                 <Button Content="Save Game Details"
                                                         HorizontalAlignment="Stretch"
                                                         Click="SaveGameDetailsButton_Click"/>
@@ -1141,71 +1188,13 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="120"/>
-                                    <ColumnDefinition Width="120"/>
-                                    <ColumnDefinition Width="120"/>
-                                    <ColumnDefinition Width="110"/>
-                                    <ColumnDefinition Width="135"/>
-                                </Grid.ColumnDefinitions>
+                            <Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="Closing"
                                                Style="{StaticResource SlSectionTitleTextStyle}"/>
                                     <TextBlock Text="Shift balancing keeps sales totals, inventory evidence, and reconciliation separate."
                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingSalesText"
-                                                   Text="$0.00"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Sales"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingTicketsText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Total tickets"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="3"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingEvidenceText"
-                                                   Text="0 / 0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Bins scanned"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="4"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingActivatedText"
-                                                   Text="0"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Activated"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="5"
-                                        Style="{StaticResource SlPanelBorderStyle}">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock x:Name="ClosingExpectedCashText"
-                                                   Text="$0.00"
-                                                   Style="{StaticResource SlMetricTextStyle}"/>
-                                        <TextBlock Text="Expected cash"
-                                                   Style="{StaticResource SlCaptionTextStyle}"/>
-                                    </StackPanel>
-                                </Border>
                             </Grid>
 
                             <TabView x:Name="ClosingTabs"
@@ -1310,6 +1299,7 @@
                                                 <NumberBox x:Name="ClosingOnlineSaleBox"
                                                            Header="Online sale"
                                                            Minimum="0"
+                                                           Maximum="9999999.99"
                                                            Value="0"
                                                            SmallChange="1"
                                                            LargeChange="10"
@@ -1318,6 +1308,7 @@
                                                 <NumberBox x:Name="ClosingOnlineCashoutBox"
                                                            Header="Online cashout"
                                                            Minimum="0"
+                                                           Maximum="9999999.99"
                                                            Value="0"
                                                            SmallChange="1"
                                                            LargeChange="10"
@@ -1326,6 +1317,7 @@
                                                 <NumberBox x:Name="ClosingInstantCashoutBox"
                                                            Header="Instant cashout"
                                                            Minimum="0"
+                                                           Maximum="9999999.99"
                                                            Value="0"
                                                            SmallChange="1"
                                                            LargeChange="10"
@@ -1345,8 +1337,38 @@
                                                            Text="Matched scan evidence auto reconciles. Unscanned active bundles close out when the shift is finalized."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
+                                                <Border x:Name="ClosingPriceIssueBar"
+                                                        Visibility="Collapsed"
+                                                        Background="{ThemeResource SlSurfaceAltBrush}"
+                                                        BorderBrush="{ThemeResource SlDangerBrush}"
+                                                        BorderThickness="2"
+                                                        CornerRadius="6">
+                                                    <Expander x:Name="ClosingPriceIssueExpander"
+                                                              IsExpanded="True"
+                                                              HorizontalAlignment="Stretch"
+                                                              AutomationProperties.AutomationId="ClosingPriceIssueExpander"
+                                                              AutomationProperties.Name="Closing price correction required">
+                                                        <Expander.Header>
+                                                            <TextBlock Text="Price correction required"
+                                                                       Foreground="{ThemeResource SlDangerBrush}"
+                                                                       FontWeight="SemiBold"/>
+                                                        </Expander.Header>
+                                                        <StackPanel Padding="12,0,12,12"
+                                                                    Spacing="10">
+                                                            <TextBlock x:Name="ClosingPriceIssueDetailText"
+                                                                       Foreground="{ThemeResource SlTextBrush}"
+                                                                       TextWrapping="Wrap"/>
+                                                            <Button x:Name="FixClosingPriceButton"
+                                                                    Content="Fix Game Price"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    Click="FixClosingPriceButton_Click"
+                                                                    AutomationProperties.AutomationId="FixClosingPriceButton"
+                                                                    AutomationProperties.Name="Fix closing game price"/>
+                                                        </StackPanel>
+                                                    </Expander>
+                                                </Border>
                                                 <Button x:Name="ResolveClosingIssuesButton"
-                                                        Content="Assign Unmatched Scan"
+                                                        Content="Fix Closing Issue"
                                                         HorizontalAlignment="Stretch"
                                                         IsEnabled="False"
                                                         Click="ResolveClosingIssuesButton_Click"/>
@@ -1396,6 +1418,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Closings"
                                                              PlaceholderText="Shift, date, sales, bins"
+                                                             MaxLength="128"
                                                              TextChanged="ClosingHistorySearchBox_TextChanged"/>
                                                     <Button x:Name="ClosingHistoryPreviousPageButton"
                                                             Grid.Column="2"
@@ -1591,14 +1614,15 @@
                                 <TextBlock Text="Settings"
                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                 <TextBlock x:Name="SettingsSubtitleText"
-                                           Text="Store, scanner, display, and game setup controls for the current installation."
+                                           Text="Store, users, scanner, display, and game setup controls for the current installation."
                                            Style="{StaticResource SlCaptionTextStyle}"/>
                             </StackPanel>
 
                             <TabView x:Name="SettingsTabs"
                                      Grid.Row="1"
                                      IsAddTabButtonVisible="False"
-                                     CanDragTabs="False">
+                                     CanDragTabs="False"
+                                     SelectionChanged="SettingsTabs_SelectionChanged">
                                 <TabViewItem x:Name="StoreSettingsTab"
                                              Header="Store"
                                              IsClosable="False">
@@ -1769,6 +1793,105 @@
                                     </Grid>
                                 </TabViewItem>
 
+                                <TabViewItem x:Name="UserSettingsTab"
+                                             Header="Users"
+                                             AutomationProperties.AutomationId="UserSettingsTab"
+                                             IsClosable="False">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <Grid RowSpacing="14">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock x:Name="PinSettingsTitleText"
+                                                           Text="Users and PINs"
+                                                           Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                <TextBlock x:Name="PinSettingsDescriptionText"
+                                                           Text="Change your PIN or create/reset the optional Clerk login. Every PIN contains exactly four digits."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+
+                                            <Grid Grid.Row="1"
+                                                  ColumnSpacing="14">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <Border x:Name="OwnPinPanel"
+                                                        Style="{StaticResource SlPanelBorderStyle}">
+                                                    <StackPanel Spacing="10">
+                                                        <TextBlock x:Name="OwnPinTitleText"
+                                                                   Text="Your PIN"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="OwnPinInstructionText"
+                                                                   Text="Confirm your current PIN before replacing it."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <PasswordBox x:Name="CurrentUserPinBox"
+                                                                     Header="Current 4-digit PIN"
+                                                                     AutomationProperties.AutomationId="CurrentUserPin"
+                                                                     MaxLength="4"/>
+                                                        <PasswordBox x:Name="NewUserPinBox"
+                                                                     Header="New 4-digit PIN"
+                                                                     AutomationProperties.AutomationId="NewUserPin"
+                                                                     MaxLength="4"/>
+                                                        <PasswordBox x:Name="ConfirmUserPinBox"
+                                                                     Header="Confirm new PIN"
+                                                                     AutomationProperties.AutomationId="ConfirmUserPin"
+                                                                     MaxLength="4"/>
+                                                        <Button x:Name="ChangeOwnPinButton"
+                                                                Content="Change My PIN"
+                                                                AutomationProperties.AutomationId="ChangeOwnPin"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="ChangeOwnPinButton_Click"/>
+                                                        <TextBlock x:Name="OwnPinStatusText"
+                                                                   Text="Enter your current and new PINs."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <Border x:Name="ClerkResetPanel"
+                                                        Grid.Column="1"
+                                                        Style="{StaticResource SlPanelBorderStyle}">
+                                                    <StackPanel Spacing="10">
+                                                        <TextBlock Text="Reset Clerk PIN"
+                                                                   Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                        <TextBlock x:Name="ClerkAccountStatusText"
+                                                                   Text="No Clerk login is configured."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBox x:Name="ClerkNameSettingsBox"
+                                                                 Header="Clerk name"
+                                                                 AutomationProperties.AutomationId="ClerkLoginName"
+                                                                 MaxLength="64"/>
+                                                        <PasswordBox x:Name="NewClerkPinSettingsBox"
+                                                                     Header="New 4-digit PIN"
+                                                                     AutomationProperties.AutomationId="NewClerkPin"
+                                                                     MaxLength="4"/>
+                                                        <PasswordBox x:Name="ConfirmClerkPinSettingsBox"
+                                                                     Header="Confirm new PIN"
+                                                                     AutomationProperties.AutomationId="ConfirmClerkPin"
+                                                                     MaxLength="4"/>
+                                                        <Button x:Name="ResetClerkPinButton"
+                                                                Content="Reset Clerk PIN"
+                                                                AutomationProperties.AutomationId="ResetClerkPin"
+                                                                HorizontalAlignment="Stretch"
+                                                                Click="ResetClerkPinButton_Click"/>
+                                                        <TextBlock x:Name="ClerkResetStatusText"
+                                                                   Text="Enter a Clerk name and matching four-digit PIN."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+                                        </Grid>
+                                    </ScrollViewer>
+                                </TabViewItem>
+
                                 <TabViewItem x:Name="ScannerDisplaySettingsTab"
                                              Header="Scanner and Display"
                                              IsClosable="False">
@@ -1859,6 +1982,7 @@
                                                         </Grid.ColumnDefinitions>
                                                         <TextBox x:Name="DisplayHostBox"
                                                                  Header="Display host"
+                                                                 MaxLength="256"
                                                                  PlaceholderText="Pi IP or hostname"/>
                                                         <NumberBox x:Name="DisplayPortBox"
                                                                    Grid.Column="1"
@@ -2004,6 +2128,7 @@
                                                        Style="{StaticResource SlSectionTitleTextStyle}"/>
                                             <TextBox x:Name="BackupFolderBox"
                                                      Header="Backup folder"
+                                                     MaxLength="4096"
                                                      PlaceholderText="USB drive or synced folder path"/>
                                             <Button Content="Backup now"
                                                     HorizontalAlignment="Stretch"
@@ -2029,7 +2154,8 @@
                                                 <TextBlock Text="Email Server"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                                 <TextBox x:Name="SmtpHostBox"
-                                                         Header="SMTP host"/>
+                                                         Header="SMTP host"
+                                                         MaxLength="256"/>
                                                 <Grid ColumnSpacing="8">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="120"/>
@@ -2043,13 +2169,16 @@
                                                                SpinButtonPlacementMode="Compact"/>
                                                     <TextBox x:Name="SmtpUserBox"
                                                              Grid.Column="1"
-                                                             Header="SMTP user"/>
+                                                             Header="SMTP user"
+                                                             MaxLength="320"/>
                                                 </Grid>
                                                 <PasswordBox x:Name="SmtpPasswordBox"
                                                              Header="Application password"
+                                                             MaxLength="512"
                                                              PlaceholderText="Leave blank to keep saved password"/>
                                                 <TextBox x:Name="EmailToBox"
-                                                         Header="Closing email recipient"/>
+                                                         Header="Closing email recipient"
+                                                         MaxLength="1024"/>
                                                 <CheckBox x:Name="SettingsEmailSendCheckBox"
                                                           Content="Send closing email"
                                                           Checked="SettingsEmailOptionChanged"
@@ -2134,7 +2263,7 @@
                                     <Grid ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="280"/>
+                                            <ColumnDefinition Width="340"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
                                             <Grid RowSpacing="12">
@@ -2163,6 +2292,7 @@
                                                              Grid.Column="1"
                                                              Header="Search Audit"
                                                              PlaceholderText="Action, user, detail"
+                                                             MaxLength="256"
                                                              TextChanged="AuditLogSearchBox_TextChanged"/>
                                                     <Button x:Name="AuditLogPreviousPageButton"
                                                             Grid.Column="2"
@@ -2201,11 +2331,15 @@
                                                 <ListView x:Name="AuditLogListView"
                                                           Grid.Row="3"
                                                           MinHeight="220"
-                                                          SelectionMode="None"
+                                                          MaxHeight="360"
+                                                          VerticalAlignment="Top"
+                                                          SelectionMode="Single"
+                                                          SelectionChanged="AuditLogListView_SelectionChanged"
+                                                          AutomationProperties.AutomationId="AuditLogList"
                                                           SizeChanged="PagedList_SizeChanged">
                                                     <ListView.ItemTemplate>
                                                         <DataTemplate>
-                                                            <Grid MinHeight="44"
+                                                            <Grid Height="44"
                                                                   Padding="12,8"
                                                                   ColumnSpacing="12">
                                                                 <Grid.ColumnDefinitions>
@@ -2222,14 +2356,17 @@
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 <TextBlock Grid.Column="2"
                                                                            Text="{Binding Action}"
+                                                                           TextTrimming="CharacterEllipsis"
                                                                            Foreground="{ThemeResource SlTextBrush}"/>
                                                                 <TextBlock Grid.Column="3"
                                                                            Text="{Binding Actor}"
+                                                                           TextTrimming="CharacterEllipsis"
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 <TextBlock Grid.Column="4"
                                                                            Text="{Binding Detail}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"
-                                                                           TextWrapping="Wrap"/>
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           TextWrapping="NoWrap"/>
                                                             </Grid>
                                                         </DataTemplate>
                                                     </ListView.ItemTemplate>
@@ -2239,12 +2376,28 @@
                                         <Border Grid.Column="1"
                                                 Style="{StaticResource SlPanelBorderStyle}">
                                             <StackPanel Spacing="12">
-                                                <TextBlock Text="Audit Rules"
+                                                <TextBlock Text="Audit Details"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
-                                                <TextBlock Text="Audit rows record close finalization and settings changes without storing secrets."
+                                                <TextBlock x:Name="AuditDetailTitleText"
+                                                           Text="Select an audit action"
+                                                           Foreground="{ThemeResource SlTextBrush}"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock x:Name="AuditDetailMetadataText"
+                                                           Text="The complete action detail will appear here."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
-                                                <TextBlock Text="Search by action, category, user, or detail."
+                                                <TextBox x:Name="AuditDetailTextBox"
+                                                         Header="Complete detail"
+                                                         MinHeight="180"
+                                                         MaxHeight="300"
+                                                         IsReadOnly="True"
+                                                         AcceptsReturn="True"
+                                                         TextWrapping="Wrap"
+                                                         VerticalScrollBarVisibility="Auto"
+                                                         AutomationProperties.AutomationId="AuditDetailText"
+                                                         AutomationProperties.Name="Complete audit detail"/>
+                                                <TextBlock Text="Select any row to read and copy its complete detail."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
                                             </StackPanel>
@@ -2256,6 +2409,7 @@
                     </Grid>
                 </ScrollViewer>
             </Grid>
+
         </Grid>
 
         <Border Grid.Row="3"
@@ -2275,7 +2429,8 @@
               IsTabStop="True">
             <Border x:Name="ClosingScanOverlayPanel"
                     MinWidth="320"
-                    MinHeight="360"
+                    MinHeight="280"
+                    Margin="16"
                     Padding="16"
                     Style="{StaticResource SlPanelBorderStyle}"
                     HorizontalAlignment="Center"
@@ -2296,7 +2451,7 @@
                                    VerticalAlignment="Center"/>
                         <Button x:Name="ClosingScanOverlayCloseButton"
                                 Grid.Column="1"
-                                Content="Close scanning"
+                                Content="Close Scanning"
                                 MinWidth="120"
                                 IsTabStop="False"/>
                     </Grid>
@@ -2354,6 +2509,25 @@
                                        Style="{StaticResource SlCaptionTextStyle}"
                                        TextWrapping="Wrap"/>
 
+                            <Border Background="{ThemeResource SlSurfaceAltBrush}"
+                                    BorderBrush="{ThemeResource SlBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{StaticResource ControlCornerRadius}"
+                                    Padding="12">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Registration ID"
+                                               Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                    <TextBlock x:Name="SetupRegistrationIdText"
+                                               Text="Calculating device registration ID..."
+                                               IsTextSelectionEnabled="True"
+                                               TextWrapping="Wrap"
+                                               AutomationProperties.Name="Device registration ID"/>
+                                    <TextBlock Text="Provide this ID to the license administrator before checking the license. It is derived from this Windows device and does not depend on setup or login."
+                                               Style="{StaticResource SlCaptionTextStyle}"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -2361,6 +2535,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="StoreNameBox"
                                          Header="Store name"
+                                         MaxLength="128"
                                          PlaceholderText="Used for license server feedback"/>
                                 <ComboBox x:Name="StateComboBox"
                                           Grid.Column="1"
@@ -2377,10 +2552,12 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="StoreStreetBox"
                                          Header="Street"
+                                         MaxLength="256"
                                          PlaceholderText="Street address"/>
                                 <TextBox x:Name="StoreCityBox"
                                          Grid.Column="1"
                                          Header="City"
+                                         MaxLength="128"
                                          PlaceholderText="City"/>
                             </Grid>
 
@@ -2415,14 +2592,22 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <PasswordBox x:Name="ManagerPasswordBox"
-                                             Header="Manager password"/>
+                                             Header="Manager 4-digit PIN"
+                                             AutomationProperties.AutomationId="ManagerSetupPin"
+                                             MaxLength="4"/>
                                 <PasswordBox x:Name="ClerkPasswordBox"
                                              Grid.Column="1"
-                                             Header="Clerk password (optional)"/>
+                                             Header="Clerk 4-digit PIN (optional)"
+                                             AutomationProperties.AutomationId="ClerkSetupPin"
+                                             MaxLength="4"/>
                             </Grid>
+
+                            <TextBlock Text="Each PIN must contain exactly four digits."
+                                       Style="{StaticResource SlCaptionTextStyle}"/>
 
                             <TextBox x:Name="ClerkNameBox"
                                      Header="Clerk name"
+                                     MaxLength="64"
                                      PlaceholderText="Optional"/>
                         </StackPanel>
                     </ScrollViewer>
@@ -2552,15 +2737,19 @@
                                 Visibility="Collapsed">
                         <TextBlock Text="Login"
                                    Style="{StaticResource SlSectionTitleTextStyle}"/>
-                        <TextBlock Text="Enter the password for the selected user."
+                        <TextBlock Text="Enter the four-digit PIN for the selected user."
                                    Style="{StaticResource SlCaptionTextStyle}"/>
 
                         <ComboBox x:Name="LoginUserComboBox"
                                   Header="User"
-                                  HorizontalAlignment="Stretch"/>
+                                  AutomationProperties.AutomationId="LoginUser"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="LoginUserComboBox_SelectionChanged"/>
 
                         <PasswordBox x:Name="LoginPasswordBox"
-                                     Header="Password"
+                                     Header="4-digit PIN"
+                                     AutomationProperties.AutomationId="LoginPin"
+                                     MaxLength="4"
                                      KeyDown="LoginPasswordBox_KeyDown"/>
                     </StackPanel>
 
@@ -2572,7 +2761,7 @@
                         </Grid.ColumnDefinitions>
 
                         <TextBlock x:Name="StartupStatusText"
-                                   Text="Select the store state and create the Manager password."
+                                   Text="Select the store state and create the Manager PIN."
                                    Style="{StaticResource SlCaptionTextStyle}"
                                    VerticalAlignment="Center"
                                    TextWrapping="Wrap"/>

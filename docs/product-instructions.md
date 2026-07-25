@@ -35,7 +35,7 @@ SimpleLotto has only two possible roles:
 
 Role-based access is always enabled. Do not build a setting to turn role-based access on or off.
 
-First-install setup must require creation of a Manager password before the system can be used. A Manager account is mandatory.
+First-install setup must require creation of a Manager PIN before the system can be used. A Manager account is mandatory.
 
 Clerk accounts are optional. The first-install workflow may allow the installer to create a Clerk account, but it must not require one.
 
@@ -43,36 +43,41 @@ Login expectations:
 
 - A login screen is always shown after setup is complete.
 - Any valid user can log in.
-- The password field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
+- The four-digit PIN field receives focus when the login screen opens, and pressing Enter in it performs the same login action as the Login button.
+- Login accepts exactly four ASCII digits. Text passwords and other input lengths are not accepted.
+- New setup credentials, user-initiated credential changes, and Manager-authorized Clerk resets must create exactly four-digit ASCII PINs.
+- Do not add credential-composition rules beyond the four-digit PIN requirement, failed-login delays, or account lockouts.
 - Logging in controls access only. It does not start, end, or otherwise define a financial shift/close interval.
 - SimpleLotto is a single-computer, single-active-user application.
 - Only one user is actively operating the application at a time.
 - The active user can access the operational workflow allowed for their role.
 - The active user can run closing at any time.
-- Shift closing is primarily financial separation by time, not a hard user handoff.
+- Shift closing is primarily financial separation by the persistent closing-to-closing interval, not a hard user handoff.
 - The same logged-in user may close multiple times in the same day.
 - Manager access is required for sensitive system settings and user management.
 - Clerk access, when configured, should support normal sales, bin, inventory, and shift-closing workflows unless a specific action is manager-sensitive.
-- Settings is Manager-only except Clerk may see a limited Settings page with Scanner and Display tabs.
-- Additional Clerk-visible Settings information may be added later, but current scope is Scanner and Display only.
+- Settings is Manager-only except Clerk may see a limited Settings page with PIN and Scanner and Display tabs.
+- Manager and Clerk may verify their current PIN and change their own PIN. A Clerk must never see Manager-only store, user-reset, backup, email, audit, or game settings.
 
 First-install workflow:
 
-1. Create required Manager password.
+1. Create required four-digit Manager PIN.
 2. Optionally create a Clerk user.
-3. Continue into the first login screen.
-4. Successful login enters the currently open financial close interval.
+3. Scan the initial bin and bundle/ticket placements.
+4. Before initial import can finish, enter and persist the ticket price once for every distinct imported Game ID that is not already configured. Derive the bundle total automatically from that ticket price.
+5. Continue into the first login screen only after all imported Game IDs have valid saved pricing.
+6. Successful login enters the currently open financial close interval.
 
 ## Shift Model
 
 SimpleLotto closes from shift to shift. There is no separate daily closing model by default.
 
-In SimpleLotto, a shift is an always-running financial close interval. Login is not the start of a shift. The business boundary is the time between the previous successful close and the current successful close.
+In SimpleLotto, a shift is an always-running financial close interval. Login is not the start of a shift. The business boundary is the persistent interval opened by the previous successful close and closed by the current successful close; its timestamps describe that span but do not determine row membership.
 
 - Sales and inventory movement occur inside the currently open close interval.
-- The current close interval starts at the previous successful close time. On first install, it starts from the first operational use after setup/import.
+- The current close-interval record is opened by the previous successful close. On first install, the first interval is created during database/setup initialization before operational activity.
 - Any active authorized user can close the current interval at any time.
-- Closing records the current close time and creates the financial summary for activity between the previous close and the current close.
+- Closing records the current close time and creates the financial summary for rows assigned to that explicit interval.
 - After closing succeeds, the next close interval begins immediately; no logout or user handoff is required.
 - The same logged-in user may close multiple intervals in one day.
 - Cash summaries are shift-to-shift only.
@@ -119,9 +124,16 @@ Cash summary rules:
 - Inventory overview can support reconciliation, but it is not the cash summary.
 - Any variance should identify whether it belongs to sales/cash or inventory/counts.
 
+Operator input safety rules:
+
+- Every editable text, password, and numeric field must have an explicit, workflow-appropriate length or value boundary. Scanner buffers must also have a finite maximum length.
+- Treat pasted, typed, or scanned input as untrusted. Parse with non-throwing validation and reject malformed, non-finite, fractional-when-whole-required, over-precision, out-of-range, and arithmetic-overflow values before changing persisted or calculated state.
+- Rejected input must leave the last valid value in place and show a clear operator-facing message. A validation failure must not crash the app, freeze calculated cards, partially save a workflow, or silently substitute an unrelated default.
+- Calculated money totals must use checked arithmetic. If a source value or result cannot be represented safely, keep the workflow open and require correction instead of finalizing.
+
 ## Game, Bundle, and Ticket Rules
 
-Inventory must let the user define game prices and bundle prices. Game price and bundle price together determine how many tickets are in a bundle.
+Inventory must let the user define the per-ticket price for each Game ID. The app derives the bundle total from that price and uses both values to determine how many tickets are in a bundle.
 
 Default supported game prices should include:
 
@@ -131,10 +143,9 @@ Default supported game prices should include:
 - $10
 - $20
 - $25
-- $30
 - $50
 
-The user must be able to add new game prices, such as $40, from Inventory game setup.
+The user may add another ticket price from Inventory game setup when it divides evenly into its automatically derived bundle total.
 
 Game price rules:
 
@@ -144,20 +155,25 @@ Game price rules:
 - Each game type has a price per ticket.
 - Game ID, game name, game price, and related game metadata are stable once defined and should not change during normal operations. Game name may be established or corrected through explicit user edit or license-server sync rules.
 - New game types require the user to set a positive price before the game can be used operationally.
-- If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm the game price before that workflow can finalize.
-- Regular bundle activation follows the same missing-price rule as inventory receiving. If the scanned bundle's game ID is new or has no positive price, activation must pause and open a required price-entry dialog before assigning the bundle to the bin.
-- If the scanned bundle's game ID already has a saved positive price and display name, activation must not ask for price or name again; after the bin is selected/scanned, activation should continue.
-- The activation price dialog should show the game ID, bundle ID, selected/scanned bin, any fetched/manual game name, and any fetched/manual image when available.
-- The activation price dialog must allow the operator to enter or scan the price into the same game price field; do not add a separate price-scan text field.
-- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, game price, and game name; do not add separate barcode-focused text boxes for values that are already captured by the scanner workflow.
-- Entering a missing price during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without it.
-- Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether any scanned game IDs are new or still have no price.
-- If receiving includes any new/unpriced game IDs, the app must present a required price-entry dialog for each missing game before finalizing receiving.
-- The missing-price dialog should show the game ID, any fetched/manual game name, and any fetched/manual image when available.
+- If a game is activated for the first time or added through inventory receiving for the first time, the user must enter or confirm the per-ticket game price before that workflow can finalize. Do not ask for a bundle price.
+- Regular bundle activation follows the same missing-configuration rule as inventory receiving. If the scanned bundle's Game ID is new or has no valid positive ticket price, activation must pause and open a required game-setup dialog before assigning the bundle to the bin.
+- If the scanned bundle's Game ID already has a saved valid ticket price, activation must reuse it and must not ask for pricing again; after the bin is selected/scanned, activation should continue. A missing display name may be corrected separately and must not cause a valid saved price to be requested again.
+- The activation game-setup dialog should show the game ID, bundle ID, selected/scanned bin, ticket-price field, automatically derived bundle total, and any fetched/manual game name and image when available.
+- The activation game-setup dialog must allow the operator to enter or scan the ticket price into the same game price field; do not add a separate price-scan text field.
+- A generated name such as `Game 1423` is a suggestion, not pre-entered text. Show it as the game-name placeholder, clear the suggestion while the operator edits that field, and use it as the saved fallback only when no name is entered.
+- Required game-price entry parses positive whole dollars with an optional leading or trailing dollar sign, such as `20`, `$20`, or `20$`. Missing, malformed, or bundle-incompatible values must keep the dialog open and show a clear inline validation message; for example, `40$` is recognized as `$40` and then rejected because `$40` does not divide evenly into the automatic `$300` bundle total.
+- Regular bundle activation must keep input collection tight. Across the bundle activation process, the operator should only need fields for bin, ticket price, and game name; do not add a bundle-price field or separate barcode-focused text boxes for values already captured by the scanner workflow.
+- Entering a missing ticket price during activation is an operational setup exception and may be completed by the active clerk or manager because activation cannot safely proceed without it.
+- Inventory receiving may collect all scanned bundle barcodes first. When the user clicks close/finalize receiving, the app must check whether every scanned Game ID has a valid positive ticket price.
+- If receiving includes any new or incompletely configured game IDs, the app must present a required game-setup dialog for each missing game before finalizing receiving.
+- The receiving game-setup dialog should show the game ID, ticket-price field, automatically derived bundle total, and any fetched/manual game name and image when available.
 - The app may attempt a best-effort price lookup using the same state/game setup source used for names and images, but an auto-found price is only a suggestion. The user must confirm or correct the price before saving.
 - Price lookup failure must not block manual setup; the user must be able to enter the game price manually.
 - Auto-fetched game names and images should reuse the already-wired state setup mechanism from `../WindowsPOS`.
 - Auto-fetch failures must not block manual setup. The user must be able to enter or correct the lotto name and image manually.
+- Initial import may collect bin and bundle/ticket placement pairs before asking for prices. When the operator continues to login, the app must validate every distinct imported Game ID and present the same required ticket-price setup for each unconfigured Game ID.
+- Multiple initially imported bundles with the same Game ID share one saved game configuration. Initial import must prompt at most once for that Game ID and reuse the persisted prices for all of its bundles.
+- Cancelling a required initial-import game setup, entering invalid prices, or failing to persist the game/setup state must keep the initial import open and must not continue to login.
 
 Game image handling:
 
@@ -179,24 +195,35 @@ Ticket barcode parsing:
 
 Bundle price rules:
 
-- Bundle price is configured based on the game price.
-- Ticket count per bundle is calculated as: `bundle price / game price`.
+- Bundle total is derived automatically from the per-ticket game price. It is not entered for each game or bundle.
+- For now, a `$50` ticket price always derives a `$900` bundle total. Every other positive ticket price derives a `$300` bundle total.
+- A future bundle-type creator may replace this hardcoded mapping, but do not expose per-game or per-bundle bundle-total entry in the current workflow.
+- Ticket count per bundle is calculated as: `automatic bundle total / ticket price`.
 - Bundle price must produce a whole ticket count. If it does not, the system must reject the value or require correction before saving.
-- Bundle price options must be editable in Inventory game setup.
 - Bundle price is used for ticket range calculation, sold-out detection, and closing accountability.
+- Price setup is complete only after the game configuration is successfully persisted. A SQLite save failure must leave activation or receiving blocked and must not be reported as a successful price setup.
+- Missing or invalid ticket price, derived bundle total, ticket count, current ticket serial, or configured ticket range must block activation, normal sales, and closing-generated sales. Financial workflows must never substitute a one-ticket or `$0` fallback ledger row.
 
 Ticket numbering rules:
 
-- Inventory game setup must allow the user to choose whether the first ticket starts at `000` or `001`.
-- End ticket is calculated from game price, bundle price, and the selected first-ticket mode.
+- Inventory game setup must provide one global choice for whether every bundle starts at `000` or `001`. First-ticket mode is not stored or edited per game or per bundle.
+- When upgrading a database that predates the global setting, initialize it from the existing per-game first-ticket value used by the majority of configured games; if there are no configured games, use `000`. The operator can then explicitly save a different global value.
+- End ticket is calculated from game price, the automatically derived bundle total, and the global first-ticket mode.
 - If first ticket is `000`, end ticket is `ticket_count - 1`.
 - If first ticket is `001`, end ticket is `ticket_count`.
 - Ticket range calculations must stay consistent across sales, inventory, Rdisplay, and closing.
 
 Bundle completion rules:
 
-- A bundle is complete when its sold ticket count/value reaches the configured bundle price.
-- A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift.
+- A bundle is complete when its sold ticket count/value reaches the automatically derived bundle total.
+- When the final valid ticket is sold, keep the bundle assigned to its bin and mark it `Sold out`/grey in Bins and Rdisplay. Its displayed ticket remains the final valid ticket; it must never advance to a non-existent serial (for example, `$20`/`$300`, start `000`: `000`-`014`, never `015`).
+- The active placement stores the current available ticket, not the last sold ticket. Bins and Rdisplay show that stored current ticket directly. The sales ledger separately records only the ticket or inclusive ticket range actually sold.
+- A ticket serial may be recorded only once for a placed bundle during normal sales/backfill. During Closing, a scanned ticket below the stored current available ticket is authoritative backward physical evidence, not a duplicate-sale rejection: stage one bundle-scoped reversal for the inclusive series from the scanned ticket through one less than the stored current available ticket, and make the scanned ticket the available ticket when Closing commits.
+- A regular scan and a Closing scan give the scanned ticket different meanings. A regular scan identifies the corrected last sold ticket. If an active bundle currently shows `046` available because sales were recorded through `045`, and a regular scan reads `038`, void the accidental sale activity that reaches beyond `038`, append corrected replacement sale activity for any valid retained prefix, restore `039-045` to the bundle, and make `039` the next available ticket. Apply the same rule when the bundle is already marked sold out through `045`; do not reject the scan merely because the placement is grey.
+- Regular sold-out correction is immediate and transactional. Preserve the original sale rows, append auditable negative void rows and any required corrected positive replacement rows, rebuild only the affected open-interval ticket claims, and update the bundle cursor in the same transaction. A zero-claim restored range is an inventory-only cursor correction. A partially claimed range or a range that reaches closed history must stop without changing sales, claims, or inventory.
+- A staged Closing reversal requires no separate approval dialog or correction audio. When Closing finalizes, remove the affected ticket claims and current open-interval sale activity transactionally, retaining any unaffected prefix of a partially covered sale range. Write one immutable Audit record for the whole Game ID + Bundle ID + ticket range. Never remove or rewrite a closed interval; if a reversal reaches closed history, Closing must stop rather than silently changing prior-shift data.
+- A sale can be voided once only. The void is an auditable reversing ledger entry; a second void of the same sale and a void of that correction are rejected.
+- A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift; retain that bin placement as grey `Sold out` after recording the closing gap-fill range.
 - Closing-generated sold-out handling must be recorded separately from normal scanned sales so reports can explain the difference.
 
 ## Required Main Menu
@@ -295,6 +322,8 @@ Dashboard bin behavior:
 
 Bins is the operator-first display page. It should show the working bin layout, active games, available ticket ranges, and current selling status. Operators should be able to understand what is loaded and where without opening multiple screens. Bin state supports display and workflow correction; it must not be treated as more important than preserving accurate sales activity.
 
+The Bins header must show the total bundles activated in the current open close interval, meaning activations recorded since the most recent completed shift closing.
+
 Bins must support multiple bundles in the same bin. The latest bundle in the bin is the one shown on Rdisplay.
 
 Bundle activation definition:
@@ -317,6 +346,10 @@ Regular bundle activation:
 - When a clerk activates a bundle, the bin can be identified either by scanning the bin barcode or by entering/selecting the bin number on screen.
 - Scanning the bin and entering/selecting the bin number are equivalent activation inputs; either one satisfies the bin-identification requirement.
 - The Bins detail panel should provide an Add Bundle action for the selected bin so the clerk can activate a scanned bundle directly into that bin without scanning the bin barcode again.
+- Selecting a specific bundle card in Bin Details must reveal a `Move Bundle` action. Do not show the move action when no bundle is selected.
+- `Move Bundle` must open a focused dialog that identifies the selected bundle, requires a whole destination bin number within the configured bin range, and offers `OK` and `Cancel`.
+- A successful manual move changes only the bundle's current bin assignment. Preserve its Game ID, Bundle ID, current ticket, sold-out state, sales, activation history, and close-interval history; refresh Bins, Inventory, Closing, and Rdisplay and audit the old and new bins.
+- Entering the current bin as the destination must keep the dialog open and require a different bin.
 - If the clerk scans or enters a bin number that does not exist, block activation and ask the clerk to scan the bin again or enter the correct bin number.
 - For an invalid bin, the app should give audio feedback such as `Wrong bin`.
 - Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.
@@ -344,12 +377,12 @@ Regular bundle activation:
 
 Inventory is the stock management page. It should handle receiving books, assigning inventory, moving books between bins, reviewing active or pending inventory, and managing lotto game setup.
 
-Inventory owns game setup because game identity, game price, bundle price, ticket numbering, and game images are part of inventory/book setup. Do not duplicate these controls under Settings.
+Inventory owns game setup because game identity, game price, automatic bundle-total rules, global ticket numbering, and game images are part of inventory/book setup. Do not duplicate these controls under Settings.
 
 Inventory should organize stock and game setup into these tabs, in this order:
 
 1. Receiving: scan unopened new bundles received into inventory. Receiving is the first tab because it is the recurring stock intake workflow.
-2. Game Prices: shows game ID, image, lotto/game name, price per game, bundle price setup, and ticket numbering setup.
+2. Game Prices: shows game ID, image, lotto/game name, price per ticket, the automatic bundle-total rule, and one global ticket-numbering setting.
 3. Open / Active Bundles: shows bundles currently open, active in bins, dormant behind another bundle, or otherwise inactive/pending resolution.
 
 The active/open bundle tab should be last. Operators should be able to review active and inactive inventory from the Inventory menu without confusing it with unopened receiving.
@@ -365,9 +398,9 @@ Inventory list behavior:
 - Receiving, Open / Active Bundles, and Game Prices should use paging instead of one long vertical scrolling list.
 - Page size should be calculated from the visible list space so page counts grow or shrink with the window size; do not hard-code one fixed row count.
 - Paging controls must show the current page and total pages when known.
-- The Game Prices section must require a price before a new game type can be used. The Bundle Prices section must let the user add a new game price/bundle price combination.
+- The Game Prices section must require a ticket price before a new game type can be used. It must show the hardcoded automatic bundle-total rule without asking the user to enter a bundle total.
 - The Game Prices tab must include a control to view the selected game's currently cached image.
-- From the cached-image view, the user must be able to remove the cached image when it is wrong or no longer wanted. Removing the image should not remove the game ID, game name, price, bundle price, or ticket-numbering setup.
+- From the cached-image view, the user must be able to remove the cached image when it is wrong or no longer wanted. Removing the image should not remove the game ID, game name, ticket price, automatic bundle-total rule, or global ticket-numbering setup.
 
 Inventory receiving records bundles into stock without assigning them to bins. Receiving scans should create or update inventory records, but they should not create active bin assignments and should not be counted as bundle activation.
 
@@ -377,7 +410,7 @@ Inventory receiving is the normal recurring stock intake workflow for new unopen
 
 Inventory receiving is for unopened bundles. Because ticket `000` may be physically inaccessible, the dedicated receiving scan dialog may accept any valid ticket barcode from the bundle but must record only the parsed Game ID and Bundle ID. The ticket serial is ignored and must not create a sale, activation, or bin assignment.
 
-The top bar must provide a `Scan New Inventory` action beside `Close Shift` only while the Inventory menu is selected. Its visibility must follow the Inventory content visibility directly, and the Receiving tab should repeat the same action as a clearly visible entry point. The action must be hidden on Dashboard, Bins, Closing, and Settings. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides a `Close scanning` action that validates and finalizes the session.
+The top bar must provide a `Scan New Inventory` action beside `Close Shift` only while the Inventory menu is selected. Its visibility must follow the Inventory content visibility directly, and the Receiving tab should repeat the same action as a clearly visible entry point. The action must be hidden on Dashboard, Bins, Closing, and Settings. Receiving runs as a focused modal scan session so scanner input cannot collide with sales, activation, or closing workflows. The receiving dialog lists scanned bundles on the left, shows the total bundles being added on the right, and provides an `Update Inventory` action that validates and finalizes the session.
 
 If the same Game ID + Bundle ID is scanned more than once, is already in receiving inventory, or is already active in a bin, the app must speak `Duplicate`, take no action, and leave all receiving counts and records unchanged.
 
@@ -414,16 +447,20 @@ Closing must be shift-based. It should show cash summaries, inventory overview, 
 Closing scan rules:
 
 - Clicking Shift Closing should open a dedicated scan dialog.
-- The scan dialog should accept barcode scans and show a live count of scanned barcodes.
+- The scan dialog should accept barcode scans and show a live count of ticket-shaped barcodes only. Ignored bin commands and unrelated/unrecognized scans may remain visible as feedback rows but must not increase the ticket scan total.
 - The scan dialog should show enough live feedback for the user to know scans are being captured, but it should not finalize reconciliation while the user is still scanning.
 - The scan dialog should allow the user to finish/close the scanning session.
+- Closing the scan dialog must preserve all collected valid evidence. Reopening `Start Closing Scan` resumes that same in-progress evidence instead of resetting it.
+- Only the explicit `Cancel Closing Scan` > `Discard` confirmation, a successful finalized close, or an explicit selected-error discard may remove in-progress closing evidence.
+- A correct rescan for the same physical bundle must replace its earlier rejected scan state without deleting valid scans for other bundles.
+- The scan dialog must allow the operator to select and discard a rejected/error row. Accepted scan rows are not individually discardable, and discarding an error must not clear accepted evidence.
 - During the scan dialog, the user scans ticket barcodes only.
 - During the scan dialog, the user does not scan bin barcodes.
 - During the scan dialog, the user does not click/select a bin to tell the system where the ticket belongs.
 - When the scan dialog closes, the system analyzes collected ticket scans against the existing active bundle/bin state.
 - Closing scan evidence belongs to the shift being closed.
 - Closing scan evidence represents the current real-world state of all physical bins.
-- During closing, scanned bundles/tickets are inventory evidence, not normal live sales.
+- Inside the dedicated Closing scan dialog, scanned bundles/tickets are inventory evidence, not normal live sales.
 - During closing, the user scans the current available ticket from each physical bin/bundle.
 - Closing scan evidence is treated as the truth of the physical bin state.
 - If closing scan evidence does not match the system record, the system record must be reconciled to match the closing scan evidence.
@@ -434,7 +471,13 @@ Closing scan rules:
 - Closing scan collection is not an assignment workflow. Assignment/placement decisions happen only during the post-scan reconciliation loop when the system cannot match scanned evidence to existing active bins.
 - During closing reconciliation, each resolved bin should have a single current bundle relationship for the closing state.
 - If the scanned current ticket is forward from the system's expected current ticket, the gap is recorded as sold.
-- If the scanned current ticket is behind the system's expected current ticket, the system must reconcile the difference in the current open close interval. Do not edit closed intervals; any fix for previously closed activity must be recorded as a corrective action in the current/later open interval.
+- A Closing scan is never included in its own forward gap sale because the scanned ticket is physically available. With stored current `004` and Closing scan `007`, record `004-006` sold and store `007` as current. If stored and scanned current are both `004`, record no sale and keep `004`.
+- If the scanned current ticket is behind the system's expected current ticket, stage one automatic reversal for that bundle and ticket series in the current open close interval. Do not show a separate approval dialog or speak a correction prompt. Finalizing Closing removes the affected current-interval ledger activity and claims, writes the range-level Audit record, and moves the available ticket back to the scanned ticket. Do not edit closed intervals.
+- If a backward Closing correction has no ticket claims in its entire correction range, treat it as an inventory-cursor correction: store the scanned current ticket and write an immutable Audit record without inventing or removing a ledger sale. A partially claimed range remains an integrity error and must not be guessed. Claims belonging to a closed interval remain immutable.
+- A Closing scan for a placement currently marked sold out is authoritative evidence that the bundle still has an available ticket. Reconcile from the scanned ticket through the configured final ticket, clear `Sold out`, and apply the same open-claim, no-claim, partial-claim, and closed-history rules.
+- Closing evidence is temporary, bundle-scoped state. If the operator closes the scan dialog and then completes a usual sale, activation, gap fill, or regular sold-out correction while that Closing session remains in progress, process that operation normally and exactly once. Its resulting permanent bundle state automatically replaces only that physical bundle's earlier Closing evidence; retain every other bundle's valid evidence.
+- Replacing Closing evidence must remove that bundle's earlier staged forward sale or backward correction so stale evidence cannot claim the same ticket again during finalization. The replacement must not require a rescan. Cancelling Closing later discards only temporary Closing evidence and never rolls back the already completed usual operation.
+- Closing bin cards must render from the latest effective bundle state, including temporary Closing evidence and any later completed usual operation, so a reconciled active bundle does not remain grey from its older persisted sold-out state.
 - Closing should not be treated as a free placement/activation workflow.
 - Closing reconciliation should compare scanned bundle/ticket evidence against the system's existing bin assignments and surface differences before final submit.
 - Any tickets/bundles that are part of the system's active bin state but are not scanned during closing are closed out when the user finalizes closing.
@@ -458,9 +501,10 @@ Closing scan rules:
 - In reconciliation context, "game bundle" means Bundle ID.
 - Every reconciliation interaction must show at minimum: game name, Bundle ID, and game ID.
 - Reconciliation interactions should also show bundle ID, current/expected bin, scanned ticket/current ticket, price, and status when available.
+- When a closing scan does not fit the range derived from Game Information, show a red expandable correction bar on the Closing page. The bar must identify the game name, Game ID, Bundle ID, bin, scanned ticket, and configured range, and provide a direct `Fix Game Price` button. One click must present every outstanding price correction one by one until all are cleared or the operator cancels. The bounded `Verify Game Price` dialog shows only game name, Game ID, bin number, current ticket, editable whole-dollar ticket price, and the read-only automatic bundle total. With Manager access, save the corrected ticket price to Game Information and re-evaluate the same scan internally. Do not expose the scanned barcode or derived range calculation in the operator dialog. Cancelling the editor, insufficient role, or an invalid price keeps the correction bar available while the operator continues scanning.
 - During closing reconciliation, dormant bundles in a bin that are not represented in the scanned physical state should be considered sold as appropriate for close-interval accountability.
 - The sold-out fill created by closing must be distinguishable from ordinary scan sales in audit/reporting.
-- If a bundle reaches its configured bundle price before closing, it is considered complete/sold out.
+- If a bundle reaches its automatically derived bundle total before closing, it is considered complete/sold out.
 - Closing should make unscanned-bundle sold-out consequences clear before final submit.
 - Closing scan prompts should use real-time text-to-speech so the operator hears the next action immediately.
 
@@ -478,7 +522,7 @@ Closing page bin status:
 
 ### Settings
 
-Settings owns configuration and system management. This includes store setup, display setup, scanner/display connectivity, users/permissions if needed later, backup options, and any technical diagnostics.
+Settings owns configuration and system management. This includes store setup, display setup, scanner/display connectivity, Manager/Clerk PIN management, backup options, and any technical diagnostics.
 
 Settings must include state setup and technical setup:
 
@@ -487,6 +531,9 @@ Settings must include state setup and technical setup:
 - Displays: handles Rdisplay registration, health, config, and diagnostics.
 - Scanner: handles scanner pairing, health, config, and diagnostics.
 - Settings > Scanner and Display should present scanner controls and display registration as two noticeable cards, with registered displays listed below as individual display cards.
+- Settings > Users/PIN lets the active Manager or Clerk change their own PIN. This requires the active user's current PIN plus a different, matching four-digit replacement.
+- Only a Manager sees the Clerk reset controls. A Manager may create or reset the optional Clerk login by saving a Clerk name and matching four-digit PIN; the Clerk's previous PIN is not required.
+- PIN changes take effect for the next login without ending the current close interval or forcing the active user to log out.
 - Backup and email settings belong here when available.
 - Game setup does not live under Settings; it belongs under Inventory.
 
@@ -512,6 +559,9 @@ License management rules:
 - Use the same license-info update mechanism where the server provides a short-lived update token after authorized call-home.
 - License check failures should not corrupt local state; preserve the existing valid/grace/expired behavior.
 - License management belongs under Manager Settings unless a visible license warning/banner is needed in the shell.
+- The 64-character registration ID is computed locally from the Windows device identity and must be visible on the first-install setup screen before setup, import, or login completes so the device can be preregistered on the license server.
+- Registration-ID compatibility is permanent: preserve the existing WindowsPOS/SimpleLotto `HMAC-SHA256(pepper, "<MachineGuid>:<preferred-active-MAC>")` algorithm, MAC selection/formatting, lowercase hexadecimal output, and pepper behavior. Setup display, automatic call-home, manual Check License, and license-info updates must all use that same value; an application update must not give an unchanged machine a different registration ID.
+- On first install, start one non-blocking license call-home immediately after the required store/setup information is successfully persisted; initial inventory import must not delay the check. On later launches, start one non-blocking call-home after persisted store information is loaded. A failed or unknown-device response must not block setup or corrupt previously valid cached state.
 
 SimpleLotto license expiry lifecycle:
 
@@ -546,7 +596,7 @@ State game-name sync rules:
 - Only sync names changed by the user to something other than the system default/generated name.
 - Example: if the user changes `Game 1822` to `20X Luck`, that user-defined name can sync to the server only if the server does not already have that state/game entry.
 - Do not use local sync to overwrite an existing server game-name entry.
-- Game price, bundle price, and ticket numbering are local operational configuration and must not be overwritten by this game-name sync unless a future scoped requirement explicitly adds that.
+- Game price, the automatic bundle-total rule, and global ticket numbering are local operational configuration and must not be overwritten by this game-name sync unless a future scoped requirement explicitly adds that.
 - Game-name sync should be best-effort and must not block sales, closing, or local game setup.
 - Sync results and failures should be logged for support.
 
@@ -586,11 +636,13 @@ When a scanner is paired, SimpleLotto must monitor scanner input globally while 
 
 Scanner rules:
 
-- SimpleLotto should reuse the proven scanner input mechanism from `../windowsPOS` instead of inventing a new scanner stack.
+- SimpleLotto should reuse the proven HID/Raw Input capture mechanism from `../windowsPOS`, but must keep its own simpler product and routing behavior. Do not copy WindowsPOS placement, pending-state, or sale business logic.
 - Global scanner capture is the default during normal operation.
 - Focused/on-demand scan capture is used only inside explicit workflows that ask the user to scan, such as add bundle, inventory receiving, closing scan, setup/import, and correction dialogs.
 - Paired scanner input should be monitored regardless of which page is currently visible.
 - Scanner input should continue to be monitored when the main window is minimized to the tray.
+- If a background scan requires an operator dialog, such as selecting an activation bin or completing missing ticket-price setup, SimpleLotto must restore and foreground the main window before showing that dialog. Configured-game sales that require no operator input should remain background-capable without restoring the window.
+- Foregrounding a scanner-triggered dialog must preserve the current visible window state. A maximized window stays maximized, and a normal visible window keeps its size and position; restore only a minimized window, and show a hidden tray window without forcing a visible window into restored size.
 - Scanner routing must respect the current workflow state: global normal sale/activation, focused add-bundle capture, focused inventory receiving, focused closing scan, setup/import, or correction.
 - Scan events should be captured with timestamp, active user, current close interval/shift reference, raw barcode, parsed meaning, page/workflow state, and result.
 - Scanner monitoring should not depend on keyboard focus inside a specific text field.
@@ -598,12 +650,30 @@ Scanner rules:
 - Scanner status and pairing diagnostics belong under Settings.
 - Settings > Scanner and Display must include barcode scanner pairing and unpairing controls. Pairing should reuse the WindowsPOS HID keyboard-class scanner model: list candidate HID devices, store VID/PID/serial when available, and use that pairing as the prerequisite for background scanner capture.
 
+Capture, classification, and routing contract:
+
+- There is one scanner routing contract with two capture adapters: paired Raw Input and focused WinUI `KeyDown`. Each adapter identifies one complete Enter-terminated scan before routing it, and only one adapter may own a physical scan at a time.
+- A paired scanner uses a background Raw Input message window filtered to the selected HID device identity (VID/PID/serial). It remains active when the window is unfocused or minimized to the tray and must not capture ordinary keyboard text from another device.
+- While a dedicated Closing workflow is open, it exclusively owns every complete scan from the paired Raw Input device. Closing receives the Enter-terminated raw value before global classification; dashboard sale, activation, import, and other routes must not receive or process it. Focused WinUI `KeyDown` is used for Closing only when paired Raw Input capture is unavailable.
+- Receiving and Closing process each Enter-terminated raw barcode exactly once. Do not pass a completed dedicated-workflow barcode through compact import-stream segmentation, and never append another bundle, bin, or inferred numeric segment to it. Compact multi-label segmentation is limited to the initial-import workflow that explicitly supports grouped input.
+- A keyboard-class scanner scan is grouped exactly like the known-good `main` workflow: accumulate every mapped key and dispatch the complete sequence only when the scanner sends Enter (the usual carriage-return keyboard-wedge suffix). Do not split, emit, or discard barcode input using inter-character, burst, or idle timers.
+- A completed raw or focused scanner value longer than the supported scan boundary must be discarded in full, shown as rejected input, and audited once. Never process its retained prefix as a barcode.
+- The configurable bin/bundle activation scan-pair window is separate from barcode grouping. Its default remains five seconds and groups already completed bin, ticket/bundle, and price scans for one placement workflow.
+- Unpaired fallback has no device identity. It may handle a scanner while the app is focused, but it must not be relied on for simultaneous/interleaved use of two scanners; pair the operating scanner for background and device-isolated capture.
+- The supported non-ticket command labels are `BIN-<1-4 digits>` and `PRICE-<1-5 digits>`. Preserve the known-good `main` behavior that also accepts an exact bare 1-4 digit physical bin barcode such as `005`; do not obtain a bin by stripping characters or extracting a numeric suffix from arbitrary text. A price label payload is cents. Ticket scans must pass the configured state barcode parser.
+- Normal text fields, password fields, search fields, rich-text fields, and ordinary number entry are excluded from app-wide unpaired fallback capture. The activation and receiving game-price fields are the explicit exception: they may observe a fast valid `PRICE-...` label and place the resulting value in that same price field while preserving normal manual entry.
+- Workflow routing is determined after classification: receiving and closing accept ticket barcodes only; startup import accepts ticket and bin labels; normal sales/activation can use ticket, bin, and price labels according to the current placement state.
+- Every rejected captured scan must show a concise scan error, write an audit entry with the raw value and reason, and speak the short prompt `Scan again.` A workflow expecting a ticket may instead speak the equally short `Ticket only.` Duplicate bundle scans remain an audio-only `Duplicate` no-op.
+
 Audit rules:
 
 - Audit is part of the operational accountability surface, not optional diagnostics.
 - Record scanner activity, rejected/unrecognized scans, sale records, bundle activations, bin placements, opening/initial placements, corrections, settings changes, login/logout, display registration changes, license checks, and closing finalization.
 - Audit entries should include enough detail to reconstruct what happened: active user or system actor, timestamp, workflow/source, game ID, bundle ID, bin, ticket/range, quantity, amount, next ticket where relevant, and failure reason when rejected.
+- Persist the complete audit trail in SQLite, but keep the Settings Audit surface bounded: load only a fixed recent window into UI memory, show only the rows that fit one constrained page, truncate long cell text visually, and use Previous/Next rather than an ever-growing vertical page. Recording an audit event must not repeatedly sort the lifetime audit history while the Audit tab is closed.
 - Focused receiving and closing sessions must audit session start, accepted scans, rejected scans, cancellation/close outcome, finalization, and reconciliation decisions. Receiving duplicates remain the explicit exception because they are audio-only no-op input.
+- Receiving and Closing scan overlays must fit inside the current window with an outer margin and respond when the window is resized. Keep the overlay header and action footer visible at all supported sizes; only the middle scan list may shrink and scroll. At narrow widths, stack footer actions instead of allowing buttons to overflow or fall below the usable surface.
+- Every `ContentDialog` must remain bounded by the current window. Keep the standard dialog title and action footer visible while placing variable-height content in a viewport-relative vertical scroller; update the content bound when the window is resized so action buttons never fall outside the dialog border or usable window area.
 - Game price/name/image setup changes and inventory removals must be audited after successful persistence. Audit detail must state that inventory removal preserves prior sales and activation history.
 - Audit write failures must not block clerk workflow, but they must be logged to the application log so the failure itself can be diagnosed.
 
@@ -625,8 +695,11 @@ SimpleLotto is single-computer software. Use SQLite as the primary local backend
 Storage rules:
 
 - Use one primary SQLite database for active records.
-- The accounting boundary is previous successful close time to current successful close time.
-- A stored `shift_id`, `shift_number`, or close interval ID may be used for SQL performance, joins, and labels, but it must represent a close interval and must not be derived from login.
+- The accounting boundary is an explicit close-interval record created by the previous successful close and closed by the current successful close. Timestamps describe when events occurred; they must not be used to reconstruct interval membership.
+- Every interval has a persistent ID and status. SQLite must enforce that exactly one interval is open during normal operation.
+- A stored `shift_id`, `shift_number`, or close interval ID must represent that close interval and must not be derived from login.
+- Sales, activation events, closing history, report outbox jobs, and other financial/reportable rows must reference their interval ID directly. A Windows clock rollback must not move a committed row into or out of the current interval.
+- Manager, Clerk, System, and legacy-migration actors have stable IDs independent of display names. Financial rows retain both the stable actor ID and the recorded display name where a human-readable snapshot is useful.
 - The user-facing shift reference should use local closing date plus an incremental number for that date.
 - Do not partition the primary database by month because close intervals can cross calendar boundaries.
 - Calendar month/year filters are reporting views, not storage boundaries.
@@ -638,9 +711,13 @@ Storage rules:
 
 Close-interval storage rule:
 
-- Closing creates the immutable financial summary for the interval from previous close to current close.
+- Closing creates the immutable financial summary for the explicitly open interval.
+- The closing transaction records its closing history/outbox rows, closes that interval, and creates the next open interval atomically.
 - Once a close interval is closed, it is closed and should not be edited.
 - Fixes after close happen only in a later/current open interval as corrective actions.
+- Every sale has a persistent sale ID, interval ID, actor ID, actor-name snapshot, timestamp, and source. Sale rows are append-only; they are never deleted or updated to correct accounting.
+- Undo/void creates one negative correction row in the current open interval that references the original sale ID. The original sale remains unchanged, and each original sale can have at most one correction.
+- A physical ticket claim references the persistent sale ID that first claimed it. Voiding a sale does not release or delete that claim, so the same ticket cannot later be sold again.
 - Cash summary data comes from sales/payment activity.
 - Each closing record must persist the user-facing shift label and the report folder path created for that close.
 - The shift label sequence resets by local closing date, for example `2026-07-08 #1`, `2026-07-08 #2`, not by lifetime application closing count.
@@ -700,7 +777,7 @@ Recommended module boundaries:
 - Rdisplay: Windows-side API/snapshot/event contract compatible with `../windowsPOS` Rdisplay.
 - License/Game Sync: license call-home, signed response validation, game-name sync by state, license-server update-token posts.
 - Persistence: SQLite schema, repositories, migrations, backup/restore, audit trail.
-- Settings: state setup, game prices, bundle prices, ticket numbering, scanner/display, email, TTS.
+- Settings: state setup, scanner/display, email, TTS. Game prices, automatic bundle totals, and global ticket numbering remain under Inventory.
 
 Dependency rules:
 
@@ -715,17 +792,22 @@ Transaction and consistency rules:
 - Closing finalization must be transactional.
 - Closing finalization should either complete all sale gap-fill, inventory state changes, report records, and audit rows, or fail without partial finalization.
 - Report/email sending must not be part of the critical transaction. If email fails, the close interval remains closed and the email failure is recorded.
+- The closing transaction must persist a pending report/outbox job containing an immutable snapshot of the report inputs. Report files are generated only after that transaction commits; generation failure must leave the shift closed and the job retryable after restart.
 - Scan capture can be append-only during the dialog. Reconciliation applies business changes after scan collection.
 - Closed intervals are immutable; later fixes are corrective actions in a later/current open interval.
 
 SQLite/schema requirements for first deliverable:
 
 - Schema migrations must be versioned.
-- Use explicit tables for users, close intervals/shifts, games, bundle price rules, bundles, bins, bin bundle state, scan events, sales ledger, inventory ledger, closing records, closing reconciliation issues, reports, settings, display registrations, and audit log.
+- A migration that assigns ledger identities to an existing database must first create an online SQLite backup beside the active database in a migration-backup folder.
+- Historical interval inference may use stored timestamps only during migration and must verify each inferred group against its saved closing row count, ticket count, and sales cents. Exact matches become verified closed-interval history; mismatches are preserved in a `legacy_unresolved` interval and written to both a structured migration-conflict table and Audit.
+- Historical ticket claims must be rebuilt from persistent sale rows. Duplicate, malformed, quantity-mismatched, missing-bundle, orphan-claim, and ambiguous-void history must be preserved and reported as migration conflicts rather than silently rewritten or discarded.
+- Use explicit tables for users, close intervals/shifts, games, bundle-type rules when introduced, bundles, bins, bin bundle state, scan events, sales ledger, inventory ledger, closing records, closing reconciliation issues, reports, settings, display registrations, and audit log.
 - Use cents/integer money values, not floating point, for all prices and totals.
 - Store timestamps in UTC and display in local time.
 - Add indexes for `shift_id`/`close_interval_id`, `game_id`, `bundle_id`, `bin_id`, `closed_at`, and scan timestamp.
 - Keep sales ledger and inventory ledger separate.
+- Enforce append-only sales, ticket claims, activation events, closing history, and closed intervals at the SQLite boundary, not only in UI code.
 - Record source for generated rows, such as normal sale, undo, closing gap-fill sold, closing correction, and inventory removal.
 - Store unopened receiving records separately from active bin placement records, or use explicit movement/source types that cannot be confused. Initial import, regular activation, receiving, movement, and closing reconciliation must remain queryable as distinct inventory sources.
 
@@ -741,12 +823,16 @@ Reliability and recovery rules:
 - On startup, recover cleanly from an app crash while minimized, during scanner monitoring, or after a failed email.
 - If the app crashes during a closing scan dialog before final submit, captured scan evidence may be discarded or recovered, but it must not partially close the interval.
 - If the app crashes after final closing transaction commits but before reports/email finish, the close interval remains closed and reports/email can be retried.
+- Database backups must use SQLite's online backup API against the live connection. Do not rely on a passive WAL checkpoint followed by copying only the main database file, because committed WAL frames must be included in the backup snapshot.
 - Backups should be created at close or immediately after a successful close.
 - Backup/restore behavior should be part of Settings or a manager-only maintenance surface.
 
 Security rules:
 
-- Manager/Clerk passwords must be stored as salted password hashes, never plaintext.
+- Manager/Clerk PINs must be stored as versioned, salted PBKDF2-HMAC-SHA256 hashes, never plaintext. New hashes store their format version and work factor so they can be upgraded later.
+- Login accepts only the released versioned PBKDF2 PIN-hash format. Do not retain legacy SHA-256 verification, forced PIN changes, or login-time hash upgrades.
+- Legacy text passwords and legacy hashes are no longer accepted. Existing versioned PBKDF2 PIN hashes remain unchanged and valid.
+- Keep the existing `manager_password_hash` and `clerk_password_hash` setting keys for database compatibility even though the product terminology is PIN.
 - Email SMTP passwords and display tokens must be stored securely.
 - Scanner/display diagnostics visible to Clerk must not expose secrets.
 - Audit privileged actions: setup, login, closing, corrections, settings changes, display pairing, and inventory removal.
