@@ -6627,6 +6627,27 @@ public sealed partial class MainWindow : Window
                 TextWrapping = TextWrapping.Wrap
             };
             int? selectedBin = null;
+            long? selectedPriceCents = null;
+            NumberBox? missingPriceBox = null;
+            TextBlock? bundleTotalText = null;
+            if (!HasCompleteGameSetup(ticket.GameId))
+            {
+                missingPriceBox = new NumberBox
+                {
+                    Header = "Ticket price ($)",
+                    Minimum = 1,
+                    SmallChange = 1,
+                    LargeChange = 5,
+                    SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
+                };
+                ConfigureRequiredWholeDollarPriceBox(missingPriceBox);
+                AutomationProperties.SetAutomationId(missingPriceBox, "ClosingReconciliationPrice");
+                bundleTotalText = new TextBlock
+                {
+                    Text = "Bundle total unavailable until a valid ticket price is entered.",
+                    TextWrapping = TextWrapping.Wrap
+                };
+            }
 
             var content = new StackPanel
             {
@@ -6638,17 +6659,50 @@ public sealed partial class MainWindow : Window
                         Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Ticket {ticket.Ticket}",
                         TextWrapping = TextWrapping.Wrap
                     },
-                    binBox,
-                    statusText
+                    binBox
                 }
             };
+            if (missingPriceBox is { } priceInput && bundleTotalText is { } totalLabel)
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = $"Game {ticket.GameId} has no saved ticket price. Enter it before assigning this bundle.",
+                    TextWrapping = TextWrapping.Wrap
+                });
+                content.Children.Add(priceInput);
+                content.Children.Add(totalLabel);
+
+                void RefreshBundleTotal()
+                {
+                    if (!TryReadRequiredWholeDollarPrice(
+                            priceInput,
+                            out var priceCents,
+                            out var priceError))
+                    {
+                        totalLabel.Text = $"Bundle total unavailable: {priceError}";
+                        return;
+                    }
+
+                    var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
+                    totalLabel.Text = TryValidateGameTicketConfiguration(
+                        priceCents,
+                        bundlePriceCents,
+                        out var configurationError)
+                            ? $"Bundle total: {MoneyText(bundlePriceCents)}"
+                            : $"Bundle total unavailable: {configurationError}";
+                }
+
+                priceInput.ValueChanged += (_, _) => RefreshBundleTotal();
+                RefreshBundleTotal();
+            }
+            content.Children.Add(statusText);
 
             var dialog = new ContentDialog
             {
                 XamlRoot = Content.XamlRoot,
                 Title = "Resolve Closing Scan",
                 Content = content,
-                PrimaryButtonText = "Use This Bin",
+                PrimaryButtonText = missingPriceBox is null ? "Use This Bin" : "Save Price and Use Bin",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Primary
             };
@@ -6692,6 +6746,33 @@ public sealed partial class MainWindow : Window
                 if (existing is not null)
                 {
                     statusText.Text = $"Bin {binText} currently has game {existing.GameId}, bundle {existing.BundleId}, ticket {existing.Ticket}. If not scanned elsewhere, it will be closed out as closing gap-fill sold.";
+                }
+
+                if (missingPriceBox is not null)
+                {
+                    if (!TryReadRequiredWholeDollarPrice(
+                            missingPriceBox,
+                            out var priceCents,
+                            out var priceError) ||
+                        !TryValidateClosingTicketPrice(ticket, priceCents, out priceError))
+                    {
+                        statusText.Text = priceError;
+                        _ = missingPriceBox.Focus(FocusState.Programmatic);
+                        return false;
+                    }
+
+                    if (!TrySaveClosingGamePrice(ticket, priceCents, out var saveError))
+                    {
+                        statusText.Text = saveError;
+                        _ = missingPriceBox.Focus(FocusState.Programmatic);
+                        return false;
+                    }
+
+                    selectedPriceCents = priceCents;
+                    TryRecordAudit(
+                        "closing",
+                        "Game information verified",
+                        $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned current {ticket.Ticket}, ticket price {MoneyText(priceCents)}, derived bundle total {MoneyText(AutomaticBundlePriceCents(priceCents))}; entered during bin reconciliation");
                 }
 
                 selectedBin = parsedBin;
@@ -6745,7 +6826,7 @@ public sealed partial class MainWindow : Window
 
             var bin = selectedBin.Value.ToString(CultureInfo.InvariantCulture);
             var resolved = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin, "closing_reconciliation");
-            var configuredPriceCents = GamePriceCents(ticket.GameId);
+            var configuredPriceCents = selectedPriceCents ?? GamePriceCents(ticket.GameId);
             if (!TryValidateClosingTicketPrice(ticket, configuredPriceCents, out var priceError))
             {
                 ClosingStatusText.Text = $"Game {ticket.GameId} requires price verification before bundle {ticket.BundleId} can be assigned: {priceError}";
@@ -6943,22 +7024,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var record = existingGame is null
-                ? new GameCatalogRecord(
-                    ticket.GameId,
-                    GameDisplayName(ticket.GameId),
-                    priceCents,
-                    bundlePriceCents,
-                    "Closing reconciliation",
-                    DefaultGameImageUri,
-                    "Image not uploaded")
-                : existingGame with
-                {
-                    PriceCents = priceCents,
-                    BundlePriceCents = bundlePriceCents,
-                    Source = "Closing reconciliation"
-                };
-            if (UpsertManualGameRecord(record))
+            if (TrySaveClosingGamePrice(ticket, priceCents, out var saveError))
             {
                 saved = true;
                 TryRecordAudit(
@@ -6969,7 +7035,7 @@ public sealed partial class MainWindow : Window
             }
 
             args.Cancel = true;
-            validationText.Text = "Game Information could not be saved. Closing remains blocked.";
+            validationText.Text = saveError;
         };
         dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
 
@@ -7016,6 +7082,41 @@ public sealed partial class MainWindow : Window
 
         error = string.Empty;
         return true;
+    }
+
+    private bool TrySaveClosingGamePrice(
+        ImportTicket ticket,
+        long priceCents,
+        out string error)
+    {
+        if (!TryValidateClosingTicketPrice(ticket, priceCents, out error))
+            return false;
+
+        var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
+        var existingGame = FindKnownGame(ticket.GameId);
+        var record = existingGame is null
+            ? new GameCatalogRecord(
+                ticket.GameId,
+                GameDisplayName(ticket.GameId),
+                priceCents,
+                bundlePriceCents,
+                "Closing reconciliation",
+                DefaultGameImageUri,
+                "Image not uploaded")
+            : existingGame with
+            {
+                PriceCents = priceCents,
+                BundlePriceCents = bundlePriceCents,
+                Source = "Closing reconciliation"
+            };
+        if (UpsertManualGameRecord(record))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error = "Game Information could not be saved. Closing remains blocked.";
+        return false;
     }
 
     private bool TryProjectClosingReverseCorrections(
