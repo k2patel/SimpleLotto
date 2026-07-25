@@ -6619,6 +6619,8 @@ public sealed partial class MainWindow : Window
                 PlaceholderText = "Enter bin number",
                 MaxLength = 16
             };
+            AutomationProperties.SetAutomationId(binBox, "ClosingReconciliationBin");
+            AutomationProperties.SetName(binBox, "Closing reconciliation bin");
             var statusText = new TextBlock
             {
                 Text = "Choose the physical bin where this scanned bundle belongs.",
@@ -6743,6 +6745,32 @@ public sealed partial class MainWindow : Window
 
             var bin = selectedBin.Value.ToString(CultureInfo.InvariantCulture);
             var resolved = new ImportLine(ticket.GameId, ticket.BundleId, ticket.Ticket, bin, "closing_reconciliation");
+            var configuredPriceCents = GamePriceCents(ticket.GameId);
+            if (!TryValidateClosingTicketPrice(ticket, configuredPriceCents, out var priceError))
+            {
+                ClosingStatusText.Text = $"Game {ticket.GameId} requires price verification before bundle {ticket.BundleId} can be assigned: {priceError}";
+                if (!await ShowClosingGameInformationDialogAsync(ticket, resolved))
+                {
+                    ClosingStatusText.Text = $"Price verification was cancelled or not authorized. Game {ticket.GameId}, bundle {ticket.BundleId} remains unmatched.";
+                    TryRecordAudit(
+                        "closing",
+                        "Closing game setup not completed",
+                        $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}, selected bin {bin}; {priceError}");
+                    break;
+                }
+
+                configuredPriceCents = GamePriceCents(ticket.GameId);
+                if (!TryValidateClosingTicketPrice(ticket, configuredPriceCents, out priceError))
+                {
+                    ClosingStatusText.Text = $"Game {ticket.GameId}, bundle {ticket.BundleId} remains unmatched: {priceError}";
+                    TryRecordAudit(
+                        "closing",
+                        "Closing game setup rejected",
+                        $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}, selected bin {bin}; {priceError}");
+                    break;
+                }
+            }
+
             _closingResolvedPlacements.RemoveAll(i =>
                 string.Equals(i.GameId, resolved.GameId, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(i.BundleId, resolved.BundleId, StringComparison.OrdinalIgnoreCase));
@@ -6908,7 +6936,7 @@ public sealed partial class MainWindow : Window
             }
 
             var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
-            if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out var error))
+            if (!TryValidateClosingTicketPrice(ticket, priceCents, out var error))
             {
                 args.Cancel = true;
                 validationText.Text = error;
@@ -6955,6 +6983,39 @@ public sealed partial class MainWindow : Window
         {
             _isWorkflowDialogOpen = false;
         }
+    }
+
+    private bool TryValidateClosingTicketPrice(
+        ImportTicket ticket,
+        long priceCents,
+        out string error)
+    {
+        var bundlePriceCents = AutomaticBundlePriceCents(priceCents);
+        if (!TryValidateGameTicketConfiguration(priceCents, bundlePriceCents, out error))
+            return false;
+
+        var ticketCount = bundlePriceCents / priceCents;
+        if (ticketCount > int.MaxValue)
+        {
+            error = $"Game {ticket.GameId} bundle ticket count is too large.";
+            return false;
+        }
+
+        var firstTicket = _globalFirstTicketSerial;
+        var lastTicket = checked(firstTicket + (int)ticketCount - 1);
+        if (!TryParseTicketSerial(ticket.Ticket, out var scannedTicket) ||
+            scannedTicket < firstTicket ||
+            scannedTicket > lastTicket)
+        {
+            var width = TicketSerialWidth(ticket.Ticket);
+            error =
+                $"Scanned ticket {ticket.Ticket} does not fit the derived " +
+                $"{FormatTicketSerial(firstTicket, width)}-{FormatTicketSerial(lastTicket, width)} range. Enter the correct ticket price.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     private bool TryProjectClosingReverseCorrections(
