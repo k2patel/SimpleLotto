@@ -2394,7 +2394,7 @@
                                                          IsReadOnly="True"
                                                          AcceptsReturn="True"
                                                          TextWrapping="Wrap"
-                                                         VerticalScrollBarVisibility="Auto"
+                                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
                                                          AutomationProperties.AutomationId="AuditDetailText"
                                                          AutomationProperties.Name="Complete audit detail"/>
                                                 <TextBlock Text="Select any row to read and copy its complete detail."
