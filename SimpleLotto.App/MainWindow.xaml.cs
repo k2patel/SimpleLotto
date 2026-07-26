@@ -6285,6 +6285,11 @@ public sealed partial class MainWindow : Window
                     reconciliation.FirstAffectedSerial,
                     expandedLastSerial);
                 var inventoryOnly = claimCount == 0;
+                var activationTicketMatches = !inventoryOnly &&
+                    ClosingReverseOnlyReconcilesActivation(
+                        ticket,
+                        reconciliation.FirstAffectedSerial,
+                        expandedLastSerial);
 
                 UpsertClosingReverseCorrection(new ClosingReverseCorrection(
                     ticket.GameId,
@@ -6297,9 +6302,11 @@ public sealed partial class MainWindow : Window
                     inventoryOnly));
                 _closingScanRows.Insert(0, new ClosingScanRow(
                     $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
-                    inventoryOnly
-                        ? $"Scanned; correct current to {ticket.Ticket}"
-                        : $"Scanned; reverse {reverseFirst}-{reverseLast}")
+                    activationTicketMatches
+                        ? "Scanned"
+                        : inventoryOnly
+                            ? $"Scanned; current {closingBundle.Ticket} → {ticket.Ticket}"
+                            : $"Scanned; reverse {reverseFirst}-{reverseLast}")
                 {
                     Raw = raw
                 });
@@ -6312,9 +6319,7 @@ public sealed partial class MainWindow : Window
                     inventoryOnly
                         ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}; range {reverseFirst}-{reverseLast} has no recorded claims"
                         : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, range {reverseFirst}-{reverseLast}; stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}, claims {claimCount.ToString(CultureInfo.InvariantCulture)} of {expectedClaims.ToString(CultureInfo.InvariantCulture)}{expansionAuditDetail}");
-                statusText.Text = inventoryOnly
-                    ? $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Current available ticket will be corrected to {ticket.Ticket}; no recorded sale needs reversal."
-                    : $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Reverse {reverseFirst}-{reverseLast} will be applied when Closing finalizes.";
+                statusText.Text = $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned.";
                 return;
             }
 
@@ -6422,6 +6427,25 @@ public sealed partial class MainWindow : Window
         while (rangeExpanded);
 
         return true;
+    }
+
+    private bool ClosingReverseOnlyReconcilesActivation(
+        ImportTicket ticket,
+        int firstTicketSerial,
+        int lastTicketSerial)
+    {
+        var affectedSales = _allSales.Where(sale =>
+                sale.Quantity > 0 &&
+                string.Equals(sale.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(sale.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase))
+            .Where(sale =>
+                TryParseSaleTicketRange(sale.Ticket, out var saleFirst, out var saleLast) &&
+                saleFirst <= lastTicketSerial &&
+                saleLast >= firstTicketSerial)
+            .ToList();
+        return affectedSales.Count > 0 &&
+            affectedSales.All(sale =>
+                string.Equals(sale.Source, "activation_gap_fill", StringComparison.OrdinalIgnoreCase));
     }
 
     private void AddClosingScanIssue(string raw, string title, string detail) =>
