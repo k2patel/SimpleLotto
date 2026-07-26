@@ -1825,24 +1825,12 @@ public sealed partial class MainWindow : Window
             // A regular scan identifies the corrected last sold ticket. Closing scans
             // use different semantics: their scanned ticket is the current available ticket.
             var firstRestoredSerial = checked(scannedSerial + 1);
-            var restoredQuantity = checked(previousLastSoldSerial - scannedSerial);
             var claimCount = _store.CountTicketClaims(
                 ticket.GameId,
                 ticket.BundleId,
                 firstRestoredSerial,
                 previousLastSoldSerial);
             var inventoryOnly = claimCount == 0;
-            if (!inventoryOnly && claimCount != restoredQuantity)
-            {
-                DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} has an inconsistent ticket ledger.";
-                StatusText.Text = $"Unable to reopen bundle {ticket.BundleId}: its correction range is only partially recorded.";
-                TryRecordAudit(
-                    "scanner",
-                    "Backward scan reconciliation rejected",
-                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {placedBundle.Bin}, restored range {firstRestoredSerial}-{previousLastSoldSerial}, claims {claimCount.ToString(CultureInfo.InvariantCulture)} of {restoredQuantity.ToString(CultureInfo.InvariantCulture)}");
-                _ = SpeakAsync("Ticket ledger mismatch.");
-                return false;
-            }
 
             var width = Math.Max(TicketSerialWidth(ticket.Ticket), TicketSerialWidth(placedBundle.Ticket));
             var nextAvailableTicket = FormatTicketSerial(firstRestoredSerial, width);
@@ -6269,35 +6257,41 @@ public sealed partial class MainWindow : Window
             if (reconciliation.Kind == ClosingTicketReconciliationKind.BackwardCorrection)
             {
                 var reverseFirst = FormatTicketSerial(reconciliation.FirstAffectedSerial, width);
-                var reverseLast = FormatTicketSerial(reconciliation.LastAffectedSerial, width);
-                var expectedClaims = reconciliation.Quantity;
-                var claimCount = _store.CountTicketClaims(
-                    ticket.GameId,
-                    ticket.BundleId,
-                    reconciliation.FirstAffectedSerial,
-                    reconciliation.LastAffectedSerial);
-                var inventoryOnly = claimCount == 0;
-                if (!inventoryOnly && claimCount != expectedClaims)
+                if (!TryExpandClosingReverseRangeToSaleTail(
+                        ticket,
+                        reconciliation.FirstAffectedSerial,
+                        reconciliation.LastAffectedSerial,
+                        out var expandedLastSerial,
+                        out var expandedSaleId,
+                        out var expansionError))
                 {
-                    var mismatchDetail = $"Game {ticket.GameId}, bundle {ticket.BundleId}, range {reverseFirst}-{reverseLast} has {claimCount.ToString(CultureInfo.CurrentCulture)} of {expectedClaims.ToString(CultureInfo.CurrentCulture)} expected ticket claims. Closing cannot guess which ledger activity is valid.";
                     _closingScanRows.Insert(0, new ClosingScanRow(
                         $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} | {ticket.Ticket}",
                         "Scanned; ledger mismatch")
                     {
                         Raw = raw
                     });
-                    AddClosingScanIssue(raw, ClosingLedgerMismatchIssueTitle, mismatchDetail);
-                    TryRecordAudit("closing", "Closing scan ledger mismatch", mismatchDetail);
-                    statusText.Text = "Closing found a partially claimed correction range. No correction was staged.";
+                    AddClosingScanIssue(raw, ClosingLedgerMismatchIssueTitle, expansionError);
+                    TryRecordAudit("closing", "Closing scan ledger mismatch", expansionError);
+                    statusText.Text = "Closing found an invalid sale range. No correction was staged.";
                     return;
                 }
+
+                var reverseLast = FormatTicketSerial(expandedLastSerial, width);
+                var expectedClaims = checked(expandedLastSerial - reconciliation.FirstAffectedSerial + 1);
+                var claimCount = _store.CountTicketClaims(
+                    ticket.GameId,
+                    ticket.BundleId,
+                    reconciliation.FirstAffectedSerial,
+                    expandedLastSerial);
+                var inventoryOnly = claimCount == 0;
 
                 UpsertClosingReverseCorrection(new ClosingReverseCorrection(
                     ticket.GameId,
                     ticket.BundleId,
                     closingBundle.Bin,
                     reconciliation.FirstAffectedSerial,
-                    reconciliation.LastAffectedSerial,
+                    expandedLastSerial,
                     closingBundle.Ticket,
                     ticket.Ticket,
                     inventoryOnly));
@@ -6309,12 +6303,15 @@ public sealed partial class MainWindow : Window
                 {
                     Raw = raw
                 });
+                var expansionAuditDetail = expandedSaleId is null
+                    ? string.Empty
+                    : $"; expanded through sale {expandedSaleId.Value.ToString(CultureInfo.InvariantCulture)} to avoid splitting its ticket range";
                 TryRecordAudit(
                     "closing",
                     inventoryOnly ? "Closing inventory correction staged" : "Closing reverse staged",
                     inventoryOnly
                         ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}; range {reverseFirst}-{reverseLast} has no recorded claims"
-                        : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, range {reverseFirst}-{reverseLast}; stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}, claims {claimCount.ToString(CultureInfo.InvariantCulture)} of {expectedClaims.ToString(CultureInfo.InvariantCulture)}");
+                        : $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {closingBundle.Bin}, range {reverseFirst}-{reverseLast}; stored current {closingBundle.Ticket}, scanned available {ticket.Ticket}, claims {claimCount.ToString(CultureInfo.InvariantCulture)} of {expectedClaims.ToString(CultureInfo.InvariantCulture)}{expansionAuditDetail}");
                 statusText.Text = inventoryOnly
                     ? $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Current available ticket will be corrected to {ticket.Ticket}; no recorded sale needs reversal."
                     : $"Bin {binNumber.ToString(CultureInfo.CurrentCulture)} scanned. Reverse {reverseFirst}-{reverseLast} will be applied when Closing finalizes.";
@@ -6379,6 +6376,52 @@ public sealed partial class MainWindow : Window
         TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
         statusText.Text = $"Scan was not recognized and was ignored: {raw}";
         _ = SpeakAsync("Scan again.");
+    }
+
+    private bool TryExpandClosingReverseRangeToSaleTail(
+        ImportTicket ticket,
+        int firstTicketSerial,
+        int requestedLastTicketSerial,
+        out int expandedLastTicketSerial,
+        out long? expandedSaleId,
+        out string error)
+    {
+        expandedLastTicketSerial = requestedLastTicketSerial;
+        expandedSaleId = null;
+        error = string.Empty;
+
+        var relevantSales = _allSales.Where(sale =>
+                sale.Quantity > 0 &&
+                string.Equals(sale.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(sale.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var rangeExpanded = false;
+        do
+        {
+            rangeExpanded = false;
+            foreach (var sale in relevantSales)
+            {
+                if (!TryParseSaleTicketRange(sale.Ticket, out var saleFirst, out var saleLast) ||
+                    saleLast - saleFirst + 1 != sale.Quantity)
+                {
+                    continue;
+                }
+
+                if (saleFirst > expandedLastTicketSerial ||
+                    saleLast < firstTicketSerial ||
+                    saleLast <= expandedLastTicketSerial)
+                {
+                    continue;
+                }
+
+                expandedLastTicketSerial = saleLast;
+                expandedSaleId = sale.Id;
+                rangeExpanded = true;
+            }
+        }
+        while (rangeExpanded);
+
+        return true;
     }
 
     private void AddClosingScanIssue(string raw, string title, string detail) =>
@@ -7144,8 +7187,7 @@ public sealed partial class MainWindow : Window
                 if (!TryParseSaleTicketRange(sale.Ticket, out var saleFirst, out var saleLast) ||
                     saleLast - saleFirst + 1 != sale.Quantity)
                 {
-                    error = $"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} has an invalid ticket range and cannot be reversed safely.";
-                    return false;
+                    continue;
                 }
 
                 var removeFirst = Math.Max(saleFirst, correction.FirstTicketSerial);
@@ -7157,7 +7199,9 @@ public sealed partial class MainWindow : Window
                 var remainingLast = removeFirst - 1;
                 if (removeLast < saleLast)
                 {
-                    error = $"Reverse range {correction.FirstTicketSerial.ToString(CultureInfo.InvariantCulture)}-{correction.LastTicketSerial.ToString(CultureInfo.InvariantCulture)} would split sale {sale.Id.ToString(CultureInfo.InvariantCulture)}. Closing stopped without changing the ledger.";
+                    error =
+                        $"Reverse range {correction.FirstTicketSerial.ToString(CultureInfo.InvariantCulture)}-{correction.LastTicketSerial.ToString(CultureInfo.InvariantCulture)} did not include the full affected tail of sale {sale.Id.ToString(CultureInfo.InvariantCulture)}. " +
+                        "Continue Closing Scan and rescan this bundle so the complete open-shift correction can be staged.";
                     return false;
                 }
 
@@ -7210,6 +7254,72 @@ public sealed partial class MainWindow : Window
                         Amount = -(sale.Amount / sale.Quantity * remainingQuantity)
                     };
                 }
+            }
+
+            foreach (var sale in _allSales.Where(sale =>
+                         sale.IntervalId != _openIntervalId &&
+                         sale.Quantity > 0 &&
+                         !_voidedSaleIds.Contains(sale.Id) &&
+                         string.Equals(sale.GameId, correction.GameId, StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(sale.BundleId, correction.BundleId, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!TryParseSaleTicketRange(sale.Ticket, out var saleFirst, out var saleLast) ||
+                    saleLast - saleFirst + 1 != sale.Quantity)
+                {
+                    continue;
+                }
+
+                var removeFirst = Math.Max(saleFirst, correction.FirstTicketSerial);
+                var removeLast = Math.Min(saleLast, correction.LastTicketSerial);
+                if (removeFirst > removeLast)
+                    continue;
+                if (removeLast < saleLast)
+                {
+                    error =
+                        $"Reverse range did not include the full affected tail of historical sale {sale.Id.ToString(CultureInfo.InvariantCulture)}. " +
+                        "Continue Closing Scan and rescan this bundle.";
+                    return false;
+                }
+                if (sale.Amount * 100m % sale.Quantity != 0)
+                {
+                    error = $"Historical sale {sale.Id.ToString(CultureInfo.InvariantCulture)} does not have a whole-cent per-ticket amount and cannot be voided.";
+                    return false;
+                }
+
+                projectedSales.Add(new SaleLine(
+                    DateTime.Now,
+                    sale.GameId,
+                    sale.Bin,
+                    sale.Ticket,
+                    -sale.Quantity,
+                    -sale.Amount,
+                    "undo",
+                    sale.BundleId,
+                    IntervalId: _openIntervalId,
+                    ActorId: _activeActorId,
+                    ActorName: _activeUserName,
+                    CorrectsSaleId: sale.Id));
+
+                var remainingQuantity = removeFirst - saleFirst;
+                if (remainingQuantity == 0)
+                    continue;
+
+                var width = Math.Max(TicketSerialWidth(sale.Ticket), TicketSerialWidth(correction.StoredCurrentTicket));
+                var remainingTicket = remainingQuantity == 1
+                    ? FormatTicketSerial(saleFirst, width)
+                    : $"{FormatTicketSerial(saleFirst, width)}-{FormatTicketSerial(removeFirst - 1, width)}";
+                projectedSales.Add(new SaleLine(
+                    DateTime.Now,
+                    sale.GameId,
+                    sale.Bin,
+                    remainingTicket,
+                    remainingQuantity,
+                    sale.Amount / sale.Quantity * remainingQuantity,
+                    "normal_sale",
+                    sale.BundleId,
+                    IntervalId: _openIntervalId,
+                    ActorId: _activeActorId,
+                    ActorName: _activeUserName));
             }
         }
 
@@ -7447,7 +7557,10 @@ public sealed partial class MainWindow : Window
             _allSales.Remove(existing);
         foreach (var persisted in closingResult.ReportRequest.Sales.OrderBy(sale => sale.Id))
             _allSales.Insert(0, FromStoredSaleLine(persisted));
-        _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingRecord));
+        _voidedSaleIds.Clear();
+        foreach (var voidedSaleId in closingResult.VoidedSaleIds)
+            _voidedSaleIds.Add(voidedSaleId);
+        _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingResult.ReportRequest.Closing));
         ApplyClosingHistoryPage(resetPage: true);
         ClosingHistoryListView.SelectedItem = _pagedClosingHistoryRows.FirstOrDefault();
         foreach (var reverseAuditRecord in closingResult.ReverseAuditRecords)
