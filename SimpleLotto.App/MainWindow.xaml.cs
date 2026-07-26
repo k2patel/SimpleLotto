@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -45,6 +46,7 @@ public sealed partial class MainWindow : Window
     private readonly LocalStore _store;
     private readonly AppUpdateService _updates;
     private readonly LicenseService _license;
+    private readonly EmailService _email = new();
     private readonly ScannerInputService _scannerInput;
     private readonly ObservableCollection<SaleLine> _sales = new();
     private readonly ObservableCollection<SaleLine> _allSales = new();
@@ -69,6 +71,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<AuditLogRow> _auditLogRows = new();
     private readonly ObservableCollection<AuditLogRow> _pagedAuditLogRows = new();
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
+    private readonly ConditionalWeakTable<Control, PlaceholderFocusState> _placeholderFocusStates = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
     private readonly HashSet<int> _closingScannedBins = new();
     private readonly HashSet<string> _closingScannedBundleKeys = new(StringComparer.OrdinalIgnoreCase);
@@ -112,12 +115,19 @@ public sealed partial class MainWindow : Window
     private string _storeStreet = string.Empty;
     private string _storeCity = string.Empty;
     private string _databaseSchemaVersion = string.Empty;
+    private string _smtpPasswordProtected = string.Empty;
     private ClosingHistoryRow? _selectedClosingReport;
     private int _configuredBinCount = 90;
     private int _globalFirstTicketSerial;
     private int _scanPairTimeoutSeconds = 5;
     private bool _displayBurnInEnabled = true;
     private int _displayBurnInIntervalMinutes = 15;
+    private bool _savedSendClosingEmail;
+    private readonly List<string> _savedClosingEmailAttachments = new();
+    private string _savedSmtpHost = string.Empty;
+    private int _savedSmtpPort = 587;
+    private string _savedSmtpUser = string.Empty;
+    private string _savedEmailRecipients = string.Empty;
     private string _scannerVid = string.Empty;
     private string _scannerPid = string.Empty;
     private string _scannerSerial = string.Empty;
@@ -198,6 +208,19 @@ public sealed partial class MainWindow : Window
     private const string EmailIncludeInitializationSettingKey = "email_include_initialization";
     private const string EmailIncludeClosingAuditSettingKey = "email_include_closing_audit";
     private const string EmailIncludePdfSettingKey = "email_include_pdf";
+    private static readonly string[] KnownClosingEmailAttachmentNames =
+    {
+        "shift_summary.csv",
+        "inventory.csv",
+        "sales_detail.csv",
+        "corrections.csv",
+        "anomalies.csv",
+        "placement_events.csv",
+        "bin_assignments.csv",
+        "initialization.csv",
+        "closing_audit.csv",
+        "closing_report.pdf"
+    };
     private static readonly Regex BinCommandBarcode = new(
         @"^BIN-(\d{1,4})$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -335,6 +358,8 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler(OnGlobalKeyDown),
             handledEventsToo: true);
+        RootGrid.GotFocus += PlaceholderControl_GotFocus;
+        RootGrid.LostFocus += PlaceholderControl_LostFocus;
         AppWindow.Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
         _ = WarmAudioEngineAsync();
@@ -348,6 +373,90 @@ public sealed partial class MainWindow : Window
     private void License_StatusChanged(LicenseStatus status)
     {
         _ = DispatcherQueue.TryEnqueue(() => ApplyLicenseStatus(status));
+    }
+
+    private void PlaceholderControl_GotFocus(object sender, RoutedEventArgs e)
+    {
+        if (FindPlaceholderControl(e.OriginalSource as DependencyObject) is { } control)
+            HidePlaceholderWhileFocused(control);
+    }
+
+    private void PlaceholderControl_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (FindPlaceholderControl(e.OriginalSource as DependencyObject) is { } control)
+            RestorePlaceholderAfterFocus(control);
+    }
+
+    private Control? FindPlaceholderControl(DependencyObject? source)
+    {
+        var current = source;
+        while (current is not null)
+        {
+            if (current is Control control &&
+                (HasVisiblePlaceholder(control) ||
+                 _placeholderFocusStates.TryGetValue(control, out _)))
+            {
+                return control;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
+    }
+
+    private void ConfigureFocusClearedPlaceholder(Control control)
+    {
+        control.GotFocus += (_, _) => HidePlaceholderWhileFocused(control);
+        control.LostFocus += (_, _) => RestorePlaceholderAfterFocus(control);
+    }
+
+    private void HidePlaceholderWhileFocused(Control control)
+    {
+        var placeholder = PlaceholderText(control);
+        if (!string.IsNullOrEmpty(placeholder))
+        {
+            _placeholderFocusStates.Remove(control);
+            _placeholderFocusStates.Add(control, new PlaceholderFocusState(placeholder));
+        }
+
+        SetPlaceholderText(control, string.Empty);
+    }
+
+    private void RestorePlaceholderAfterFocus(Control control)
+    {
+        if (!_placeholderFocusStates.TryGetValue(control, out var state))
+            return;
+
+        SetPlaceholderText(control, state.Text);
+    }
+
+    private static bool HasVisiblePlaceholder(Control control) =>
+        !string.IsNullOrEmpty(PlaceholderText(control));
+
+    private static string PlaceholderText(Control control) =>
+        control switch
+        {
+            TextBox textBox => textBox.PlaceholderText,
+            PasswordBox passwordBox => passwordBox.PlaceholderText,
+            NumberBox numberBox => numberBox.PlaceholderText,
+            _ => string.Empty
+        };
+
+    private static void SetPlaceholderText(Control control, string value)
+    {
+        switch (control)
+        {
+            case TextBox textBox:
+                textBox.PlaceholderText = value;
+                break;
+            case PasswordBox passwordBox:
+                passwordBox.PlaceholderText = value;
+                break;
+            case NumberBox numberBox:
+                numberBox.PlaceholderText = value;
+                break;
+        }
     }
 
     private void LoadApplicationState()
@@ -433,9 +542,13 @@ public sealed partial class MainWindow : Window
         ClerkNameBox.Text = _clerkName;
         ClerkPasswordBox.Password = string.Empty;
         BackupFolderBox.Text = ReadSetting(state, "backup_folder_path");
-        SmtpHostBox.Text = ReadSetting(state, "smtp_host");
+        var savedSmtpHost = ReadSetting(state, "smtp_host");
+        SmtpHostBox.Text = string.IsNullOrWhiteSpace(savedSmtpHost)
+            ? "smtp.gmail.com"
+            : savedSmtpHost;
         SmtpPortBox.Value = ReadIntSetting(state, "smtp_port", 587);
         SmtpUserBox.Text = ReadSetting(state, "smtp_user");
+        _smtpPasswordProtected = ReadSetting(state, "smtp_password");
         SmtpPasswordBox.Password = string.Empty;
         EmailToBox.Text = ReadSetting(state, "email_to");
         ApplyClosingEmailSettings(state);
@@ -560,6 +673,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private bool SaveSettings(
+        IReadOnlyDictionary<string, string> settings,
+        string category,
+        string action,
+        string detail)
+    {
+        try
+        {
+            _store.SaveSettings(settings);
+            TryRecordAudit(category, action, detail);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Unable to save {action.ToLower(CultureInfo.CurrentCulture)}: {ex.Message}";
+            return false;
+        }
+    }
+
     private void TryRecordAudit(string category, string action, string detail)
     {
         var record = NewAuditRecord(category, action, TruncateAuditDetail(detail));
@@ -609,21 +741,9 @@ public sealed partial class MainWindow : Window
             detail,
             string.IsNullOrWhiteSpace(_activeActorId) ? "system" : _activeActorId);
 
-    private void SaveSecretSetting(string key, string value)
-    {
-        try
-        {
-            _store.SaveSetting(key, ProtectSecret(value));
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Unable to save setting {key}: {ex.Message}";
-        }
-    }
-
     private void ApplyClosingEmailSettings(PersistedState state)
     {
-        SettingsEmailSendCheckBox.IsChecked = ReadBoolSetting(state, EmailSendClosingSettingKey, true);
+        SettingsEmailSendCheckBox.IsChecked = ReadBoolSetting(state, EmailSendClosingSettingKey, false);
         SettingsEmailShiftSummaryCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeShiftSummarySettingKey, true);
         SettingsEmailInventoryCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeInventorySettingKey, true);
         SettingsEmailSalesDetailCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeSalesDetailSettingKey, true);
@@ -635,10 +755,29 @@ public sealed partial class MainWindow : Window
         SettingsEmailAuditCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludeClosingAuditSettingKey, true);
         SettingsEmailPdfCheckBox.IsChecked = ReadBoolSetting(state, EmailIncludePdfSettingKey, true);
         UpdateSettingsEmailSummary();
+        CaptureSavedClosingEmailSettings();
     }
 
-    private bool SaveClosingEmailSettingsFromSettings() =>
-        SaveClosingEmailSettings(
+    private void CaptureSavedClosingEmailSettings()
+    {
+        _savedSendClosingEmail = SettingsEmailSendCheckBox.IsChecked == true;
+        _savedClosingEmailAttachments.Clear();
+        _savedClosingEmailAttachments.AddRange(SelectedSettingsEmailReportNames());
+        _savedSmtpHost = SmtpHostBox.Text.Trim();
+        _savedSmtpPort = OperatorInputGuard.TryReadWholeNumber(
+            SmtpPortBox.Value,
+            1,
+            65535,
+            out var port)
+            ? port
+            : 587;
+        _savedSmtpUser = SmtpUserBox.Text.Trim();
+        _savedEmailRecipients = EmailToBox.Text.Trim();
+    }
+
+    private void AddClosingEmailSettingsFromSettings(IDictionary<string, string> settings) =>
+        AddClosingEmailSettings(
+            settings,
             SettingsEmailSendCheckBox,
             SettingsEmailShiftSummaryCheckBox,
             SettingsEmailInventoryCheckBox,
@@ -651,7 +790,8 @@ public sealed partial class MainWindow : Window
             SettingsEmailAuditCheckBox,
             SettingsEmailPdfCheckBox);
 
-    private bool SaveClosingEmailSettings(
+    private static void AddClosingEmailSettings(
+        IDictionary<string, string> settings,
         CheckBox sendEmail,
         CheckBox shiftSummary,
         CheckBox inventory,
@@ -664,18 +804,17 @@ public sealed partial class MainWindow : Window
         CheckBox closingAudit,
         CheckBox pdf)
     {
-        var saved = SaveSetting(EmailSendClosingSettingKey, BoolSetting(sendEmail.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeShiftSummarySettingKey, BoolSetting(shiftSummary.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeInventorySettingKey, BoolSetting(inventory.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeSalesDetailSettingKey, BoolSetting(salesDetail.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeCorrectionsSettingKey, BoolSetting(corrections.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeAnomaliesSettingKey, BoolSetting(anomalies.IsChecked == true));
-        saved &= SaveSetting(EmailIncludePlacementEventsSettingKey, BoolSetting(placementEvents.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeBinAssignmentsSettingKey, BoolSetting(binAssignments.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeInitializationSettingKey, BoolSetting(initialization.IsChecked == true));
-        saved &= SaveSetting(EmailIncludeClosingAuditSettingKey, BoolSetting(closingAudit.IsChecked == true));
-        saved &= SaveSetting(EmailIncludePdfSettingKey, BoolSetting(pdf.IsChecked == true));
-        return saved;
+        settings[EmailSendClosingSettingKey] = BoolSetting(sendEmail.IsChecked == true);
+        settings[EmailIncludeShiftSummarySettingKey] = BoolSetting(shiftSummary.IsChecked == true);
+        settings[EmailIncludeInventorySettingKey] = BoolSetting(inventory.IsChecked == true);
+        settings[EmailIncludeSalesDetailSettingKey] = BoolSetting(salesDetail.IsChecked == true);
+        settings[EmailIncludeCorrectionsSettingKey] = BoolSetting(corrections.IsChecked == true);
+        settings[EmailIncludeAnomaliesSettingKey] = BoolSetting(anomalies.IsChecked == true);
+        settings[EmailIncludePlacementEventsSettingKey] = BoolSetting(placementEvents.IsChecked == true);
+        settings[EmailIncludeBinAssignmentsSettingKey] = BoolSetting(binAssignments.IsChecked == true);
+        settings[EmailIncludeInitializationSettingKey] = BoolSetting(initialization.IsChecked == true);
+        settings[EmailIncludeClosingAuditSettingKey] = BoolSetting(closingAudit.IsChecked == true);
+        settings[EmailIncludePdfSettingKey] = BoolSetting(pdf.IsChecked == true);
     }
 
     private static string BoolSetting(bool value) => value ? "1" : "0";
@@ -782,6 +921,109 @@ public sealed partial class MainWindow : Window
             optionalEntropy: null,
             scope: DataProtectionScope.CurrentUser);
         return Convert.ToBase64String(protectedBytes);
+    }
+
+    private static string UnprotectSecret(string protectedValue)
+    {
+        if (string.IsNullOrEmpty(protectedValue))
+            return protectedValue;
+
+        var protectedBytes = Convert.FromBase64String(protectedValue);
+        var bytes = ProtectedData.Unprotect(
+            protectedBytes,
+            optionalEntropy: null,
+            scope: DataProtectionScope.CurrentUser);
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static string NormalizeGmailAppPassword(string password) =>
+        new(password.Where(character => !char.IsWhiteSpace(character)).ToArray());
+
+    private bool TryBuildEmailConfiguration(
+        out EmailConfiguration configuration,
+        out string error) =>
+        TryBuildEmailConfiguration(
+            SmtpHostBox.Text,
+            SmtpPortBox.Value,
+            SmtpUserBox.Text,
+            EmailToBox.Text,
+            SmtpPasswordBox.Password,
+            out configuration,
+            out error);
+
+    private bool TryBuildSavedEmailConfiguration(
+        out EmailConfiguration configuration,
+        out string error) =>
+        TryBuildEmailConfiguration(
+            _savedSmtpHost,
+            _savedSmtpPort,
+            _savedSmtpUser,
+            _savedEmailRecipients,
+            string.Empty,
+            out configuration,
+            out error);
+
+    private bool TryBuildEmailConfiguration(
+        string hostText,
+        double portValue,
+        string userText,
+        string recipientText,
+        string enteredPassword,
+        out EmailConfiguration configuration,
+        out string error)
+    {
+        configuration = new EmailConfiguration(
+            string.Empty,
+            0,
+            string.Empty,
+            string.Empty,
+            Array.Empty<string>());
+        error = string.Empty;
+
+        var host = hostText.Trim();
+        if (!OperatorInputGuard.TryReadWholeNumber(portValue, 1, 65535, out var port))
+        {
+            error = "SMTP port must be a whole number from 1 through 65535.";
+            return false;
+        }
+
+        var user = userText.Trim();
+        if (!EmailService.TryParseRecipients(user, out var senderAddresses, out _)
+            || senderAddresses.Count != 1)
+        {
+            error = "Enter one valid Gmail address as the SMTP user.";
+            return false;
+        }
+
+        if (!EmailService.TryParseRecipients(recipientText, out var recipients, out error))
+            return false;
+
+        string password;
+        if (!string.IsNullOrWhiteSpace(enteredPassword))
+        {
+            password = NormalizeGmailAppPassword(enteredPassword);
+        }
+        else
+        {
+            try
+            {
+                password = NormalizeGmailAppPassword(UnprotectSecret(_smtpPasswordProtected));
+            }
+            catch (Exception ex)
+            {
+                error = $"The saved Gmail app password could not be read: {ex.Message}";
+                return false;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            error = "Enter the Gmail app password.";
+            return false;
+        }
+
+        configuration = new EmailConfiguration(host, port, senderAddresses[0], password, recipients);
+        return true;
     }
 
     private async void StartupPrimaryButton_Click(object sender, RoutedEventArgs e)
@@ -1919,6 +2161,7 @@ public sealed partial class MainWindow : Window
             PlaceholderText = "Enter bin number or scan BIN barcode",
             MaxLength = 16
         };
+        ConfigureFocusClearedPlaceholder(binBox);
         var statusText = new TextBlock
         {
             Text = $"Bundle {ticket.BundleId} is not active. Enter the destination bin or scan its bin barcode.",
@@ -4242,8 +4485,29 @@ public sealed partial class MainWindow : Window
         ClosingReportInventoryText.Text =
             $"{row.ReconciliationText}{Environment.NewLine}" +
             $"Scanned bins: {row.ScannedBins.ToString(CultureInfo.CurrentCulture)} of {row.ActiveBins.ToString(CultureInfo.CurrentCulture)} active";
-        ClosingReportStatusText.Text = $"Report folder: {row.ReportFolderText}";
+        ClosingReportStatusText.Text =
+            $"{row.EmailStatus}{Environment.NewLine}Report folder: {row.ReportFolderText}";
         OpenSelectedClosingReportButton.IsEnabled = row.HasReportFolder;
+    }
+
+    private void UpdateClosingHistoryEmailStatus(string reportFolder, string emailStatus)
+    {
+        for (var index = 0; index < _closingHistoryRows.Count; index++)
+        {
+            var row = _closingHistoryRows[index];
+            if (!string.Equals(row.ReportFolder, reportFolder, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var updated = row with { EmailStatus = emailStatus };
+            _closingHistoryRows[index] = updated;
+            if (_selectedClosingReport == row)
+            {
+                _selectedClosingReport = updated;
+                ShowClosingReport(updated);
+            }
+            ApplyClosingHistoryPage();
+            return;
+        }
     }
 
     private void ClearClosingReport()
@@ -5159,6 +5423,7 @@ public sealed partial class MainWindow : Window
             PlaceholderText = "Scan bundle/ticket barcode",
             MaxLength = 256
         };
+        ConfigureFocusClearedPlaceholder(barcodeBox);
         var statusText = new TextBlock
         {
             Text = $"Scan or enter the bundle/ticket barcode for bin {binNumber.ToString(CultureInfo.CurrentCulture)}.",
@@ -6686,6 +6951,7 @@ public sealed partial class MainWindow : Window
                 PlaceholderText = "Enter bin number",
                 MaxLength = 16
             };
+            ConfigureFocusClearedPlaceholder(binBox);
             AutomationProperties.SetAutomationId(binBox, "ClosingReconciliationBin");
             AutomationProperties.SetName(binBox, "Closing reconciliation bin");
             var statusText = new TextBlock
@@ -7398,10 +7664,10 @@ public sealed partial class MainWindow : Window
         }
 
         var unscannedSoldOutBundles = ClosingSoldOutBundles();
-        var closedAtUtc = DateTime.UtcNow;
+        var closingPreviewAtUtc = DateTime.UtcNow;
         if (!TryBuildClosingSoldOutChanges(
                 unscannedSoldOutBundles,
-                closedAtUtc,
+                closingPreviewAtUtc,
                 out var soldOutSales,
                 out var soldOutPlacements,
                 out var configurationError))
@@ -7448,9 +7714,9 @@ public sealed partial class MainWindow : Window
         }
 
         var activatedBundles = CurrentShiftActivationCount();
-        var selectedEmailAttachments = SelectedSettingsEmailReportNames();
+        var selectedEmailAttachments = _savedClosingEmailAttachments.ToList();
         var closingEmailSummary = BuildClosingEmailSummaryText(
-            SettingsEmailSendCheckBox.IsChecked == true,
+            _savedSendClosingEmail,
             selectedEmailAttachments);
 
         var dialog = new ContentDialog
@@ -7487,6 +7753,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var closedAtUtc = DateTime.UtcNow;
+        var closedAtLocal = closedAtUtc.ToLocalTime();
+        soldOutSales = soldOutSales
+            .Select(sale => sale with { SoldAt = closedAtLocal })
+            .ToList();
+        generatedSales = _closingScanSales
+            .Select(scan => scan.Sale)
+            .Concat(soldOutSales)
+            .ToList();
         var intervalStartUtc = _lastCloseUtc;
         var reportTarget = BuildClosingReportTarget(closedAtUtc);
         var reportSales = currentSalesAfterReversals
@@ -7530,7 +7805,8 @@ public sealed partial class MainWindow : Window
             new List<StoredImportLine>(),
             storedCurrentBundles,
             storedResolvedBundles,
-            selectedEmailAttachments.ToList());
+            selectedEmailAttachments.ToList(),
+            SendEmail: _savedSendClosingEmail);
         var auditRecord = NewAuditRecord(
             "closing",
             "Shift closed",
@@ -7584,7 +7860,11 @@ public sealed partial class MainWindow : Window
         _voidedSaleIds.Clear();
         foreach (var voidedSaleId in closingResult.VoidedSaleIds)
             _voidedSaleIds.Add(voidedSaleId);
-        _closingHistoryRows.Insert(0, ClosingHistoryRow.From(closingResult.ReportRequest.Closing));
+        _closingHistoryRows.Insert(
+            0,
+            ClosingHistoryRow.From(
+                closingResult.ReportRequest.Closing,
+                closingResult.ReportRequest.SendEmail ? "Email pending" : "Email disabled"));
         ApplyClosingHistoryPage(resetPage: true);
         ClosingHistoryListView.SelectedItem = _pagedClosingHistoryRows.FirstOrDefault();
         foreach (var reverseAuditRecord in closingResult.ReverseAuditRecords)
@@ -7719,6 +7999,7 @@ public sealed partial class MainWindow : Window
             closing.InstantCashoutCents,
             closing.ExpectedCashCents,
             closing.ActivatedBundles,
+            request.AuditRecords ?? new List<StoredAuditRecord>(),
             request.SelectedEmailAttachments,
             closing.ScannedBins,
             closing.ActiveBins,
@@ -7744,6 +8025,7 @@ public sealed partial class MainWindow : Window
         long instantCashoutCents,
         long expectedCashCents,
         int activatedBundleCount,
+        IReadOnlyList<StoredAuditRecord> auditRecords,
         IReadOnlyList<string> selectedEmailAttachments,
         int scannedBinCount,
         int activeBinCount,
@@ -7780,19 +8062,24 @@ public sealed partial class MainWindow : Window
             Path.Combine(target.Folder, "initialization.csv"),
             new[] { CsvLine("event", "detail"), CsvLine("not_applicable", "No initialization rows are generated for this shift closing.") },
             Encoding.UTF8);
+        var closingAuditLines = new List<string>
+        {
+            CsvLine("event", "detail"),
+            CsvLine("closing_finalized", $"shift={target.ShiftLabel}; expected_cash={MoneyCsv(expectedCashCents)}; report_folder={target.Folder}"),
+            CsvLine("cash_formula", formula),
+            CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}"),
+            CsvLine("activated_bundles", activatedBundleCount.ToString(CultureInfo.InvariantCulture)),
+            CsvLine("ledger_identity", $"interval_id={intervalId.ToString(CultureInfo.InvariantCulture)}; closed_by_actor_id={closedByActorId}; closed_by={closedByActorName}"),
+            CsvLine("email_attachments", string.Join(";", selectedEmailAttachments)),
+            CsvLine("pdf_report", Path.Combine(target.Folder, "closing_report.pdf"))
+        };
+        closingAuditLines.AddRange(auditRecords.Select(record =>
+            CsvLine(
+                "closing_reconciliation",
+                $"occurred_at_utc={record.OccurredAtUtc.ToString("O", CultureInfo.InvariantCulture)}; action={record.Action}; actor_id={record.ActorId}; actor={record.Actor}; {record.Detail}")));
         File.WriteAllLines(
             Path.Combine(target.Folder, "closing_audit.csv"),
-            new[]
-            {
-                CsvLine("event", "detail"),
-                CsvLine("closing_finalized", $"shift={target.ShiftLabel}; expected_cash={MoneyCsv(expectedCashCents)}; report_folder={target.Folder}"),
-                CsvLine("cash_formula", formula),
-                CsvLine("manual_totals", $"online_sale={MoneyCsv(onlineSaleCents)}; online_cashout={MoneyCsv(onlineCashoutCents)}; instant_cashout={MoneyCsv(instantCashoutCents)}"),
-                CsvLine("activated_bundles", activatedBundleCount.ToString(CultureInfo.InvariantCulture)),
-                CsvLine("ledger_identity", $"interval_id={intervalId.ToString(CultureInfo.InvariantCulture)}; closed_by_actor_id={closedByActorId}; closed_by={closedByActorName}"),
-                CsvLine("email_attachments", string.Join(";", selectedEmailAttachments)),
-                CsvLine("pdf_report", Path.Combine(target.Folder, "closing_report.pdf"))
-            },
+            closingAuditLines,
             Encoding.UTF8);
         File.WriteAllText(
             Path.Combine(target.Folder, "closing_report.txt"),
@@ -7829,14 +8116,29 @@ public sealed partial class MainWindow : Window
             {
                 DeleteReportFolder(job.Request.Closing.ReportFolder);
                 WriteClosingReports(job.Request);
-                _store.MarkClosingReportCompleted(job.Id);
             });
             AppLog.Info($"Closing reports generated for {job.Request.Closing.ShiftLabel}.");
+            if (announceResult)
+            {
+                StatusText.Text = job.Request.SendEmail
+                    ? $"Shift closed. Reports saved; sending email for {job.Request.Closing.ShiftLabel}."
+                    : $"Shift closed. Reports saved for {job.Request.Closing.ShiftLabel}.";
+            }
+            var emailOutcome = await SendClosingEmailAsync(job.Request);
+            TryWriteClosingEmailStatus(job.Request.Closing.ReportFolder, emailOutcome);
+            _store.MarkClosingReportCompleted(job.Id);
+            UpdateClosingHistoryEmailStatus(
+                job.Request.Closing.ReportFolder,
+                emailOutcome.Status);
             if (!announceResult)
                 return;
 
-            StatusText.Text = $"Shift closed. Reports saved to {job.Request.Closing.ReportFolder}.";
-            ClosingStatusText.Text = $"{job.Request.Closing.ShiftLabel} closed. Reports are ready.";
+            StatusText.Text = emailOutcome.IsFailure
+                ? $"Shift closed and reports were saved, but email failed: {emailOutcome.Message}"
+                : $"Shift closed. Reports saved to {job.Request.Closing.ReportFolder}. {emailOutcome.Message}";
+            ClosingStatusText.Text = emailOutcome.IsFailure
+                ? $"{job.Request.Closing.ShiftLabel} closed. Email failed, but the closing and reports remain valid. {emailOutcome.Message}"
+                : $"{job.Request.Closing.ShiftLabel} closed. Reports are ready. {emailOutcome.Message}";
             TryRecordAudit(
                 "report",
                 "Closing reports generated",
@@ -7846,6 +8148,9 @@ public sealed partial class MainWindow : Window
         {
             AppLog.Error($"Closing report generation failed for {job.Request.Closing.ShiftLabel}.", ex);
             TryDeleteReportFolder(job.Request.Closing.ReportFolder);
+            UpdateClosingHistoryEmailStatus(
+                job.Request.Closing.ReportFolder,
+                job.Request.SendEmail ? "Email waiting for reports" : "Email disabled");
             try
             {
                 _store.MarkClosingReportFailed(job.Id, ex.Message);
@@ -7864,6 +8169,97 @@ public sealed partial class MainWindow : Window
                 "report",
                 "Closing reports pending retry",
                 $"{job.Request.Closing.ShiftLabel}: {ex.Message}");
+        }
+    }
+
+    private async Task<ClosingEmailOutcome> SendClosingEmailAsync(StoredClosingReportRequest request)
+    {
+        if (!request.SendEmail)
+            return new ClosingEmailOutcome("Email disabled", "Closing email is disabled.", false);
+
+        if (request.SelectedEmailAttachments.Count == 0)
+        {
+            const string noAttachments = "Closing email is enabled, but no report attachments are selected.";
+            AppLog.Info($"{request.Closing.ShiftLabel}: {noAttachments}");
+            TryRecordAudit("email", "Closing email failed", $"{request.Closing.ShiftLabel}; {noAttachments}");
+            return new ClosingEmailOutcome("Email failed", noAttachments, true);
+        }
+
+        if (!TryBuildSavedEmailConfiguration(out var configuration, out var configurationError))
+        {
+            AppLog.Info($"{request.Closing.ShiftLabel}: closing email configuration failed: {configurationError}");
+            TryRecordAudit(
+                "email",
+                "Closing email failed",
+                $"{request.Closing.ShiftLabel}; {configurationError}");
+            return new ClosingEmailOutcome("Email failed", configurationError, true);
+        }
+
+        var attachmentPaths = new List<string>();
+        foreach (var fileName in request.SelectedEmailAttachments)
+        {
+            if (!string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal) ||
+                !KnownClosingEmailAttachmentNames.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+            {
+                var invalidAttachment = $"Unsupported closing email attachment: {fileName}";
+                TryRecordAudit(
+                    "email",
+                    "Closing email failed",
+                    $"{request.Closing.ShiftLabel}; {invalidAttachment}");
+                return new ClosingEmailOutcome("Email failed", invalidAttachment, true);
+            }
+
+            attachmentPaths.Add(Path.Combine(request.Closing.ReportFolder, fileName));
+        }
+
+        var closing = request.Closing;
+        var body =
+            $"Shift closing summary for {(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName)}{Environment.NewLine}" +
+            $"Shift: {closing.ShiftLabel}{Environment.NewLine}" +
+            $"Closed: {closing.ClosedAtUtc.ToLocalTime().ToString("F", CultureInfo.CurrentCulture)}{Environment.NewLine}" +
+            $"Closed by: {closing.ClosedByActorName}{Environment.NewLine}" +
+            $"Instant ticket sales: {MoneyText(closing.SalesCents)}{Environment.NewLine}" +
+            $"Online sale: {MoneyText(closing.OnlineSaleCents)}{Environment.NewLine}" +
+            $"Instant cashout: {MoneyText(closing.InstantCashoutCents)}{Environment.NewLine}" +
+            $"Online cashout: {MoneyText(closing.OnlineCashoutCents)}{Environment.NewLine}" +
+            $"Expected cash: {MoneyText(closing.ExpectedCashCents)}{Environment.NewLine}{Environment.NewLine}" +
+            $"Attached reports: {string.Join(", ", request.SelectedEmailAttachments)}";
+        var result = await _email.SendAsync(
+            configuration,
+            $"{(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName)} - {closing.ShiftLabel}",
+            body,
+            attachmentPaths);
+        AppLog.Info(
+            $"{closing.ShiftLabel}: closing email {(result.IsSuccess ? "accepted" : "failed")}: {result.Message}");
+        TryRecordAudit(
+            "email",
+            result.IsSuccess ? "Closing email accepted" : "Closing email failed",
+            $"{closing.ShiftLabel}; {result.Message}");
+        return new ClosingEmailOutcome(
+            result.IsSuccess ? "Email accepted" : "Email failed",
+            result.Message,
+            !result.IsSuccess);
+    }
+
+    private static void TryWriteClosingEmailStatus(
+        string reportFolder,
+        ClosingEmailOutcome outcome)
+    {
+        try
+        {
+            File.WriteAllLines(
+                Path.Combine(reportFolder, "email_status.txt"),
+                new[]
+                {
+                    outcome.Status,
+                    DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                    outcome.Message
+                },
+                Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Closing email status could not be written in {reportFolder}.", ex);
         }
     }
 
@@ -8206,21 +8602,8 @@ public sealed partial class MainWindow : Window
             CsvLine("file_name", "selected")
         };
 
-        var knownFiles = new[]
-        {
-            "shift_summary.csv",
-            "inventory.csv",
-            "sales_detail.csv",
-            "corrections.csv",
-            "anomalies.csv",
-            "placement_events.csv",
-            "bin_assignments.csv",
-            "initialization.csv",
-            "closing_audit.csv",
-            "closing_report.pdf"
-        };
         var selected = selectedEmailAttachments.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        lines.AddRange(knownFiles.Select(fileName => CsvLine(
+        lines.AddRange(KnownClosingEmailAttachmentNames.Select(fileName => CsvLine(
             fileName,
             selected.Contains(fileName) ? "1" : "0")));
         File.WriteAllLines(path, lines, Encoding.UTF8);
@@ -8498,6 +8881,8 @@ public sealed partial class MainWindow : Window
             PlaceholderText = "Display name",
             MaxLength = 128
         };
+        ConfigureFocusClearedPlaceholder(gameIdBox);
+        ConfigureFocusClearedPlaceholder(nameBox);
         var priceBox = new NumberBox
         {
             Header = "Game price ($)",
@@ -9059,14 +9444,28 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var displayBurnInEnabled = DisplayBurnInCheckBox.IsChecked == true;
+        var settings = new Dictionary<string, string>
+        {
+            [ScanPairTimeoutSettingKey] = scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
+            [DisplayBurnInEnabledSettingKey] = BoolSetting(displayBurnInEnabled),
+            [DisplayBurnInIntervalSettingKey] = displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture)
+        };
+        if (!SaveSettings(
+                settings,
+                "settings",
+                "Scanner and display settings saved",
+                $"Activation timeout {scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} seconds; burn-in {(displayBurnInEnabled ? "enabled" : "disabled")}; interval {displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture)} minutes"))
+        {
+            ScannerPairingStatusText.Text = "Scanner and display settings could not be saved.";
+            return;
+        }
+
         _scanPairTimeoutSeconds = scanPairTimeoutSeconds;
-        _displayBurnInEnabled = DisplayBurnInCheckBox.IsChecked == true;
+        _displayBurnInEnabled = displayBurnInEnabled;
         _displayBurnInIntervalMinutes = displayBurnInIntervalMinutes;
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
-        SaveSetting(ScanPairTimeoutSettingKey, _scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture));
-        SaveSetting(DisplayBurnInEnabledSettingKey, BoolSetting(_displayBurnInEnabled));
-        SaveSetting(DisplayBurnInIntervalSettingKey, _displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture));
         _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScannerPairingStatusText.Text = "Scanner and display settings saved.";
@@ -9104,12 +9503,25 @@ public sealed partial class MainWindow : Window
         if (picked is null)
             return;
 
+        var settings = new Dictionary<string, string>
+        {
+            [ScannerVidSettingKey] = picked.Vid,
+            [ScannerPidSettingKey] = picked.Pid,
+            [ScannerSerialSettingKey] = picked.Serial
+        };
+        if (!SaveSettings(
+                settings,
+                "scanner",
+                "Scanner paired",
+                picked.DisplayLabel))
+        {
+            ScannerPairingStatusText.Text = "Scanner pairing could not be saved.";
+            return;
+        }
+
         _scannerVid = picked.Vid;
         _scannerPid = picked.Pid;
         _scannerSerial = picked.Serial;
-        SaveSetting(ScannerVidSettingKey, _scannerVid);
-        SaveSetting(ScannerPidSettingKey, _scannerPid);
-        SaveSetting(ScannerSerialSettingKey, _scannerSerial);
         _scannerInput.Configure(_scannerVid, _scannerPid, _scannerSerial);
         RefreshScannerPairingStatus();
         StatusText.Text = $"Scanner paired: {picked.DisplayLabel}.";
@@ -9117,12 +9529,25 @@ public sealed partial class MainWindow : Window
 
     private void UnpairScannerButton_Click(object sender, RoutedEventArgs e)
     {
+        var settings = new Dictionary<string, string>
+        {
+            [ScannerVidSettingKey] = string.Empty,
+            [ScannerPidSettingKey] = string.Empty,
+            [ScannerSerialSettingKey] = string.Empty
+        };
+        if (!SaveSettings(
+                settings,
+                "scanner",
+                "Scanner unpaired",
+                "Paired scanner identity cleared; focused scan capture remains available"))
+        {
+            ScannerPairingStatusText.Text = "Scanner unpairing could not be saved.";
+            return;
+        }
+
         _scannerVid = string.Empty;
         _scannerPid = string.Empty;
         _scannerSerial = string.Empty;
-        SaveSetting(ScannerVidSettingKey, string.Empty);
-        SaveSetting(ScannerPidSettingKey, string.Empty);
-        SaveSetting(ScannerSerialSettingKey, string.Empty);
         _scannerInput.Configure(string.Empty, string.Empty, string.Empty);
         RefreshScannerPairingStatus();
         ScannerPairingStatusText.Text = "Scanner unpaired.";
@@ -9414,15 +9839,124 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        SaveSetting("smtp_host", SmtpHostBox.Text.Trim());
-        SaveSetting("smtp_port", smtpPort.ToString(CultureInfo.InvariantCulture));
-        SaveSetting("smtp_user", SmtpUserBox.Text.Trim());
-        if (!string.IsNullOrWhiteSpace(SmtpPasswordBox.Password))
-            SaveSecretSetting("smtp_password", SmtpPasswordBox.Password);
-        SaveSetting("email_to", EmailToBox.Text.Trim());
-        SaveClosingEmailSettingsFromSettings();
+        var smtpHost = SmtpHostBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(smtpHost))
+        {
+            EmailSettingsStatusText.Text = "Email settings rejected. Enter smtp.gmail.com as the SMTP host.";
+            return;
+        }
+
+        var smtpUser = SmtpUserBox.Text.Trim();
+        if (!EmailService.TryParseRecipients(smtpUser, out var senderAddresses, out _) ||
+            senderAddresses.Count != 1)
+        {
+            EmailSettingsStatusText.Text = "Email settings rejected. Enter one valid Gmail address as the SMTP user.";
+            return;
+        }
+
+        if (!EmailService.TryParseRecipients(EmailToBox.Text, out var recipients, out var recipientError))
+        {
+            EmailSettingsStatusText.Text = $"Email settings rejected. {recipientError}";
+            return;
+        }
+
+        var passwordChanged = !string.IsNullOrWhiteSpace(SmtpPasswordBox.Password);
+        if (SettingsEmailSendCheckBox.IsChecked == true &&
+            !passwordChanged &&
+            string.IsNullOrWhiteSpace(_smtpPasswordProtected))
+        {
+            EmailSettingsStatusText.Text = "Email settings rejected. Enter the Gmail app password before enabling closing email.";
+            return;
+        }
+
+        var selectedAttachments = SelectedSettingsEmailReportNames();
+        if (SettingsEmailSendCheckBox.IsChecked == true && selectedAttachments.Count == 0)
+        {
+            EmailSettingsStatusText.Text = "Email settings rejected. Select at least one closing report attachment.";
+            return;
+        }
+
+        var normalizedPassword = passwordChanged
+            ? NormalizeGmailAppPassword(SmtpPasswordBox.Password)
+            : string.Empty;
+        var settings = new Dictionary<string, string>
+        {
+            ["smtp_host"] = smtpHost,
+            ["smtp_port"] = smtpPort.ToString(CultureInfo.InvariantCulture),
+            ["smtp_user"] = senderAddresses[0],
+            ["email_to"] = string.Join(", ", recipients)
+        };
+        try
+        {
+            if (passwordChanged)
+                settings["smtp_password"] = ProtectSecret(normalizedPassword);
+        }
+        catch (Exception ex)
+        {
+            EmailSettingsStatusText.Text = $"Email settings could not be saved: {ex.Message}";
+            return;
+        }
+
+        AddClosingEmailSettingsFromSettings(settings);
+        var attachmentDetail = selectedAttachments.Count == 0
+            ? "no attachments"
+            : string.Join(", ", selectedAttachments);
+        if (!SaveSettings(
+                settings,
+                "settings",
+                "Email settings saved",
+                $"SMTP connection, recipient, and closing email choices updated; password {(passwordChanged ? "updated" : "unchanged")}; send closing email {(SettingsEmailSendCheckBox.IsChecked == true ? "enabled" : "disabled")}; attachments: {attachmentDetail}"))
+        {
+            EmailSettingsStatusText.Text = "Email settings could not be saved.";
+            return;
+        }
+
+        SmtpHostBox.Text = smtpHost;
+        SmtpUserBox.Text = senderAddresses[0];
+        EmailToBox.Text = settings["email_to"];
+        if (passwordChanged)
+            _smtpPasswordProtected = settings["smtp_password"];
+        CaptureSavedClosingEmailSettings();
         SmtpPasswordBox.Password = string.Empty;
-        EmailSettingsStatusText.Text = $"Email settings saved. Application password is stored encrypted. {SettingsEmailChoicesStatusText.Text}";
+        var passwordStatus = string.IsNullOrWhiteSpace(_smtpPasswordProtected)
+            ? "No Gmail app password is saved."
+            : "The Gmail app password is stored encrypted for this Windows user.";
+        EmailSettingsStatusText.Text = $"Email settings saved. {passwordStatus} {SettingsEmailChoicesStatusText.Text}";
+    }
+
+    private async void SendTestEmailButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireManagerAccess("email settings"))
+            return;
+
+        if (!TryBuildEmailConfiguration(out var configuration, out var configurationError))
+        {
+            EmailSettingsStatusText.Text = $"Test email not sent. {configurationError}";
+            return;
+        }
+
+        SendTestEmailButton.IsEnabled = false;
+        EmailSettingsStatusText.Text = "Sending Gmail test email...";
+        EmailSendResult result;
+        try
+        {
+            result = await _email.SendAsync(
+                configuration,
+                $"{(string.IsNullOrWhiteSpace(_storeName) ? "SimpleLotto" : _storeName)} - test email",
+                $"SimpleLotto Gmail setup is working.{Environment.NewLine}{Environment.NewLine}Store: {_storeName}{Environment.NewLine}Sent: {DateTime.Now.ToString("F", CultureInfo.CurrentCulture)}");
+        }
+        finally
+        {
+            SendTestEmailButton.IsEnabled = true;
+        }
+
+        EmailSettingsStatusText.Text = result.IsSuccess
+            ? $"Test email accepted by Gmail. Check each inbox and Spam folder. {result.Message}"
+            : $"Test email failed. {result.Message}";
+        TryRecordAudit(
+            "email",
+            result.IsSuccess ? "Test email accepted" : "Test email failed",
+            result.Message);
     }
 
     private static string SanitizePathSegment(string value)
@@ -9629,6 +10163,7 @@ public sealed partial class MainWindow : Window
         box.ValidationMode = NumberBoxValidationMode.Disabled;
         box.PlaceholderText = "Whole dollars";
         box.Description = "Currency signs are optional: 20, $20, and 20$ are equivalent.";
+        ConfigureFocusClearedPlaceholder(box);
         box.Loaded += (_, _) => ConfigureNumberBoxEditor(
             box,
             1,
@@ -10134,12 +10669,38 @@ public sealed partial class MainWindow : Window
 
     private sealed record ClosingReportTarget(string BusinessDate, int ShiftSequence, string ShiftLabel, string Folder);
 
+    private sealed record ClosingEmailOutcome(string Status, string Message, bool IsFailure);
+
+    private sealed record PlaceholderFocusState(string Text);
+
     private static List<ClosingHistoryRow> BuildClosingHistoryRows(IEnumerable<StoredClosingRecord> records) =>
         records
             .OrderByDescending(record => record.IntervalId)
             .ThenByDescending(record => record.ClosedAtUtc)
-            .Select(ClosingHistoryRow.From)
+            .Select(record => ClosingHistoryRow.From(record))
             .ToList();
+
+    private static string ReadClosingEmailStatus(string reportFolder)
+    {
+        if (string.IsNullOrWhiteSpace(reportFolder))
+            return "Email status unavailable";
+
+        var path = Path.Combine(reportFolder, "email_status.txt");
+        if (!File.Exists(path))
+            return "Email status unavailable";
+
+        try
+        {
+            return File.ReadLines(path).FirstOrDefault()?.Trim() is { Length: > 0 } status
+                ? status
+                : "Email status unavailable";
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Closing email status could not be read from {path}.", ex);
+            return "Email status unavailable";
+        }
+    }
 
     private sealed record ClosingHistoryRow(
         DateTime ClosedAt,
@@ -10160,7 +10721,8 @@ public sealed partial class MainWindow : Window
         int ClosedBundles,
         int CurrentBundles,
         int ResolvedBundles,
-        int ActivatedBundles)
+        int ActivatedBundles,
+        string EmailStatus)
     {
         public string ShiftText => string.IsNullOrWhiteSpace(ShiftLabel)
             ? $"{BusinessDate} #{ShiftSequence.ToString(CultureInfo.CurrentCulture)}"
@@ -10186,7 +10748,7 @@ public sealed partial class MainWindow : Window
         public string TicketText => TicketCount.ToString(CultureInfo.CurrentCulture);
         public string BinText => $"{ScannedBins.ToString(CultureInfo.CurrentCulture)} / {ActiveBins.ToString(CultureInfo.CurrentCulture)}";
         public string ReconciliationText =>
-            $"{ClosedBundles.ToString(CultureInfo.CurrentCulture)} closed, {CurrentBundles.ToString(CultureInfo.CurrentCulture)} updated, {ResolvedBundles.ToString(CultureInfo.CurrentCulture)} resolved, {ActivatedBundles.ToString(CultureInfo.CurrentCulture)} activated";
+            $"{ClosedBundles.ToString(CultureInfo.CurrentCulture)} closed, {CurrentBundles.ToString(CultureInfo.CurrentCulture)} updated, {ResolvedBundles.ToString(CultureInfo.CurrentCulture)} resolved, {ActivatedBundles.ToString(CultureInfo.CurrentCulture)} activated • {EmailStatus}";
         public bool HasReportFolder => !string.IsNullOrWhiteSpace(ReportFolder) && Directory.Exists(ReportFolder);
         public string ReportFolderText => string.IsNullOrWhiteSpace(ReportFolder)
             ? "No report folder recorded."
@@ -10202,7 +10764,9 @@ public sealed partial class MainWindow : Window
                 ShiftDateText().Contains(trimmed, StringComparison.OrdinalIgnoreCase);
         }
 
-        public static ClosingHistoryRow From(StoredClosingRecord record) =>
+        public static ClosingHistoryRow From(
+            StoredClosingRecord record,
+            string? emailStatus = null) =>
             new(
                 record.ClosedAtUtc.ToLocalTime(),
                 record.IntervalStartUtc == DateTime.MinValue
@@ -10224,7 +10788,8 @@ public sealed partial class MainWindow : Window
                 record.ClosedBundles,
                 record.CurrentBundles,
                 record.ResolvedBundles,
-                record.ActivatedBundles);
+                record.ActivatedBundles,
+                emailStatus ?? ReadClosingEmailStatus(record.ReportFolder));
 
         private string ShiftDateText()
         {

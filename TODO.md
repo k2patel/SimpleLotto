@@ -159,8 +159,16 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Confirm every static and dialog-created numeric field accepts direct entry without showing increment/decrement spin buttons.
    - During activation, enter and scan bin `configured bin count + 1`. Confirm the dialog remains open, identifies the valid `1..configured bin count` range, and no placement, sale, or activation record is persisted.
    - Paste overlong values into every editable text/password field and confirm the field enforces its workflow-specific limit without freezing or crashing.
+   - Focus every empty text, password, and numeric-entry field that shows placeholder text. Confirm the placeholder disappears immediately before typing, returns after focus leaves, and never clears an actual typed or saved value. Repeat in dynamically created activation, add-bundle, Closing reconciliation, game setup, and price dialogs.
    - Send a raw and focused scanner value longer than the supported scan boundary. Confirm the entire scan is rejected once with a visible/audited reason and no retained prefix is processed as a ticket, bin, price, sale, or activation.
    - Repeat Closing finalization after each rejected value and confirm checked money arithmetic prevents a `Decimal`/integer overflow or first-attempt closing crash.
+24. Verify closing time, consolidated Settings audit, and Gmail delivery:
+   - Open Finalize Closing, wait at least one minute, then confirm. Verify the closing record and every report period end use the successful confirmation time, not the dialog-open time.
+   - Save Email settings once and confirm exactly one searchable `Email settings saved` Audit row is created for the whole button action. Repeat for scanner/display save, scanner pair, and scanner unpair.
+   - Configure `smtp.gmail.com`, port `587`, a Gmail address, and its app password. Enter multiple recipients using commas, semicolons, and line breaks; confirm invalid addresses are rejected and duplicates are sent only once.
+   - Send a test email and confirm Gmail SMTP acceptance is shown and audited. Also confirm the Manager guidance explains 2-Step Verification/app-password setup and the Clerk guidance says email failure never invalidates Closing.
+   - Force DNS, authentication, missing-attachment, and SMTP rejection failures. Confirm each failure is visible, logged, audited without credentials, saved as `email_status.txt`, and shown in Closing history while the completed shift and generated reports remain valid.
+   - Complete a Closing with a staged range reversal and confirm `closing_audit.csv` includes the immutable range-level reconciliation record. Confirm the report's period end matches the successful finalization timestamp.
 
 ## Missing Follow-Up Work
 

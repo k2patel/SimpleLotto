@@ -124,6 +124,18 @@ public sealed class LocalStore
         tx.Commit();
     }
 
+    public void SaveSettings(IReadOnlyDictionary<string, string> settings)
+    {
+        if (settings.Count == 0)
+            return;
+
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        foreach (var setting in settings)
+            UpsertSetting(conn, tx, setting.Key, setting.Value);
+        tx.Commit();
+    }
+
     public void SaveGlobalFirstTicketSerial(int firstTicketSerial)
     {
         if (firstTicketSerial is not 0 and not 1)
@@ -593,7 +605,8 @@ public sealed class LocalStore
         reportRequest = reportRequest with
         {
             Closing = closingRecord,
-            Sales = persistedIntervalSales
+            Sales = persistedIntervalSales,
+            AuditRecords = reverseAuditRecords
         };
 
         long closingHistoryId;
@@ -3634,7 +3647,9 @@ public sealed record StoredClosingReportRequest(
     List<StoredImportLine> ClosedBundles,
     List<StoredImportLine> CurrentBundles,
     List<StoredImportLine> ResolvedBundles,
-    List<string> SelectedEmailAttachments);
+    List<string> SelectedEmailAttachments,
+    List<StoredAuditRecord>? AuditRecords = null,
+    bool SendEmail = false);
 
 public sealed record StoredClosingReverseCorrection(
     string GameId,

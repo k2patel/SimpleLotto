@@ -131,6 +131,7 @@ Operator input safety rules:
 - Treat pasted, typed, or scanned input as untrusted. Parse with non-throwing validation and reject malformed, non-finite, fractional-when-whole-required, over-precision, out-of-range, and arithmetic-overflow values before changing persisted or calculated state.
 - Rejected input must leave the last valid value in place and show a clear operator-facing message. A validation failure must not crash the app, freeze calculated cards, partially save a workflow, or silently substitute an unrelated default.
 - Calculated money totals must use checked arithmetic. If a source value or result cannot be represented safely, keep the workflow open and require correction instead of finalizing.
+- Placeholder text is an empty-field hint, not entered data. Text, password, and numeric-entry placeholders must disappear as soon as that field receives focus and return when it loses focus; focusing a field must never clear its actual saved or typed value.
 
 ## Game, Bundle, and Ticket Rules
 
@@ -676,8 +677,10 @@ Audit rules:
 - Audit is part of the operational accountability surface, not optional diagnostics.
 - Record scanner activity, rejected/unrecognized scans, sale records, bundle activations, bin placements, opening/initial placements, corrections, settings changes, login/logout, display registration changes, license checks, and closing finalization.
 - Audit entries should include enough detail to reconstruct what happened: active user or system actor, timestamp, workflow/source, game ID, bundle ID, bin, ticket/range, quantity, amount, next ticket where relevant, and failure reason when rejected.
+- One operator-triggered Settings action must create one searchable audit entry after its settings persist successfully. When one button saves several fields, summarize those field changes in that single entry instead of writing one audit row per storage key; never include secret values.
 - Persist the complete audit trail in SQLite, but keep the Settings Audit surface bounded: load only a fixed recent window into UI memory, show only the rows that fit one constrained page, truncate long cell text visually, and use Previous/Next rather than an ever-growing vertical page. Recording an audit event must not repeatedly sort the lifetime audit history while the Audit tab is closed.
 - Focused receiving and closing sessions must audit session start, accepted scans, rejected scans, cancellation/close outcome, finalization, and reconciliation decisions. Receiving duplicates remain the explicit exception because they are audio-only no-op input.
+- The close-specific `closing_audit.csv` artifact must include the immutable range-level Closing reconciliation records for that close, including inventory-only cursor corrections, so exported logs can verify the exact Game ID, Bundle ID, bin, and ticket range without the live database.
 - Receiving and Closing scan overlays must fit inside the current window with an outer margin and respond when the window is resized. Keep the overlay header and action footer visible at all supported sizes; only the middle scan list may shrink and scroll. At narrow widths, stack footer actions instead of allowing buttons to overflow or fall below the usable surface.
 - Every `ContentDialog` must remain bounded by the current window. Keep the standard dialog title and action footer visible while placing variable-height content in a viewport-relative vertical scroller; update the content bound when the window is resized so action buttons never fall outside the dialog border or usable window area.
 - Game price/name/image setup changes and inventory removals must be audited after successful persistence. Audit detail must state that inventory removal preserves prior sales and activation history.
@@ -919,12 +922,15 @@ SimpleLotto may omit or de-emphasize day-level reporting where it conflicts with
 Email rules:
 
 - Email settings live under Settings.
-- Email report recipients are configured once and reused by shift closing.
+- Email report recipients are configured once and reused by shift closing. Accept multiple plain email addresses separated by commas, semicolons, or line breaks; validate and deduplicate them before saving.
+- Gmail SMTP uses `smtp.gmail.com`, port `587`, TLS/STARTTLS, the full Gmail address as the username, and a Google app password stored with Windows user-scoped protection. The Manager-facing setup note must explain that Google 2-Step Verification is required before creating an app password and link to Google's current app-password help. Never request or store the normal Google Account password.
+- Clerk does not configure or view Manager-only email credentials. Clerk-facing closing feedback must explain that a completed shift remains closed when email fails and must show a concise failure status to report to a Manager.
 - Closing email can send CSV reports and the PDF closing report when available.
 - The user must be able to choose which closing artifacts are included or excluded from the closing email as a global Settings > Email preference, not as a per-closing choice.
 - Global closing email content choices should include each standard artifact separately: shift summary, inventory, sales detail, corrections, anomalies, placement events, bin assignments, initialization, closing audit, and PDF closing report.
 - Email failure must not invalidate a completed close.
-- Email status should be visible in Reporting/Closing history.
+- Email status should be visible in Reporting/Closing history and saved with the close's report artifacts. Record SMTP acceptance or the exact local/configuration/SMTP failure in application logs and Audit without exposing credentials.
+- Label successful delivery accurately as SMTP/Gmail acceptance. The app cannot prove final inbox placement or detect every later bounce/filtering decision, so test-email guidance must tell the Manager to check each recipient's Inbox and Spam folder.
 - Manual test email should be available from Settings.
 
 Reporting rules:

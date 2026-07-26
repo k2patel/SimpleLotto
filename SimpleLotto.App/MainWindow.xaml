@@ -1334,7 +1334,7 @@
                                                            Foreground="{ThemeResource SlTextBrush}"
                                                            TextWrapping="Wrap"/>
                                                 <TextBlock x:Name="ClosingExceptionText"
-                                                           Text="Matched scan evidence auto reconciles. Unscanned active bundles close out when the shift is finalized."
+                                                           Text="Matched scan evidence auto reconciles. Unscanned active bundles close out when the shift is finalized. Clerk: email failure never reopens the shift; report the visible Email failed status to a Manager."
                                                            Style="{StaticResource SlCaptionTextStyle}"
                                                            TextWrapping="Wrap"/>
                                                 <Border x:Name="ClosingPriceIssueBar"
@@ -2150,12 +2150,16 @@
                                             <ColumnDefinition Width="360"/>
                                         </Grid.ColumnDefinitions>
                                         <Border Style="{StaticResource SlPanelBorderStyle}">
-                                            <StackPanel Spacing="10">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <StackPanel Spacing="10">
                                                 <TextBlock Text="Email Server"
                                                            Style="{StaticResource SlSectionTitleTextStyle}"/>
                                                 <TextBox x:Name="SmtpHostBox"
                                                          Header="SMTP host"
-                                                         MaxLength="256"/>
+                                                         PlaceholderText="smtp.gmail.com"
+                                                         MaxLength="256"
+                                                         AutomationProperties.AutomationId="SmtpHost"/>
                                                 <Grid ColumnSpacing="8">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="120"/>
@@ -2166,31 +2170,82 @@
                                                                Value="587"
                                                                Minimum="1"
                                                                Maximum="65535"
-                                                               SpinButtonPlacementMode="Hidden"/>
+                                                               SpinButtonPlacementMode="Hidden"
+                                                               AutomationProperties.AutomationId="SmtpPort"/>
                                                     <TextBox x:Name="SmtpUserBox"
                                                              Grid.Column="1"
-                                                             Header="SMTP user"
-                                                             MaxLength="320"/>
+                                                             Header="Gmail address"
+                                                             PlaceholderText="store@gmail.com"
+                                                             MaxLength="320"
+                                                             AutomationProperties.AutomationId="SmtpUser"/>
                                                 </Grid>
                                                 <PasswordBox x:Name="SmtpPasswordBox"
-                                                             Header="Application password"
-                                                             MaxLength="512"
-                                                             PlaceholderText="Leave blank to keep saved password"/>
+                                                             Header="Gmail app password"
+                                                             MaxLength="128"
+                                                             PlaceholderText="Leave blank to keep saved password"
+                                                             AutomationProperties.AutomationId="SmtpAppPassword"/>
                                                 <TextBox x:Name="EmailToBox"
-                                                         Header="Closing email recipient"
-                                                         MaxLength="1024"/>
+                                                         Header="Closing email recipients"
+                                                         PlaceholderText="owner@example.com, manager@example.com"
+                                                         MaxLength="1024"
+                                                         AutomationProperties.AutomationId="ClosingEmailRecipients"/>
+                                                <TextBlock Text="Use commas, semicolons, or separate lines for multiple recipients."
+                                                           Style="{StaticResource SlCaptionTextStyle}"
+                                                           TextWrapping="Wrap"/>
                                                 <CheckBox x:Name="SettingsEmailSendCheckBox"
                                                           Content="Send closing email"
                                                           Checked="SettingsEmailOptionChanged"
-                                                          Unchecked="SettingsEmailOptionChanged"/>
-                                                <Button Content="Save email settings"
-                                                        HorizontalAlignment="Stretch"
-                                                        Click="SaveEmailSettingsButton_Click"/>
+                                                          Unchecked="SettingsEmailOptionChanged"
+                                                          AutomationProperties.AutomationId="SendClosingEmail"/>
+                                                <Grid ColumnSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Button Content="Save email settings"
+                                                            HorizontalAlignment="Stretch"
+                                                            Click="SaveEmailSettingsButton_Click"
+                                                            AutomationProperties.AutomationId="SaveEmailSettings"/>
+                                                    <Button x:Name="SendTestEmailButton"
+                                                            Grid.Column="1"
+                                                            Content="Send test email"
+                                                            HorizontalAlignment="Stretch"
+                                                            Click="SendTestEmailButton_Click"
+                                                            AutomationProperties.AutomationId="SendTestEmail"/>
+                                                </Grid>
                                                 <TextBlock x:Name="EmailSettingsStatusText"
                                                            Text="Email settings not saved."
                                                            Foreground="{ThemeResource SlTextBrush}"
                                                            TextWrapping="Wrap"/>
-                                            </StackPanel>
+                                                <Expander Header="Gmail setup steps for Manager and Clerk"
+                                                          HorizontalAlignment="Stretch"
+                                                          AutomationProperties.AutomationId="GmailSetupHelp">
+                                                    <StackPanel Padding="12,4,12,12"
+                                                                Spacing="8">
+                                                        <TextBlock Text="Manager setup"
+                                                                   FontWeight="SemiBold"/>
+                                                        <TextBlock Text="1. Sign in to the store Gmail account in a browser.&#x0a;2. Turn on Google 2-Step Verification.&#x0a;3. Open Google Account → Security → App passwords. Create one for SimpleLotto.&#x0a;4. Enter smtp.gmail.com, port 587, the full Gmail address, and the generated app password above.&#x0a;5. Enter one or more report recipients, select attachments, save, then send a test email.&#x0a;6. Keep the successful test status before relying on closing email."
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <HyperlinkButton Content="Open Google app-password help"
+                                                                         NavigateUri="https://support.google.com/accounts/answer/185833"
+                                                                         HorizontalAlignment="Left"
+                                                                         AutomationProperties.AutomationId="GoogleAppPasswordHelp"/>
+                                                        <TextBlock Text="If Google does not show App passwords, check whether the account is organization-managed, uses security-key-only 2-Step Verification, or has Advanced Protection. If the normal Google Account password changes, Google revokes existing app passwords; create and save a new one."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Text="Clerk closing"
+                                                                   FontWeight="SemiBold"/>
+                                                        <TextBlock Text="No Gmail setup is required for a Clerk. Complete Closing normally. The shift stays closed even if email fails; report the visible Email failed status to a Manager, who can correct Settings and use Send test email."
+                                                                   Foreground="{ThemeResource SlTextBrush}"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Text="A successful test confirms Gmail accepted the message. The recipient should still check Inbox and Spam because a later bounce or filtering decision cannot be detected by SimpleLotto."
+                                                                   Style="{StaticResource SlCaptionTextStyle}"
+                                                                   TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Expander>
+                                                </StackPanel>
+                                            </ScrollViewer>
                                         </Border>
                                         <Border Grid.Column="1"
                                                 Style="{StaticResource SlPanelBorderStyle}">
