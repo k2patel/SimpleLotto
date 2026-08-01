@@ -7723,7 +7723,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Finalize shift closing?",
-            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {unscannedSoldOutBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(unscannedSoldOutBundles.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. Sold-out bundles remain assigned and grey in their bins/Rdisplay.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {unscannedSoldOutBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(unscannedSoldOutBundles.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. Sold-out bundles remain assigned and grey in Bins, while their Rdisplay tiles become empty.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Finalize Closing",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -9089,7 +9089,13 @@ public sealed partial class MainWindow : Window
                 ImageUri = LocalFileUri(dest),
                 ImageStatus = "Image uploaded"
             };
-            UpsertManualGameRecord(updated);
+            if (!UpsertManualGameRecord(updated))
+            {
+                GameCatalogStatusText.Text = $"Image for game {game.GameId} was copied but its catalog record could not be saved.";
+                return;
+            }
+
+            await _rdisplay.PushImageReadyAsync(game.GameId);
             GameCatalogStatusText.Text = $"Image uploaded for game {game.GameId}.";
         }
         catch (Exception ex)
@@ -9245,11 +9251,19 @@ public sealed partial class MainWindow : Window
         var cached = CachedGameImagePath(game.GameId);
         if (cached is not null)
         {
-            UpsertManualGameRecord(game with
+            if (!UpsertManualGameRecord(game with
             {
                 ImageUri = LocalFileUri(cached),
                 ImageStatus = "Image cached"
-            });
+            }))
+            {
+                if (!quiet)
+                    GameCatalogStatusText.Text = $"Cached image for game {game.GameId} could not be saved to the catalog.";
+                return false;
+            }
+
+            if (!quiet)
+                await _rdisplay.PushImageReadyAsync(game.GameId);
             if (!quiet)
                 GameCatalogStatusText.Text = $"Image already cached for game {game.GameId}.";
             return true;
@@ -9284,12 +9298,19 @@ public sealed partial class MainWindow : Window
                 DeleteCachedGameImages(game.GameId);
                 await File.WriteAllBytesAsync(path, bytes);
 
-                UpsertManualGameRecord(game with
+                if (!UpsertManualGameRecord(game with
                 {
                     Source = "Official",
                     ImageUri = LocalFileUri(path),
                     ImageStatus = "Image fetched"
-                });
+                }))
+                {
+                    if (!quiet)
+                        GameCatalogStatusText.Text = $"Image was fetched for game {game.GameId}, but its catalog record could not be saved.";
+                    return false;
+                }
+
+                await _rdisplay.PushImageReadyAsync(game.GameId);
                 if (!quiet)
                     GameCatalogStatusText.Text = $"Image fetched for game {game.GameId}.";
                 return true;

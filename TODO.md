@@ -169,6 +169,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Send a test email and confirm Gmail SMTP acceptance is shown and audited. Also confirm the Manager guidance explains 2-Step Verification/app-password setup and the Clerk guidance says email failure never invalidates Closing.
    - Force DNS, authentication, missing-attachment, and SMTP rejection failures. Confirm each failure is visible, logged, audited without credentials, saved as `email_status.txt`, and shown in Closing history while the completed shift and generated reports remain valid.
    - Complete a Closing with a staged range reversal and confirm `closing_audit.csv` includes the immutable range-level reconciliation record. Confirm the report's period end matches the successful finalization timestamp.
+25. Verify SimpleLotto's Rdisplay sender against the existing WindowsPOS wire contract:
+   - Sell a non-final ticket and confirm only a targeted `serial_update` is sent to the display that owns that bin; no snapshot-wide `image_ready` events should be emitted and existing artwork must remain visible.
+   - Sell the final valid ticket and confirm the bundle remains assigned and grey in SimpleLotto Bins while its Rdisplay tile is removed by a snapshot, leaving the display box empty.
+   - Repeatedly connect/disconnect or split screens and confirm topology changes send snapshots without invalidating cached images or blacking an entire row.
+   - Select a registered display and click `Refresh Screen`; confirm the existing Rdisplay snapshot/image refresh mechanism redraws the screen without restarting Rdisplay.
 
 ## Missing Follow-Up Work
 
