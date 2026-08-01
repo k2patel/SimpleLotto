@@ -527,6 +527,92 @@ public sealed class LocalStore
             auditRecords);
     }
 
+    public StoredBundleReconciliationResult ReconcileBundleToAvailableTicket(
+        DateTime occurredAtUtc,
+        long intervalId,
+        string actorId,
+        string actorName,
+        StoredImportLine currentBundle,
+        StoredImportLine correctedBundle,
+        StoredClosingReverseCorrection correction)
+    {
+        if (intervalId <= 0 ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(actorName))
+        {
+            throw new InvalidOperationException("Inventory ticket correction requires an open interval and actor identity.");
+        }
+
+        if (correctedBundle.IsSoldOut ||
+            !string.Equals(currentBundle.GameId.Trim(), correctedBundle.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.BundleId.Trim(), correctedBundle.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Bin.Trim(), correctedBundle.Bin.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.GameId.Trim(), correction.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.BundleId.Trim(), correction.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Bin.Trim(), correction.Bin.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Ticket.Trim(), correction.StoredCurrentTicket.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(correctedBundle.Ticket.Trim(), correction.ScannedTicket.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Inventory ticket correction state does not match the active physical bundle.");
+        }
+
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        using (var intervalCheck = conn.CreateCommand())
+        {
+            intervalCheck.Transaction = tx;
+            intervalCheck.CommandText = "SELECT COUNT(*) FROM ledger_intervals WHERE id = $id AND status = 'open'";
+            intervalCheck.Parameters.AddWithValue("$id", intervalId);
+            if (Convert.ToInt32(intervalCheck.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+                throw new InvalidOperationException("The current sales interval is no longer open.");
+        }
+
+        var auditRecords = ApplyReverseCorrections(
+            conn,
+            tx,
+            new ReverseCorrectionContext(
+                occurredAtUtc,
+                intervalId,
+                actorId,
+                actorName,
+                "inventory",
+                "Inventory current ticket corrected",
+                "Inventory sale range reversed",
+                "Inventory current-ticket edit",
+                "closing_reverse"),
+            new[] { correction });
+
+        using (var importCmd = conn.CreateCommand())
+        {
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                UPDATE imports
+                SET ticket = $corrected_ticket,
+                    is_sold_out = 0
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND trim(bin) = trim($bin) COLLATE NOCASE
+                  AND trim(ticket) = trim($current_ticket) COLLATE NOCASE
+                  AND is_sold_out = $is_sold_out
+                """;
+            importCmd.Parameters.AddWithValue("$corrected_ticket", correctedBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$game_id", currentBundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", currentBundle.BundleId);
+            importCmd.Parameters.AddWithValue("$bin", currentBundle.Bin);
+            importCmd.Parameters.AddWithValue("$current_ticket", currentBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$is_sold_out", currentBundle.IsSoldOut ? 1 : 0);
+            if (importCmd.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("The bundle placement changed before its current ticket could be saved.");
+        }
+
+        tx.Commit();
+        return new StoredBundleReconciliationResult(
+            QuerySales(conn),
+            QueryVoidedSaleKeys(conn),
+            QueryVoidedSaleIds(conn),
+            auditRecords);
+    }
+
     public CompleteClosingResult CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,
