@@ -3398,6 +3398,26 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var currentBundle = _imports.FirstOrDefault(bundle =>
+            string.Equals(bundle.GameId, sale.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(bundle.BundleId, sale.BundleId, StringComparison.OrdinalIgnoreCase));
+        if (currentBundle is null ||
+            !TryParseSaleTicketRange(sale.Ticket, out var firstSoldTicket, out _) ||
+            !TryParseTicketSerial(currentBundle.Ticket, out _))
+        {
+            StatusText.Text = "This sale cannot restore an active bundle ticket position.";
+            return;
+        }
+
+        var restoredTicket = FormatTicketSerial(
+            firstSoldTicket,
+            Math.Max(TicketSerialWidth(currentBundle.Ticket), TicketSerialWidth(sale.Ticket)));
+        var restoredBundle = currentBundle with
+        {
+            Ticket = restoredTicket,
+            IsSoldOut = false
+        };
+
         var correction = new SaleLine(
             DateTime.Now,
             sale.GameId,
@@ -3407,16 +3427,20 @@ public sealed partial class MainWindow : Window
             -sale.Amount,
             "undo",
             sale.BundleId);
-        var persistedCorrection = SaveVoid(sale, correction, saleKey);
+        var persistedCorrection = SaveVoid(sale, correction, saleKey, currentBundle, restoredBundle);
         if (persistedCorrection is null)
             return;
 
         _sales.Insert(0, persistedCorrection);
+        ReplaceImportLine(restoredBundle);
 
-        TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
-        StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
+        TryRecordAudit(
+            "correction",
+            "Sale voided and bundle restored",
+            $"Game {sale.GameId}, bundle {sale.BundleId}, sold ticket {sale.Ticket}, current bin {restoredBundle.Bin}, restored available ticket {restoredTicket}, was sold out {currentBundle.IsSoldOut}");
+        StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}; ticket {restoredTicket} is available again.";
         RefreshTotals();
-        RefreshBinCards();
+        RefreshOperationalPages();
     }
 
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
@@ -3477,11 +3501,21 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private SaleLine? SaveVoid(SaleLine original, SaleLine correction, string saleKey)
+    private SaleLine? SaveVoid(
+        SaleLine original,
+        SaleLine correction,
+        string saleKey,
+        ImportLine currentBundle,
+        ImportLine restoredBundle)
     {
         try
         {
-            var inserted = _store.InsertVoid(ToStoredSaleLine(original), ToStoredSaleLine(correction), saleKey);
+            var inserted = _store.InsertVoidAndRestoreBundle(
+                ToStoredSaleLine(original),
+                ToStoredSaleLine(correction),
+                saleKey,
+                ToStoredImportLine(currentBundle),
+                ToStoredImportLine(restoredBundle));
             var persisted = FromStoredSaleLine(inserted);
             _allSales.Insert(0, persisted);
             _voidedSaleKeys.Add(saleKey);
@@ -3622,6 +3656,15 @@ public sealed partial class MainWindow : Window
             string.IsNullOrWhiteSpace(line.ActorName) ? _activeUserName : line.ActorName,
             line.CorrectsSaleId,
             line.MigrationState);
+
+    private static StoredImportLine ToStoredImportLine(ImportLine line) =>
+        new(
+            line.GameId,
+            line.BundleId,
+            line.Ticket,
+            line.Bin,
+            line.Source,
+            line.IsSoldOut);
 
     private static SaleLine FromStoredSaleLine(StoredSaleLine line) =>
         new(
