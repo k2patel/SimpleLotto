@@ -4295,8 +4295,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (!HasCompleteGameSetup(currentBundle.GameId) ||
-            !TryGetBundleTicketRange(currentBundle.GameId, out var firstTicket, out var lastTicket, out var rangeError))
+        var hasCompleteGameSetup = HasCompleteGameSetup(currentBundle.GameId);
+        var hasTicketRange = TryGetBundleTicketRange(
+            currentBundle.GameId,
+            out var firstTicket,
+            out var lastTicket,
+            out var rangeError);
+        if (!hasCompleteGameSetup || !hasTicketRange)
         {
             var message = string.IsNullOrWhiteSpace(rangeError)
                 ? $"Game {currentBundle.GameId} needs a valid ticket price before its current ticket can be changed."
@@ -4353,7 +4358,6 @@ public sealed partial class MainWindow : Window
     private void AdvanceInventoryCurrentTicket(
         InventoryRecord record,
         ImportLine currentBundle,
-        int currentSerial,
         int desiredSerial,
         string desiredTicket,
         int width)
@@ -4409,6 +4413,7 @@ public sealed partial class MainWindow : Window
     private void RestoreInventoryCurrentTicket(
         InventoryRecord record,
         ImportLine currentBundle,
+        int currentSerial,
         int desiredSerial,
         string desiredTicket,
         int lastTicket,
