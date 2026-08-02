@@ -23,6 +23,7 @@ public sealed class RdisplayService : IDisposable
     private readonly object _gate = new();
     private readonly List<RdisplayRegistration> _displays = new();
     private readonly List<RdisplayTileState> _tiles = new();
+    private bool _hasTileState;
     private long _nextDisplayId = 1;
     private bool _burnInEnabled = true;
     private int _burnInIntervalMinutes = 15;
@@ -47,13 +48,24 @@ public sealed class RdisplayService : IDisposable
 
     public void UpdateTiles(IEnumerable<RdisplayTileState> tiles)
     {
+        // Match WindowsPOS/Rdisplay semantics: completed bundles are absent
+        // from the snapshot, while ordinary sales mutate one existing tile.
+        var updatedTiles = tiles
+            .Where(tile => !tile.IsSoldOut)
+            .OrderBy(tile => tile.BinNumber)
+            .ToList();
+        List<RdisplayTileState> previousTiles;
+        bool forceSnapshot;
         lock (_gate)
         {
+            previousTiles = _tiles.ToList();
+            forceSnapshot = !_hasTileState;
             _tiles.Clear();
-            _tiles.AddRange(tiles.OrderBy(t => t.BinNumber));
+            _tiles.AddRange(updatedTiles);
+            _hasTileState = true;
         }
 
-        _ = PushToAllAsync();
+        _ = PushTileChangesAsync(previousTiles, updatedTiles, forceSnapshot);
     }
 
     public void ConfigureDisplaySettings(bool burnInEnabled, int burnInIntervalMinutes)
@@ -408,8 +420,11 @@ public sealed class RdisplayService : IDisposable
 
     private async Task PushManyAsync(IEnumerable<RdisplayRegistration> displays, CancellationToken ct)
     {
+        // A normal snapshot must not imply that image bytes changed.
+        // image_ready deliberately invalidates Rdisplay's cached file and is
+        // reserved for registration, manual refresh, and real image changes.
         foreach (var display in displays)
-            await PushSnapshotAndImagesAsync(display, ct);
+            await PushSnapshotAsync(display, ct);
     }
 
     private async Task PushConfigManyAsync(IEnumerable<RdisplayRegistration> displays, CancellationToken ct)
@@ -457,6 +472,152 @@ public sealed class RdisplayService : IDisposable
                 ["server_url"] = OwnServerUrl(),
                 ["game_id"] = gameId
             }, ct);
+        }
+    }
+
+    public Task PushImageReadyAsync(string gameId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(gameId))
+            return Task.CompletedTask;
+
+        return PushEventToDisplaysShowingGameAsync(gameId, new Dictionary<string, object?>
+        {
+            ["type"] = "image_ready",
+            ["server_url"] = OwnServerUrl(),
+            ["game_id"] = gameId
+        }, ct);
+    }
+
+    private async Task PushTileChangesAsync(
+        IReadOnlyList<RdisplayTileState> previousTiles,
+        IReadOnlyList<RdisplayTileState> updatedTiles,
+        bool forceSnapshot,
+        CancellationToken ct = default)
+    {
+        if (forceSnapshot || RequiresFullSnapshot(previousTiles, updatedTiles))
+        {
+            await PushToAllAsync(ct);
+            return;
+        }
+
+        var previousByBin = previousTiles.ToDictionary(tile => tile.BinNumber);
+        foreach (var updated in updatedTiles)
+        {
+            var previous = previousByBin[updated.BinNumber];
+            if (previous.PriceCents != updated.PriceCents)
+                await PushPriceUpdateAsync(updated.GameId, updated.PriceCents, ct);
+
+            if (!string.Equals(previous.Ticket, updated.Ticket, StringComparison.Ordinal) ||
+                previous.TicketsRemaining != updated.TicketsRemaining)
+            {
+                await PushSerialUpdateAsync(
+                    updated.BinNumber,
+                    ParseSerial(updated.Ticket),
+                    updated.TicketsRemaining,
+                    ct);
+            }
+        }
+    }
+
+    private static bool RequiresFullSnapshot(
+        IReadOnlyList<RdisplayTileState> previousTiles,
+        IReadOnlyList<RdisplayTileState> updatedTiles)
+    {
+        if (previousTiles.Count != updatedTiles.Count)
+            return true;
+
+        var previousByBin = previousTiles.ToDictionary(tile => tile.BinNumber);
+        foreach (var updated in updatedTiles)
+        {
+            if (!previousByBin.TryGetValue(updated.BinNumber, out var previous) ||
+                !string.Equals(previous.GameId, updated.GameId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(previous.GameName, updated.GameName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private Task PushSerialUpdateAsync(
+        int tileIndex,
+        int nextSerial,
+        int ticketsRemaining,
+        CancellationToken ct) =>
+        PushEventToDisplaysShowingBinAsync(tileIndex, new Dictionary<string, object?>
+        {
+            ["type"] = "serial_update",
+            ["tile_index"] = tileIndex,
+            ["next_serial"] = nextSerial,
+            ["tickets_remaining"] = ticketsRemaining
+        }, ct);
+
+    private Task PushPriceUpdateAsync(string gameId, int priceCents, CancellationToken ct) =>
+        PushEventToDisplaysShowingGameAsync(gameId, new Dictionary<string, object?>
+        {
+            ["type"] = "price_update",
+            ["game_id"] = gameId,
+            ["price_cents"] = priceCents
+        }, ct);
+
+    private async Task PushEventToDisplaysShowingBinAsync(
+        int binNumber,
+        object payload,
+        CancellationToken ct)
+    {
+        foreach (var display in DisplaysShowingTile(tile =>
+                     tile.TryGetValue("tile_index", out var value) &&
+                     value is int tileIndex &&
+                     tileIndex == binNumber))
+        {
+            await PostToDisplayAsync(display, "/api/display/event", payload, ct);
+        }
+    }
+
+    private async Task PushEventToDisplaysShowingGameAsync(
+        string gameId,
+        object payload,
+        CancellationToken ct)
+    {
+        foreach (var display in DisplaysShowingTile(tile =>
+                     tile.TryGetValue("game_id", out var value) &&
+                     value is string displayedGameId &&
+                     string.Equals(displayedGameId, gameId, StringComparison.OrdinalIgnoreCase)))
+        {
+            await PostToDisplayAsync(display, "/api/display/event", payload, ct);
+        }
+    }
+
+    private IReadOnlyList<RdisplayRegistration> DisplaysShowingTile(
+        Func<IDictionary<string, object?>, bool> predicate)
+    {
+        List<RdisplayRegistration> displays;
+        lock (_gate)
+        {
+            displays = _displays
+                .Where(display => display.IsActive && display.IsRegistered)
+                .OrderBy(display => display.ScreenOrder)
+                .ThenBy(display => display.Id)
+                .Select(display => display with { })
+                .ToList();
+        }
+
+        return displays
+            .Where(display => SnapshotTiles(display).Any(predicate))
+            .ToList();
+    }
+
+    private IEnumerable<IDictionary<string, object?>> SnapshotTiles(RdisplayRegistration display)
+    {
+        var snapshot = BuildSnapshotPayloadForDisplay(display);
+        if (!snapshot.TryGetValue("tiles", out var value) || value is not IEnumerable tiles)
+            yield break;
+
+        foreach (var item in tiles)
+        {
+            if (item is IDictionary<string, object?> tile)
+                yield return tile;
         }
     }
 
@@ -620,8 +781,7 @@ public sealed class RdisplayService : IDisposable
             ["bin_label"] = tile.BinNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["next_serial"] = nextSerial,
             ["tickets_remaining"] = tile.TicketsRemaining,
-            ["price_cents"] = tile.PriceCents,
-            ["is_sold_out"] = tile.IsSoldOut
+            ["price_cents"] = tile.PriceCents
         };
     }
 

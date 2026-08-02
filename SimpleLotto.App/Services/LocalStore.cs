@@ -527,6 +527,92 @@ public sealed class LocalStore
             auditRecords);
     }
 
+    public StoredBundleReconciliationResult ReconcileBundleToAvailableTicket(
+        DateTime occurredAtUtc,
+        long intervalId,
+        string actorId,
+        string actorName,
+        StoredImportLine currentBundle,
+        StoredImportLine correctedBundle,
+        StoredClosingReverseCorrection correction)
+    {
+        if (intervalId <= 0 ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(actorName))
+        {
+            throw new InvalidOperationException("Inventory ticket correction requires an open interval and actor identity.");
+        }
+
+        if (correctedBundle.IsSoldOut ||
+            !string.Equals(currentBundle.GameId.Trim(), correctedBundle.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.BundleId.Trim(), correctedBundle.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Bin.Trim(), correctedBundle.Bin.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.GameId.Trim(), correction.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.BundleId.Trim(), correction.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Bin.Trim(), correction.Bin.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Ticket.Trim(), correction.StoredCurrentTicket.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(correctedBundle.Ticket.Trim(), correction.ScannedTicket.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Inventory ticket correction state does not match the active physical bundle.");
+        }
+
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        using (var intervalCheck = conn.CreateCommand())
+        {
+            intervalCheck.Transaction = tx;
+            intervalCheck.CommandText = "SELECT COUNT(*) FROM ledger_intervals WHERE id = $id AND status = 'open'";
+            intervalCheck.Parameters.AddWithValue("$id", intervalId);
+            if (Convert.ToInt32(intervalCheck.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+                throw new InvalidOperationException("The current sales interval is no longer open.");
+        }
+
+        var auditRecords = ApplyReverseCorrections(
+            conn,
+            tx,
+            new ReverseCorrectionContext(
+                occurredAtUtc,
+                intervalId,
+                actorId,
+                actorName,
+                "inventory",
+                "Inventory current ticket corrected",
+                "Inventory sale range reversed",
+                "Inventory current-ticket edit",
+                "closing_reverse"),
+            new[] { correction });
+
+        using (var importCmd = conn.CreateCommand())
+        {
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                UPDATE imports
+                SET ticket = $corrected_ticket,
+                    is_sold_out = 0
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND trim(bin) = trim($bin) COLLATE NOCASE
+                  AND trim(ticket) = trim($current_ticket) COLLATE NOCASE
+                  AND is_sold_out = $is_sold_out
+                """;
+            importCmd.Parameters.AddWithValue("$corrected_ticket", correctedBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$game_id", currentBundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", currentBundle.BundleId);
+            importCmd.Parameters.AddWithValue("$bin", currentBundle.Bin);
+            importCmd.Parameters.AddWithValue("$current_ticket", currentBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$is_sold_out", currentBundle.IsSoldOut ? 1 : 0);
+            if (importCmd.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("The bundle placement changed before its current ticket could be saved.");
+        }
+
+        tx.Commit();
+        return new StoredBundleReconciliationResult(
+            QuerySales(conn),
+            QueryVoidedSaleKeys(conn),
+            QueryVoidedSaleIds(conn),
+            auditRecords);
+    }
+
     public CompleteClosingResult CompleteClosing(
         DateTime closedAtUtc,
         StoredClosingRecord closingRecord,
@@ -888,6 +974,9 @@ public sealed class LocalStore
         using (var guardCmd = conn.CreateCommand())
         {
             guardCmd.Transaction = tx;
+            // The existing transaction-scoped reconciliation guard is the
+            // only path allowed to release immutable ticket claims. The
+            // surrounding void row and bundle update commit atomically.
             guardCmd.CommandText = "INSERT INTO ledger_mutation_guard (id, purpose) VALUES (1, 'closing_reverse')";
             guardCmd.ExecuteNonQuery();
         }
@@ -1459,21 +1548,71 @@ public sealed class LocalStore
         tx.Commit();
     }
 
-    public StoredSaleLine InsertVoid(StoredSaleLine original, StoredSaleLine correction, string saleKey)
+    public StoredSaleLine InsertVoidAndRestoreBundle(
+        StoredSaleLine original,
+        StoredSaleLine correction,
+        string saleKey,
+        StoredImportLine currentBundle,
+        StoredImportLine restoredBundle)
     {
         if (original.Id <= 0)
             throw new InvalidOperationException("The original sale has no persistent ledger ID.");
+        if (!string.Equals(original.GameId, currentBundle.GameId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(original.BundleId, currentBundle.BundleId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.GameId, restoredBundle.GameId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.BundleId, restoredBundle.BundleId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentBundle.Bin, restoredBundle.Bin, StringComparison.OrdinalIgnoreCase) ||
+            restoredBundle.IsSoldOut)
+        {
+            throw new InvalidOperationException("The sale and restored bundle state do not identify the same active bundle.");
+        }
 
         using var conn = Open();
         using var tx = conn.BeginTransaction();
 
-        using (var originalCmd = conn.CreateCommand())
+        var storedOriginal = QuerySaleById(conn, tx, original.Id);
+        if (storedOriginal is null || storedOriginal.Quantity <= 0 || storedOriginal.AmountCents <= 0)
+            throw new InvalidOperationException("The original sale was not found or is not voidable.");
+        if (!string.Equals(storedOriginal.GameId, currentBundle.GameId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(storedOriginal.BundleId, currentBundle.BundleId, StringComparison.OrdinalIgnoreCase))
         {
-            originalCmd.Transaction = tx;
-            originalCmd.CommandText = "SELECT COUNT(*) FROM sales WHERE id = $id AND quantity > 0 AND amount_cents > 0";
-            originalCmd.Parameters.AddWithValue("$id", original.Id);
-            if (Convert.ToInt32(originalCmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
-                throw new InvalidOperationException("The original sale was not found or is not voidable.");
+            throw new InvalidOperationException("The original sale belongs to a different physical bundle.");
+        }
+
+        var claimedSerials = QueryClaimedSerialsForSale(conn, tx, storedOriginal.Id);
+        if (claimedSerials.Count != storedOriginal.Quantity ||
+            claimedSerials.Count == 0 ||
+            claimedSerials[^1] - claimedSerials[0] + 1 != claimedSerials.Count)
+        {
+            throw new InvalidOperationException("The sale ticket claims are incomplete and cannot be restored safely.");
+        }
+
+        using (var laterClaimCmd = conn.CreateCommand())
+        {
+            laterClaimCmd.Transaction = tx;
+            laterClaimCmd.CommandText = """
+                SELECT COUNT(*)
+                FROM sale_ticket_claims
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND ticket_serial > $last_ticket
+                """;
+            laterClaimCmd.Parameters.AddWithValue("$game_id", currentBundle.GameId);
+            laterClaimCmd.Parameters.AddWithValue("$bundle_id", currentBundle.BundleId);
+            laterClaimCmd.Parameters.AddWithValue("$last_ticket", claimedSerials[^1]);
+            if (Convert.ToInt32(laterClaimCmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                throw new InvalidOperationException("Only the latest sale for a bundle can restore its ticket position.");
+        }
+
+        var currentSerials = ParseSaleTicketSerials(currentBundle.Ticket);
+        var restoredSerials = ParseSaleTicketSerials(restoredBundle.Ticket);
+        var expectedCurrentSerial = currentBundle.IsSoldOut
+            ? claimedSerials[^1]
+            : checked(claimedSerials[^1] + 1);
+        if (currentSerials.Count != 1 || currentSerials[0] != expectedCurrentSerial ||
+            restoredSerials.Count != 1 || restoredSerials[0] != claimedSerials[0])
+        {
+            throw new InvalidOperationException("The bundle ticket position changed after this sale and cannot be restored by a simple void.");
         }
 
         var insertedCorrection = InsertSaleRow(conn, tx, correction with { CorrectsSaleId = original.Id });
@@ -1494,6 +1633,50 @@ public sealed class LocalStore
             voidCmd.Parameters.AddWithValue("$actor_id", insertedCorrection.ActorId);
             if (voidCmd.ExecuteNonQuery() == 0)
                 throw new InvalidOperationException("This sale has already been voided.");
+        }
+
+        using (var guardCmd = conn.CreateCommand())
+        {
+            guardCmd.Transaction = tx;
+            guardCmd.CommandText = "INSERT INTO ledger_mutation_guard (id, purpose) VALUES (1, 'closing_reverse')";
+            guardCmd.ExecuteNonQuery();
+        }
+
+        DeleteTicketClaims(
+            conn,
+            tx,
+            currentBundle.GameId,
+            currentBundle.BundleId,
+            claimedSerials.ToHashSet());
+
+        using (var importCmd = conn.CreateCommand())
+        {
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                UPDATE imports
+                SET ticket = $restored_ticket,
+                    is_sold_out = 0
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND trim(bin) = trim($bin) COLLATE NOCASE
+                  AND ticket = $current_ticket
+                  AND is_sold_out = $current_is_sold_out
+                """;
+            importCmd.Parameters.AddWithValue("$restored_ticket", restoredBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$game_id", currentBundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", currentBundle.BundleId);
+            importCmd.Parameters.AddWithValue("$bin", currentBundle.Bin);
+            importCmd.Parameters.AddWithValue("$current_ticket", currentBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$current_is_sold_out", currentBundle.IsSoldOut ? 1 : 0);
+            if (importCmd.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("The active bundle changed before the void could restore it.");
+        }
+
+        using (var clearGuardCmd = conn.CreateCommand())
+        {
+            clearGuardCmd.Transaction = tx;
+            clearGuardCmd.CommandText = "DELETE FROM ledger_mutation_guard WHERE id = 1";
+            clearGuardCmd.ExecuteNonQuery();
         }
 
         tx.Commit();

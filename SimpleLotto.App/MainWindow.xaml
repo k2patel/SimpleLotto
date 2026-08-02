@@ -914,7 +914,7 @@
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="100"/>
                                                         <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="260"/>
                                                         <ColumnDefinition Width="130"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Text="Placement" Style="{StaticResource SlCaptionTextStyle}"/>
@@ -940,7 +940,7 @@
                                                                 <Grid.ColumnDefinitions>
                                                                     <ColumnDefinition Width="100"/>
                                                                     <ColumnDefinition Width="*"/>
-                                                                    <ColumnDefinition Width="110"/>
+                                                                    <ColumnDefinition Width="260"/>
                                                                     <ColumnDefinition Width="130"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <TextBlock Text="{Binding Source}"
@@ -952,9 +952,52 @@
                                                                     <TextBlock Text="{Binding BundleText}"
                                                                                Style="{StaticResource SlCaptionTextStyle}"/>
                                                                 </StackPanel>
-                                                                <TextBlock Grid.Column="2"
-                                                                           Text="{Binding Ticket}"
-                                                                           Foreground="{ThemeResource SlTextBrush}"/>
+                                                                <Grid Grid.Column="2"
+                                                                      RowSpacing="4">
+                                                                    <Grid.RowDefinitions>
+                                                                        <RowDefinition Height="Auto"/>
+                                                                        <RowDefinition Height="Auto"/>
+                                                                    </Grid.RowDefinitions>
+                                                                    <Button Content="{Binding Ticket}"
+                                                                            Padding="0"
+                                                                            HorizontalAlignment="Left"
+                                                                            VerticalAlignment="Center"
+                                                                            Background="Transparent"
+                                                                            BorderThickness="0"
+                                                                            Foreground="{ThemeResource SlTextBrush}"
+                                                                            Visibility="{Binding DisplayVisibility}"
+                                                                            AutomationProperties.AutomationId="{Binding EditAutomationId}"
+                                                                            AutomationProperties.Name="{Binding EditAutomationName}"
+                                                                            ToolTipService.ToolTip="Edit the current available ticket"
+                                                                            Click="InventoryTicketEditButton_Click"/>
+                                                                    <StackPanel Orientation="Horizontal"
+                                                                                Spacing="6"
+                                                                                Visibility="{Binding EditVisibility}">
+                                                                        <TextBox Width="72"
+                                                                                 MaxLength="{Binding TicketInputMaxLength}"
+                                                                                 InputScope="Number"
+                                                                                 Text="{Binding EditTicket, Mode=TwoWay}"
+                                                                                 AutomationProperties.AutomationId="{Binding InputAutomationId}"
+                                                                                 AutomationProperties.Name="{Binding InputAutomationName}"
+                                                                                 KeyDown="InventoryTicketTextBox_KeyDown"/>
+                                                                        <Button Content="Save"
+                                                                                MinWidth="56"
+                                                                                AutomationProperties.AutomationId="{Binding SaveAutomationId}"
+                                                                                AutomationProperties.Name="{Binding SaveAutomationName}"
+                                                                                Click="InventoryTicketSaveButton_Click"/>
+                                                                        <Button Content="Cancel"
+                                                                                MinWidth="64"
+                                                                                AutomationProperties.AutomationId="{Binding CancelAutomationId}"
+                                                                                AutomationProperties.Name="{Binding CancelAutomationName}"
+                                                                                Click="InventoryTicketCancelButton_Click"/>
+                                                                    </StackPanel>
+                                                                    <TextBlock Grid.Row="1"
+                                                                               Text="{Binding ErrorText}"
+                                                                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                                                               TextWrapping="Wrap"
+                                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                                               Visibility="{Binding ErrorVisibility}"/>
+                                                                </Grid>
                                                                 <TextBlock Grid.Column="3"
                                                                            Text="{Binding Status}"
                                                                            Style="{StaticResource SlCaptionTextStyle}"/>

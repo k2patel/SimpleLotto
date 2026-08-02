@@ -32,7 +32,8 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Verify the one global first-ticket setting controls every game and bundle, persists across restart, and is not shown as a per-game or per-bundle field.
    - Upgrade a database without the global setting: unanimous/majority legacy `001` games initialize the global control to `001`; no configured games initialize it to `000`.
    - Verify premature sold-out recovery for every denomination after automatic bundle-total or global-first-ticket correction: affected grey bins reopen at the first unclaimed ticket (using the ticket-claim ledger after restart), while genuinely complete bundles at the calculated last ticket remain sold out. Later bundles with the same configured Game ID reuse its saved ticket price without prompting again.
-   - Verify ledger integrity: scan ticket `003` twice and confirm only the first scan records revenue; repeat in a closing backfill. Void a sale twice and confirm the second attempt is rejected, including after restarting the app.
+   - Verify ledger integrity: scan ticket `003` twice and confirm only the first scan records revenue; repeat in a closing backfill. Void the latest sale and confirm its claims are released, its first ticket becomes available again, a sold-out bundle reopens, and Rdisplay updates. Void the same sale twice and confirm the second attempt is rejected, including after restarting the app. Attempt to void an older sale with newer claimed tickets and confirm it is rejected without changing the ledger, bundle cursor, or display.
+   - In Inventory > Open / Active, click current ticket `055`. Enter `010` and confirm Save reverses/restores `010-054`, leaves `010` available, updates sales/claims/totals, and immediately sends the corrected tile to Rdisplay. Starting again at `055`, enter `060` and confirm one `055-059` inventory gap-fill sale is recorded while `060` remains available. Confirm Cancel and an unchanged value make no ledger change, out-of-range or malformed input stays in edit mode with an error, and editing a sold-out final ticket reopens the bundle by restoring through that configured final ticket.
    - Verify configuration integrity: make SQLite game persistence fail and confirm activation/receiving does not continue; use missing, non-divisible, or malformed price/range configuration and confirm activation and closing are blocked without a one-ticket or `$0` sale.
    - Scanner input, rejected scans, ticket sales, bundle activations, opening placements, and bin placements appear in Audit.
 7. Verify license workflow:
@@ -141,7 +142,7 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Move the Windows clock backward, record a sale, restart the app, and confirm the sale remains in the current interval because membership uses `interval_id`, not `sold_at_utc`.
    - Close the interval and confirm closing history, generated gap-fill sales, report outbox, closer actor, closed interval, and newly opened interval commit together. Confirm an old interval ID cannot accept a later sale.
    - Confirm every new sale has a stable sale ID, actor ID/name, interval ID, and source; every activation has actor and interval identity; and report CSV rows preserve these IDs.
-   - Void one sale and confirm the negative correction references the original sale ID, a second void is rejected, and the original physical ticket claims remain attached to the original sale.
+   - Void the latest tail sale and confirm the negative correction references the original sale ID, its exact physical ticket claims are released transactionally, the bundle cursor returns to the sale's first ticket, and a second void is rejected. Confirm an out-of-order void cannot release claims or move the cursor across a newer sale.
    - Attempt direct update/delete of a sale, ticket claim, activation event, closing-history row, and closed interval and confirm SQLite rejects it.
    - Seed duplicate historical ticket claims, malformed ranges, missing Bundle IDs, summary mismatches, and ambiguous legacy voids. Confirm no financial rows are deleted or rewritten, unresolved data is quarantined in `legacy_unresolved`, structured conflicts are stored, and matching Audit entries are visible after login.
 21. Verify manual bundle movement from Bins:
@@ -169,6 +170,11 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Send a test email and confirm Gmail SMTP acceptance is shown and audited. Also confirm the Manager guidance explains 2-Step Verification/app-password setup and the Clerk guidance says email failure never invalidates Closing.
    - Force DNS, authentication, missing-attachment, and SMTP rejection failures. Confirm each failure is visible, logged, audited without credentials, saved as `email_status.txt`, and shown in Closing history while the completed shift and generated reports remain valid.
    - Complete a Closing with a staged range reversal and confirm `closing_audit.csv` includes the immutable range-level reconciliation record. Confirm the report's period end matches the successful finalization timestamp.
+25. Verify SimpleLotto's Rdisplay sender against the existing WindowsPOS wire contract:
+   - Sell a non-final ticket and confirm only a targeted `serial_update` is sent to the display that owns that bin; no snapshot-wide `image_ready` events should be emitted and existing artwork must remain visible.
+   - Sell the final valid ticket and confirm the bundle remains assigned and grey in SimpleLotto Bins while its Rdisplay tile is removed by a snapshot, leaving the display box empty.
+   - Repeatedly connect/disconnect or split screens and confirm topology changes send snapshots without invalidating cached images or blacking an entire row.
+   - Select a registered display and click `Refresh Screen`; confirm the existing Rdisplay snapshot/image refresh mechanism redraws the screen without restarting Rdisplay.
 
 ## Missing Follow-Up Work
 

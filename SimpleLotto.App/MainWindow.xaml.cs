@@ -3398,6 +3398,26 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var currentBundle = _imports.FirstOrDefault(bundle =>
+            string.Equals(bundle.GameId, sale.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(bundle.BundleId, sale.BundleId, StringComparison.OrdinalIgnoreCase));
+        if (currentBundle is null ||
+            !TryParseSaleTicketRange(sale.Ticket, out var firstSoldTicket, out _) ||
+            !TryParseTicketSerial(currentBundle.Ticket, out _))
+        {
+            StatusText.Text = "This sale cannot restore an active bundle ticket position.";
+            return;
+        }
+
+        var restoredTicket = FormatTicketSerial(
+            firstSoldTicket,
+            Math.Max(TicketSerialWidth(currentBundle.Ticket), TicketSerialWidth(sale.Ticket)));
+        var restoredBundle = currentBundle with
+        {
+            Ticket = restoredTicket,
+            IsSoldOut = false
+        };
+
         var correction = new SaleLine(
             DateTime.Now,
             sale.GameId,
@@ -3407,16 +3427,20 @@ public sealed partial class MainWindow : Window
             -sale.Amount,
             "undo",
             sale.BundleId);
-        var persistedCorrection = SaveVoid(sale, correction, saleKey);
+        var persistedCorrection = SaveVoid(sale, correction, saleKey, currentBundle, restoredBundle);
         if (persistedCorrection is null)
             return;
 
         _sales.Insert(0, persistedCorrection);
+        ReplaceImportLine(restoredBundle);
 
-        TryRecordAudit("correction", "Sale voided", $"Game {sale.GameId}, ticket {sale.Ticket}, bin {sale.Bin}");
-        StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}.";
+        TryRecordAudit(
+            "correction",
+            "Sale voided and bundle restored",
+            $"Game {sale.GameId}, bundle {sale.BundleId}, sold ticket {sale.Ticket}, current bin {restoredBundle.Bin}, restored available ticket {restoredTicket}, was sold out {currentBundle.IsSoldOut}");
+        StatusText.Text = $"Voided game {sale.GameId} sale for {sale.AmountText}; ticket {restoredTicket} is available again.";
         RefreshTotals();
-        RefreshBinCards();
+        RefreshOperationalPages();
     }
 
     private async void CloseShiftButton_Click(object sender, RoutedEventArgs e)
@@ -3477,11 +3501,21 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private SaleLine? SaveVoid(SaleLine original, SaleLine correction, string saleKey)
+    private SaleLine? SaveVoid(
+        SaleLine original,
+        SaleLine correction,
+        string saleKey,
+        ImportLine currentBundle,
+        ImportLine restoredBundle)
     {
         try
         {
-            var inserted = _store.InsertVoid(ToStoredSaleLine(original), ToStoredSaleLine(correction), saleKey);
+            var inserted = _store.InsertVoidAndRestoreBundle(
+                ToStoredSaleLine(original),
+                ToStoredSaleLine(correction),
+                saleKey,
+                ToStoredImportLine(currentBundle),
+                ToStoredImportLine(restoredBundle));
             var persisted = FromStoredSaleLine(inserted);
             _allSales.Insert(0, persisted);
             _voidedSaleKeys.Add(saleKey);
@@ -3623,6 +3657,15 @@ public sealed partial class MainWindow : Window
             line.CorrectsSaleId,
             line.MigrationState);
 
+    private static StoredImportLine ToStoredImportLine(ImportLine line) =>
+        new(
+            line.GameId,
+            line.BundleId,
+            line.Ticket,
+            line.Bin,
+            line.Source,
+            line.IsSoldOut);
+
     private static SaleLine FromStoredSaleLine(StoredSaleLine line) =>
         new(
             line.SoldAtUtc.ToLocalTime(),
@@ -3691,6 +3734,7 @@ public sealed partial class MainWindow : Window
             "undo" => "Correction",
             "closing_gap_fill_sold" => "Closing gap-fill",
             "activation_gap_fill" => "Activation gap-fill",
+            "inventory_gap_fill" => "Inventory gap-fill",
             _ when string.IsNullOrWhiteSpace(source) => "Sale",
             _ => source
         };
@@ -3868,7 +3912,8 @@ public sealed partial class MainWindow : Window
                 line.BundleId,
                 line.Ticket,
                 line.Bin,
-                $"Active in bin {line.Bin}"));
+                line.IsSoldOut ? $"Sold out in bin {line.Bin}" : $"Active in bin {line.Bin}",
+                line.IsSoldOut));
 
         ApplyReceivingPage();
         ApplyInventoryPage();
@@ -4168,6 +4213,266 @@ public sealed partial class MainWindow : Window
     private void OpenBundleSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyInventoryPage(resetPage: true);
+    }
+
+    private void InventoryTicketEditButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: InventoryRecord record })
+            return;
+
+        foreach (var item in _inventoryRecords)
+        {
+            if (!ReferenceEquals(item, record))
+                item.CancelEditing();
+        }
+
+        record.BeginEditing();
+        InventoryListView.SelectedItem = record;
+        _ = DispatcherQueue.TryEnqueue(() =>
+        {
+            if (InventoryListView.ContainerFromItem(record) is not ListViewItem container)
+                return;
+
+            var input = FindVisualDescendant<TextBox>(container);
+            input?.Focus(FocusState.Programmatic);
+            input?.SelectAll();
+        });
+    }
+
+    private void InventoryTicketCancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: InventoryRecord record })
+            record.CancelEditing();
+    }
+
+    private void InventoryTicketSaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: InventoryRecord record })
+            return;
+
+        if (InventoryListView.ContainerFromItem(record) is ListViewItem container &&
+            FindVisualDescendant<TextBox>(container) is { } input)
+        {
+            record.EditTicket = input.Text;
+        }
+
+        SaveInventoryCurrentTicket(record);
+    }
+
+    private void InventoryTicketTextBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: InventoryRecord record } input)
+            return;
+
+        if (e.Key == VirtualKey.Escape)
+        {
+            record.CancelEditing();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key != VirtualKey.Enter)
+            return;
+
+        record.EditTicket = input.Text;
+        SaveInventoryCurrentTicket(record);
+        e.Handled = true;
+    }
+
+    private void SaveInventoryCurrentTicket(InventoryRecord record)
+    {
+        if (!EnsureLicenseAllowsOperation("editing the current inventory ticket"))
+            return;
+
+        var currentBundle = _imports.FirstOrDefault(item =>
+            string.Equals(item.GameId, record.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.BundleId, record.BundleId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.Bin, record.Bin, StringComparison.OrdinalIgnoreCase));
+        if (currentBundle is null)
+        {
+            record.SetError("This bundle is no longer active.");
+            StatusText.Text = "The selected bundle is no longer active. Refresh Inventory and try again.";
+            return;
+        }
+
+        var hasCompleteGameSetup = HasCompleteGameSetup(currentBundle.GameId);
+        var hasTicketRange = TryGetBundleTicketRange(
+            currentBundle.GameId,
+            out var firstTicket,
+            out var lastTicket,
+            out var rangeError);
+        if (!hasCompleteGameSetup || !hasTicketRange)
+        {
+            var message = string.IsNullOrWhiteSpace(rangeError)
+                ? $"Game {currentBundle.GameId} needs a valid ticket price before its current ticket can be changed."
+                : rangeError;
+            record.SetError(message);
+            StatusText.Text = message;
+            return;
+        }
+
+        var enteredTicket = record.EditTicket.Trim();
+        if (!TryParseTicketSerial(enteredTicket, out var desiredSerial) ||
+            desiredSerial < firstTicket ||
+            desiredSerial > lastTicket)
+        {
+            var rangeWidth = Math.Max(
+                TicketSerialWidth(currentBundle.Ticket),
+                Math.Max(TicketSerialWidth(firstTicket.ToString(CultureInfo.InvariantCulture)), TicketSerialWidth(lastTicket.ToString(CultureInfo.InvariantCulture))));
+            var message = $"Enter the ticket currently available from {FormatTicketSerial(firstTicket, rangeWidth)} through {FormatTicketSerial(lastTicket, rangeWidth)}.";
+            record.SetError(message);
+            StatusText.Text = message;
+            return;
+        }
+
+        if (!TryParseTicketSerial(currentBundle.Ticket, out var currentSerial) ||
+            currentSerial < firstTicket ||
+            currentSerial > lastTicket)
+        {
+            var message = $"Stored ticket {currentBundle.Ticket} is outside the configured bundle range. Verify Game Information.";
+            record.SetError(message);
+            StatusText.Text = message;
+            return;
+        }
+
+        var width = Math.Max(
+            TicketSerialWidth(currentBundle.Ticket),
+            Math.Max(TicketSerialWidth(FormatTicketSerial(firstTicket, 1)), TicketSerialWidth(FormatTicketSerial(lastTicket, 1))));
+        var desiredTicket = FormatTicketSerial(desiredSerial, width);
+        if (!currentBundle.IsSoldOut && desiredSerial == currentSerial)
+        {
+            record.CancelEditing();
+            StatusText.Text = $"Ticket {desiredTicket} is already the current available ticket for bundle {currentBundle.BundleId}.";
+            return;
+        }
+
+        if (!currentBundle.IsSoldOut && desiredSerial > currentSerial)
+        {
+            AdvanceInventoryCurrentTicket(record, currentBundle, desiredSerial, desiredTicket, width);
+            return;
+        }
+
+        RestoreInventoryCurrentTicket(record, currentBundle, currentSerial, desiredSerial, desiredTicket, lastTicket, width);
+    }
+
+    private void AdvanceInventoryCurrentTicket(
+        InventoryRecord record,
+        ImportLine currentBundle,
+        int desiredSerial,
+        string desiredTicket,
+        int width)
+    {
+        var lastSoldTicket = FormatTicketSerial(checked(desiredSerial - 1), width);
+        if (!TryBuildTicketBackfillSale(
+                DateTime.Now,
+                currentBundle,
+                lastSoldTicket,
+                "inventory_gap_fill",
+                out var backfill,
+                out var error) ||
+            backfill.IsBundleComplete ||
+            !string.Equals(backfill.NextTicket, desiredTicket, StringComparison.Ordinal))
+        {
+            var message = string.IsNullOrWhiteSpace(error)
+                ? "The requested available ticket could not be converted into a valid gap-fill sale."
+                : error;
+            record.SetError(message);
+            StatusText.Text = message;
+            return;
+        }
+
+        var line = backfill.Sale;
+        var updatedBundle = currentBundle with
+        {
+            Ticket = desiredTicket,
+            IsSoldOut = false
+        };
+        _sales.Insert(0, line);
+        var persistedLine = SaveSaleLineAndUpdateImportTicket(line, updatedBundle);
+        if (persistedLine is null)
+        {
+            _sales.Remove(line);
+            record.SetError("The gap-fill sale could not be saved. No inventory number was changed.");
+            return;
+        }
+
+        ReplaceImportLine(updatedBundle);
+        CaptureOperationalResultAsClosingEvidence(
+            new ImportTicket(currentBundle.GameId, currentBundle.BundleId, desiredTicket, "Inventory current-ticket edit"),
+            updatedBundle);
+        SalesListView.SelectedItem = persistedLine;
+        TryRecordAudit(
+            "inventory",
+            "Inventory current ticket advanced",
+            $"Game {currentBundle.GameId}, bundle {currentBundle.BundleId}, bin {currentBundle.Bin}, prior available {currentBundle.Ticket}, sold {persistedLine.Ticket}, quantity {persistedLine.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {persistedLine.AmountText}, current available {desiredTicket}");
+        StatusText.Text = $"Bundle {currentBundle.BundleId} advanced to ticket {desiredTicket}; gap-fill sale {persistedLine.Ticket} was recorded.";
+        RefreshTotals();
+        RefreshOperationalPages();
+    }
+
+    private void RestoreInventoryCurrentTicket(
+        InventoryRecord record,
+        ImportLine currentBundle,
+        int currentSerial,
+        int desiredSerial,
+        string desiredTicket,
+        int lastTicket,
+        int width)
+    {
+        try
+        {
+            var restoredThroughSerial = currentBundle.IsSoldOut
+                ? lastTicket
+                : checked(currentSerial - 1);
+            var claimCount = _store.CountTicketClaims(
+                currentBundle.GameId,
+                currentBundle.BundleId,
+                desiredSerial,
+                restoredThroughSerial);
+            var correctedBundle = currentBundle with
+            {
+                Ticket = desiredTicket,
+                IsSoldOut = false
+            };
+            var result = _store.ReconcileBundleToAvailableTicket(
+                DateTime.UtcNow,
+                _openIntervalId,
+                _activeActorId,
+                _activeUserName,
+                ToStoredImportLine(currentBundle),
+                ToStoredImportLine(correctedBundle),
+                new StoredClosingReverseCorrection(
+                    currentBundle.GameId,
+                    currentBundle.BundleId,
+                    currentBundle.Bin,
+                    desiredSerial,
+                    restoredThroughSerial,
+                    currentBundle.Ticket,
+                    desiredTicket,
+                    claimCount == 0));
+
+            ReplaceImportLine(correctedBundle);
+            ApplyStoredSales(result.Sales, result.VoidedSaleKeys, result.VoidedSaleIds);
+            foreach (var auditRecord in result.AuditRecords)
+                AddAuditLogRowToUi(auditRecord);
+            CaptureOperationalResultAsClosingEvidence(
+                new ImportTicket(currentBundle.GameId, currentBundle.BundleId, desiredTicket, "Inventory current-ticket edit"),
+                correctedBundle);
+
+            var restoredRange = $"{FormatTicketSerial(desiredSerial, width)}-{FormatTicketSerial(restoredThroughSerial, width)}";
+            StatusText.Text = claimCount == 0
+                ? $"Bundle {currentBundle.BundleId} now has ticket {desiredTicket} available; unclaimed range {restoredRange} was reconciled."
+                : $"Bundle {currentBundle.BundleId} now has ticket {desiredTicket} available; sold range {restoredRange} was reversed.";
+            RefreshTotals();
+            RefreshOperationalPages();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Inventory current-ticket correction failed.", ex);
+            var message = $"Unable to change the current ticket: {ex.Message}";
+            record.SetError(message);
+            StatusText.Text = message;
+        }
     }
 
     private void ReceivingListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -7723,7 +8028,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Finalize shift closing?",
-            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {unscannedSoldOutBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(unscannedSoldOutBundles.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. Sold-out bundles remain assigned and grey in their bins/Rdisplay.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {unscannedSoldOutBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(unscannedSoldOutBundles.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. Sold-out bundles remain assigned and grey in Bins, while their Rdisplay tiles become empty.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Finalize Closing",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -9089,7 +9394,13 @@ public sealed partial class MainWindow : Window
                 ImageUri = LocalFileUri(dest),
                 ImageStatus = "Image uploaded"
             };
-            UpsertManualGameRecord(updated);
+            if (!UpsertManualGameRecord(updated))
+            {
+                GameCatalogStatusText.Text = $"Image for game {game.GameId} was copied but its catalog record could not be saved.";
+                return;
+            }
+
+            await _rdisplay.PushImageReadyAsync(game.GameId);
             GameCatalogStatusText.Text = $"Image uploaded for game {game.GameId}.";
         }
         catch (Exception ex)
@@ -9245,11 +9556,19 @@ public sealed partial class MainWindow : Window
         var cached = CachedGameImagePath(game.GameId);
         if (cached is not null)
         {
-            UpsertManualGameRecord(game with
+            if (!UpsertManualGameRecord(game with
             {
                 ImageUri = LocalFileUri(cached),
                 ImageStatus = "Image cached"
-            });
+            }))
+            {
+                if (!quiet)
+                    GameCatalogStatusText.Text = $"Cached image for game {game.GameId} could not be saved to the catalog.";
+                return false;
+            }
+
+            if (!quiet)
+                await _rdisplay.PushImageReadyAsync(game.GameId);
             if (!quiet)
                 GameCatalogStatusText.Text = $"Image already cached for game {game.GameId}.";
             return true;
@@ -9284,12 +9603,19 @@ public sealed partial class MainWindow : Window
                 DeleteCachedGameImages(game.GameId);
                 await File.WriteAllBytesAsync(path, bytes);
 
-                UpsertManualGameRecord(game with
+                if (!UpsertManualGameRecord(game with
                 {
                     Source = "Official",
                     ImageUri = LocalFileUri(path),
                     ImageStatus = "Image fetched"
-                });
+                }))
+                {
+                    if (!quiet)
+                        GameCatalogStatusText.Text = $"Image was fetched for game {game.GameId}, but its catalog record could not be saved.";
+                    return false;
+                }
+
+                await _rdisplay.PushImageReadyAsync(game.GameId);
                 if (!quiet)
                     GameCatalogStatusText.Text = $"Image fetched for game {game.GameId}.";
                 return true;
@@ -10545,16 +10871,108 @@ public sealed partial class MainWindow : Window
             new(line.GameId, gameName, line.BundleId, line.Ticket, line.Bin, isCurrent, line.IsSoldOut);
     }
 
-    private sealed record InventoryRecord(
-        string Source,
-        string GameId,
-        string BundleId,
-        string Ticket,
-        string Bin,
-        string Status)
+    private sealed class InventoryRecord : INotifyPropertyChanged
     {
+        private bool _isEditing;
+        private string _editTicket;
+        private string _errorText = string.Empty;
+
+        public InventoryRecord(
+            string source,
+            string gameId,
+            string bundleId,
+            string ticket,
+            string bin,
+            string status,
+            bool isSoldOut = false)
+        {
+            Source = source;
+            GameId = gameId;
+            BundleId = bundleId;
+            Ticket = ticket;
+            Bin = bin;
+            Status = status;
+            IsSoldOut = isSoldOut;
+            _editTicket = ticket;
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public string Source { get; }
+        public string GameId { get; }
+        public string BundleId { get; }
+        public string Ticket { get; }
+        public string Bin { get; }
+        public string Status { get; }
+        public bool IsSoldOut { get; }
         public string GameText => $"Game {GameId}";
         public string BundleText => $"Bundle {BundleId}";
+        public int TicketInputMaxLength => Math.Clamp(Math.Max(3, Ticket.Length), 3, 10);
+        public Visibility DisplayVisibility => _isEditing ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility EditVisibility => _isEditing ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility ErrorVisibility => string.IsNullOrWhiteSpace(_errorText) ? Visibility.Collapsed : Visibility.Visible;
+        public string ErrorText => _errorText;
+        public string EditAutomationId => $"InventoryTicketEdit_{GameId}_{BundleId}_{Bin}";
+        public string InputAutomationId => $"InventoryTicketInput_{GameId}_{BundleId}_{Bin}";
+        public string SaveAutomationId => $"InventoryTicketSave_{GameId}_{BundleId}_{Bin}";
+        public string CancelAutomationId => $"InventoryTicketCancel_{GameId}_{BundleId}_{Bin}";
+        public string EditAutomationName => $"Edit current ticket {Ticket} for game {GameId}, bundle {BundleId}, bin {Bin}";
+        public string InputAutomationName => $"Current available ticket for game {GameId}, bundle {BundleId}, bin {Bin}";
+        public string SaveAutomationName => $"Save current available ticket for bundle {BundleId}";
+        public string CancelAutomationName => $"Cancel current available ticket edit for bundle {BundleId}";
+
+        public string EditTicket
+        {
+            get => _editTicket;
+            set
+            {
+                if (string.Equals(_editTicket, value, StringComparison.Ordinal))
+                    return;
+
+                _editTicket = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EditTicket)));
+                SetError(string.Empty);
+            }
+        }
+
+        public void BeginEditing()
+        {
+            _editTicket = Ticket;
+            _errorText = string.Empty;
+            _isEditing = true;
+            NotifyEditingStateChanged();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EditTicket)));
+        }
+
+        public void CancelEditing()
+        {
+            if (!_isEditing && string.IsNullOrWhiteSpace(_errorText))
+                return;
+
+            _editTicket = Ticket;
+            _errorText = string.Empty;
+            _isEditing = false;
+            NotifyEditingStateChanged();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EditTicket)));
+        }
+
+        public void SetError(string message)
+        {
+            if (string.Equals(_errorText, message, StringComparison.Ordinal))
+                return;
+
+            _errorText = message;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ErrorText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ErrorVisibility)));
+        }
+
+        private void NotifyEditingStateChanged()
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EditVisibility)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ErrorText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ErrorVisibility)));
+        }
     }
 
     private sealed record ReceivedBundleLine(
