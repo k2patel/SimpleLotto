@@ -9384,9 +9384,9 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            Directory.CreateDirectory(GameImageCacheDir);
-            var dest = GameImageCachePath(game.GameId, Path.GetExtension(file.Path));
-            DeleteCachedGameImages(game.GameId);
+            Directory.CreateDirectory(GameImageCacheDir(_storeState));
+            var dest = GameImageCachePath(_storeState, game.GameId, Path.GetExtension(file.Path));
+            DeleteCachedGameImages(_storeState, game.GameId);
             File.Copy(file.Path, dest, overwrite: true);
             var updated = game with
             {
@@ -9434,7 +9434,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var cachedPath = CachedGameImagePath(game.GameId) ?? CachedFileImagePath(game.ImageUri);
+        var cachedPath = CachedGameImagePath(_storeState, game.GameId) ?? CachedFileImagePath(game.ImageUri);
         var hasCachedImage = cachedPath is not null;
         var content = new StackPanel
         {
@@ -9502,7 +9502,7 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            DeleteCachedGameImages(game.GameId);
+            DeleteCachedGameImages(_storeState, game.GameId);
             if (Uri.TryCreate(game.ImageUri, UriKind.Absolute, out var imageUri) &&
                 imageUri.IsFile &&
                 File.Exists(imageUri.LocalPath))
@@ -9551,9 +9551,9 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> FetchAndApplyGameImageAsync(GameCatalogRecord game, bool quiet = false)
     {
-        Directory.CreateDirectory(GameImageCacheDir);
+        Directory.CreateDirectory(GameImageCacheDir(_storeState));
 
-        var cached = CachedGameImagePath(game.GameId);
+        var cached = CachedGameImagePath(_storeState, game.GameId);
         if (cached is not null)
         {
             if (!UpsertManualGameRecord(game with
@@ -9574,7 +9574,7 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
-        var urls = OfficialImageUrls(game.GameId, _storeState).ToList();
+        var urls = CentralAndOfficialImageUrls(game.GameId, _storeState).ToList();
         if (urls.Count == 0)
         {
             if (!quiet)
@@ -9599,8 +9599,8 @@ public sealed partial class MainWindow : Window
                     continue;
 
                 var extension = contentType.Contains("png", StringComparison.OrdinalIgnoreCase) ? ".png" : ".jpg";
-                var path = GameImageCachePath(game.GameId, extension);
-                DeleteCachedGameImages(game.GameId);
+                var path = GameImageCachePath(_storeState, game.GameId, extension);
+                DeleteCachedGameImages(_storeState, game.GameId);
                 await File.WriteAllBytesAsync(path, bytes);
 
                 if (!UpsertManualGameRecord(game with
@@ -9654,7 +9654,7 @@ public sealed partial class MainWindow : Window
 
     private static bool IsCachedGameImage(GameCatalogRecord game)
     {
-        if (CachedGameImagePath(game.GameId) is not null)
+        if (CachedGameImagePath(_storeState, game.GameId) is not null)
             return true;
 
         if (!Uri.TryCreate(game.ImageUri, UriKind.Absolute, out var uri) || !uri.IsFile)
@@ -9683,20 +9683,44 @@ public sealed partial class MainWindow : Window
             yield return $"https://www.palottery.state.pa.us/Games/Scratch-Offs/~/media/Images/Scratch-Offs/{game3}.png";
     }
 
-    private static string GameImageCacheDir => Path.Combine(
+    private static IEnumerable<string> CentralAndOfficialImageUrls(string gameId, string state)
+    {
+        var stateCode = state.Trim().ToUpperInvariant();
+        if (!string.IsNullOrWhiteSpace(stateCode) && !string.IsNullOrWhiteSpace(gameId))
+        {
+            yield return $"https://license.k2patel.in/api/v2/games/{Uri.EscapeDataString(stateCode)}/{Uri.EscapeDataString(gameId.Trim())}/image";
+        }
+        foreach (var url in OfficialImageUrls(gameId, state))
+            yield return url;
+    }
+
+    private static string GameImageCacheRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SimpleLotto",
         "game-images");
 
-    private static string? CachedGameImagePath(string gameId)
+    private static string GameImageCacheDir(string state) => Path.Combine(
+        GameImageCacheRoot,
+        SafeGameImageKey(state.Trim().ToUpperInvariant()));
+
+    private static string? CachedGameImagePath(string state, string gameId)
     {
         var safe = SafeGameImageKey(gameId);
-        var jpg = Path.Combine(GameImageCacheDir, $"{safe}.jpg");
+        var stateDir = GameImageCacheDir(state);
+        var jpg = Path.Combine(stateDir, $"{safe}.jpg");
         if (File.Exists(jpg))
             return jpg;
 
-        var png = Path.Combine(GameImageCacheDir, $"{safe}.png");
-        return File.Exists(png) ? png : null;
+        var png = Path.Combine(stateDir, $"{safe}.png");
+        if (File.Exists(png))
+            return png;
+
+        // Backward compatibility: read the pre-v2 flat cache until refreshed.
+        var legacyJpg = Path.Combine(GameImageCacheRoot, $"{safe}.jpg");
+        if (File.Exists(legacyJpg))
+            return legacyJpg;
+        var legacyPng = Path.Combine(GameImageCacheRoot, $"{safe}.png");
+        return File.Exists(legacyPng) ? legacyPng : null;
     }
 
     private static string? CachedFileImagePath(string imageUri)
@@ -9711,23 +9735,26 @@ public sealed partial class MainWindow : Window
         return uri.LocalPath;
     }
 
-    private static string GameImageCachePath(string gameId, string extension)
+    private static string GameImageCachePath(string state, string gameId, string extension)
     {
         var safe = SafeGameImageKey(gameId);
         var ext = string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase)
             ? ".png"
             : ".jpg";
-        return Path.Combine(GameImageCacheDir, $"{safe}{ext}");
+        return Path.Combine(GameImageCacheDir(state), $"{safe}{ext}");
     }
 
-    private static void DeleteCachedGameImages(string gameId)
+    private static void DeleteCachedGameImages(string state, string gameId)
     {
         var safe = SafeGameImageKey(gameId);
         foreach (var extension in new[] { ".jpg", ".png" })
         {
-            var path = Path.Combine(GameImageCacheDir, $"{safe}{extension}");
-            if (File.Exists(path))
-                File.Delete(path);
+            foreach (var directory in new[] { GameImageCacheDir(state), GameImageCacheRoot })
+            {
+                var path = Path.Combine(directory, $"{safe}{extension}");
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
         }
     }
 

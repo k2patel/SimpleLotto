@@ -170,13 +170,14 @@ public sealed class RdisplayApiHost
 
     private string? ResolveCachedImagePath(string gameId)
     {
-        var cached = CachedGameImagePath(gameId);
-        if (cached is not null)
-            return cached;
-
         try
         {
             var state = _store.Load();
+            state.Settings.TryGetValue("store_state", out var storeState);
+            var cached = CachedGameImagePath(storeState ?? string.Empty, gameId);
+            if (cached is not null)
+                return cached;
+
             var game = state.ManualGames.FirstOrDefault(g =>
                 string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
             if (game is null)
@@ -190,15 +191,23 @@ public sealed class RdisplayApiHost
         }
     }
 
-    private static string? CachedGameImagePath(string gameId)
+    private static string? CachedGameImagePath(string state, string gameId)
     {
         var safe = SafeGameImageKey(gameId);
-        var jpg = Path.Combine(GameImageCacheDir, $"{safe}.jpg");
+        var stateDir = Path.Combine(GameImageCacheRoot, SafeGameImageKey(state.ToUpperInvariant()));
+        var jpg = Path.Combine(stateDir, $"{safe}.jpg");
         if (File.Exists(jpg))
             return jpg;
 
-        var png = Path.Combine(GameImageCacheDir, $"{safe}.png");
-        return File.Exists(png) ? png : null;
+        var png = Path.Combine(stateDir, $"{safe}.png");
+        if (File.Exists(png))
+            return png;
+
+        var legacyJpg = Path.Combine(GameImageCacheRoot, $"{safe}.jpg");
+        if (File.Exists(legacyJpg))
+            return legacyJpg;
+        var legacyPng = Path.Combine(GameImageCacheRoot, $"{safe}.png");
+        return File.Exists(legacyPng) ? legacyPng : null;
     }
 
     private static string? CachedFileImagePath(string imageUri)
@@ -221,7 +230,7 @@ public sealed class RdisplayApiHost
         return chars.Length == 0 ? "unknown" : new string(chars);
     }
 
-    private static string GameImageCacheDir => Path.Combine(
+    private static string GameImageCacheRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SimpleLotto",
         "game-images");

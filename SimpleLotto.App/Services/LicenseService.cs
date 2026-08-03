@@ -21,6 +21,8 @@ namespace SimpleLotto.App.Services;
 public sealed class LicenseService
 {
     private const string DefaultLicenseUrl = "https://license.k2patel.in/api/v1/callHome";
+    private const string ProductId = "simple_lotto";
+    private const int ProtocolVersion = 2;
     private const string LicenseSigningKeyId = "license-ed25519-2026-06";
     private const string DefaultPepper = "lottomachine-v1-replace-in-prod";
     private const int MaxPhoneHomeRetries = 2;
@@ -168,6 +170,16 @@ public sealed class LicenseService
         using var http = new HttpClient();
         try
         {
+            var v2Status = await TryPhoneHomeV2Async(
+                http,
+                state,
+                registrationId,
+                checkedAtUtc,
+                url,
+                cancellationToken);
+            if (v2Status is not null)
+                return v2Status;
+
             for (var attempt = 1; attempt <= MaxPhoneHomeRetries; attempt++)
             {
                 try
@@ -259,6 +271,163 @@ public sealed class LicenseService
         }
 
         return CheckLicense();
+    }
+
+    private async Task<LicenseStatus?> TryPhoneHomeV2Async(
+        HttpClient http,
+        LicenseState state,
+        string registrationId,
+        DateTime checkedAtUtc,
+        string callHomeUrl,
+        CancellationToken cancellationToken)
+    {
+        LicenseDeviceIdentity identity;
+        try
+        {
+            identity = LoadOrCreateDeviceIdentity();
+        }
+        catch (Exception ex)
+        {
+            Trace($"v2 identity unavailable {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+
+        LicenseChallengeResponse? challenge;
+        try
+        {
+            using var challengeResponse = await http.PostAsJsonAsync(
+                VersionedEndpointFor(callHomeUrl, "/api/v2/challenge"),
+                new LicenseChallengeRequest(registrationId, ProductId, identity.InstallationId),
+                LicenseJsonContext.Default.LicenseChallengeRequest,
+                cancellationToken);
+            if (challengeResponse.StatusCode is System.Net.HttpStatusCode.NotFound or
+                System.Net.HttpStatusCode.MethodNotAllowed)
+            {
+                return state.StrictV2Seen ? FailStrictV2(state, checkedAtUtc, "v2 endpoint unavailable") : null;
+            }
+            if (!challengeResponse.IsSuccessStatusCode)
+                return state.StrictV2Seen
+                    ? FailStrictV2(state, checkedAtUtc, $"v2 challenge http {(int)challengeResponse.StatusCode}")
+                    : null;
+            challenge = await challengeResponse.Content.ReadFromJsonAsync(
+                LicenseJsonContext.Default.LicenseChallengeResponse,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace($"v2 challenge failed {ex.GetType().Name}: {ex.Message}");
+            return state.StrictV2Seen ? FailStrictV2(state, checkedAtUtc, ex.Message) : null;
+        }
+
+        if (string.IsNullOrWhiteSpace(challenge?.Challenge))
+            return state.StrictV2Seen ? FailStrictV2(state, checkedAtUtc, "invalid v2 challenge") : null;
+
+        var request = new LicenseCallHomeV2Request
+        {
+            RegistrationId = registrationId,
+            ProductId = ProductId,
+            InstallationId = identity.InstallationId,
+            ClientVersion = AppUpdateService.GetInstalledVersion(),
+            BuildId = typeof(LicenseService).Assembly.GetName().Version?.ToString() ?? "unknown",
+            Platform = "windows-x64",
+            ProtocolVersion = ProtocolVersion,
+            Capabilities = ["game-image-cache-v2", "license-proof-v2"],
+            PublicKey = identity.PublicKey,
+            ProofJti = Guid.NewGuid().ToString("D"),
+            Challenge = challenge.Challenge
+        };
+        request.ProofSignature = SignDeviceProof(identity, BuildV2ProofMessage(request));
+
+        try
+        {
+            using var response = await http.PostAsJsonAsync(
+                VersionedEndpointFor(callHomeUrl, "/api/v2/callHome"),
+                request,
+                LicenseJsonContext.Default.LicenseCallHomeV2Request,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                return state.StrictV2Seen
+                    ? FailStrictV2(state, checkedAtUtc, $"v2 callHome http {(int)response.StatusCode}")
+                    : null;
+            var body = await response.Content.ReadFromJsonAsync(
+                LicenseJsonContext.Default.LicenseCallHomeResponse,
+                cancellationToken);
+            var signed = VerifyCallHomeResponse(
+                body,
+                registrationId,
+                checkedAtUtc,
+                out var verifyError,
+                ProductId,
+                identity.InstallationId,
+                challenge.Challenge);
+            if (signed is null)
+            {
+                state.LastCheckAt = checkedAtUtc;
+                state.LastResult = $"signature invalid: {verifyError}";
+                SaveState(state);
+                return CheckLicense();
+            }
+
+            state.LastCheckAt = checkedAtUtc;
+            state.SubscriptionExpiresAt = (signed.ExpiresAt ?? string.Empty).Trim();
+            state.ProductId = signed.ProductId;
+            state.ProductStatus = signed.ProductStatus;
+            state.LicenseType = signed.LicenseType;
+            state.EntitlementExpiresAt = signed.EntitlementExpiresAt;
+            state.EnforcementMode = signed.EnforcementMode;
+            state.Features = signed.Features ?? [];
+            if (string.Equals(signed.EnforcementMode, "strict", StringComparison.Ordinal))
+                state.StrictV2Seen = true;
+
+            if (signed.Authorized != true &&
+                signed.LegacyFallbackAllowed == true &&
+                !state.StrictV2Seen)
+            {
+                Trace("v2 product is not entitled; using server-authorized legacy compatibility path");
+                return null;
+            }
+
+            if (signed.Authorized == true)
+            {
+                state.LastAuthorizedAt = checkedAtUtc;
+                state.LastResult = "authorized-v2";
+                state.SignedBlob = body!.Blob;
+            }
+            else
+            {
+                state.LastResult = signed.Status ?? body?.Reason ?? "unauthorized";
+            }
+            SaveState(state);
+            return CheckLicense();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace($"v2 callHome failed {ex.GetType().Name}: {ex.Message}");
+            return state.StrictV2Seen ? FailStrictV2(state, checkedAtUtc, ex.Message) : null;
+        }
+    }
+
+    private LicenseStatus FailStrictV2(LicenseState state, DateTime checkedAtUtc, string reason)
+    {
+        state.LastCheckAt = checkedAtUtc;
+        state.LastResult = $"v2 required: {reason}";
+        SaveState(state);
+        return CheckLicense();
+    }
+
+    private static string VersionedEndpointFor(string callHomeUrl, string path)
+    {
+        if (!Uri.TryCreate(callHomeUrl, UriKind.Absolute, out var uri))
+            return path;
+        return new UriBuilder(uri.Scheme, uri.Host, uri.Port, path).Uri.AbsoluteUri;
     }
 
     private LicenseState LoadState()
@@ -401,7 +570,10 @@ public sealed class LicenseService
         LicenseCallHomeResponse? response,
         string registrationId,
         DateTime nowUtc,
-        out string reason)
+        out string reason,
+        string? expectedProductId = null,
+        string? expectedInstallationId = null,
+        string? expectedChallenge = null)
     {
         reason = string.Empty;
         if (response is null)
@@ -454,7 +626,7 @@ public sealed class LicenseService
             return null;
         }
 
-        if (payload.Schema != 1)
+        if (payload.Schema is not (1 or 2))
         {
             reason = "license response schema unsupported";
             return null;
@@ -463,6 +635,15 @@ public sealed class LicenseService
         if (!string.Equals(payload.RegistrationId, registrationId, StringComparison.Ordinal))
         {
             reason = "license response registration mismatch";
+            return null;
+        }
+
+        if (payload.Schema == 2 &&
+            (!string.Equals(payload.ProductId, expectedProductId, StringComparison.Ordinal) ||
+             !string.Equals(payload.InstallationId, expectedInstallationId, StringComparison.Ordinal) ||
+             !string.Equals(payload.RequestNonce, expectedChallenge, StringComparison.Ordinal)))
+        {
+            reason = "license response v2 binding mismatch";
             return null;
         }
 
@@ -503,6 +684,80 @@ public sealed class LicenseService
         }
 
         return payload;
+    }
+
+    private static LicenseDeviceIdentity LoadOrCreateDeviceIdentity()
+    {
+        Directory.CreateDirectory(StateDirectory);
+        if (File.Exists(DeviceIdentityPath))
+        {
+            var stored = JsonSerializer.Deserialize(
+                File.ReadAllText(DeviceIdentityPath),
+                LicenseJsonContext.Default.LicenseDeviceIdentityStore);
+            if (stored is not null && Guid.TryParse(stored.InstallationId, out _) &&
+                !string.IsNullOrWhiteSpace(stored.ProtectedPrivateKey))
+            {
+                var privateBytes = ProtectedData.Unprotect(
+                    Convert.FromBase64String(stored.ProtectedPrivateKey),
+                    Encoding.UTF8.GetBytes(ProductId),
+                    DataProtectionScope.CurrentUser);
+                var privateKey = new Ed25519PrivateKeyParameters(privateBytes, 0);
+                return new LicenseDeviceIdentity(
+                    stored.InstallationId,
+                    privateKey,
+                    Convert.ToBase64String(privateKey.GeneratePublicKey().GetEncoded()));
+            }
+        }
+
+        var generated = new Ed25519PrivateKeyParameters(new SecureRandom());
+        var installationId = Guid.NewGuid().ToString("D");
+        var protectedBytes = ProtectedData.Protect(
+            generated.GetEncoded(),
+            Encoding.UTF8.GetBytes(ProductId),
+            DataProtectionScope.CurrentUser);
+        var toStore = new LicenseDeviceIdentityStore
+        {
+            InstallationId = installationId,
+            ProtectedPrivateKey = Convert.ToBase64String(protectedBytes)
+        };
+        var temporary = DeviceIdentityPath + ".tmp";
+        File.WriteAllText(
+            temporary,
+            JsonSerializer.Serialize(toStore, LicenseJsonContext.Default.LicenseDeviceIdentityStore));
+        File.Move(temporary, DeviceIdentityPath, overwrite: true);
+        return new LicenseDeviceIdentity(
+            installationId,
+            generated,
+            Convert.ToBase64String(generated.GeneratePublicKey().GetEncoded()));
+    }
+
+    private static byte[] BuildV2ProofMessage(LicenseCallHomeV2Request request)
+    {
+        var capabilities = string.Join(",", request.Capabilities.Order(StringComparer.Ordinal));
+        return Encoding.UTF8.GetBytes(string.Join("\n", new[]
+        {
+            "LOTTO-LICENSE-V2",
+            "POST",
+            "/api/v2/callHome",
+            request.RegistrationId,
+            request.ProductId,
+            request.InstallationId,
+            request.ClientVersion,
+            request.BuildId,
+            request.Platform,
+            request.ProtocolVersion.ToString(CultureInfo.InvariantCulture),
+            capabilities,
+            request.ProofJti,
+            request.Challenge
+        }));
+    }
+
+    private static string SignDeviceProof(LicenseDeviceIdentity identity, byte[] message)
+    {
+        var signer = new Ed25519Signer();
+        signer.Init(true, identity.PrivateKey);
+        signer.BlockUpdate(message, 0, message.Length);
+        return Convert.ToBase64String(signer.GenerateSignature());
     }
 
     private static bool VerifyEd25519(string blob, string signatureBase64)
@@ -686,6 +941,8 @@ public sealed class LicenseService
 
     private static string StatePath => Path.Combine(StateDirectory, "license.json");
 
+    private static string DeviceIdentityPath => Path.Combine(StateDirectory, "license-device-v2.json");
+
     private static string LicenseLogPath => Path.Combine(AppLog.LogDirectory, "license.log");
 }
 
@@ -727,10 +984,95 @@ internal sealed class LicenseState
 
     [JsonPropertyName("subscription_expires_at")]
     public string? SubscriptionExpiresAt { get; set; }
+
+    [JsonPropertyName("product_id")]
+    public string? ProductId { get; set; }
+
+    [JsonPropertyName("product_status")]
+    public string? ProductStatus { get; set; }
+
+    [JsonPropertyName("license_type")]
+    public string? LicenseType { get; set; }
+
+    [JsonPropertyName("entitlement_expires_at")]
+    public string? EntitlementExpiresAt { get; set; }
+
+    [JsonPropertyName("features")]
+    public string[] Features { get; set; } = [];
+
+    [JsonPropertyName("enforcement_mode")]
+    public string? EnforcementMode { get; set; }
+
+    [JsonPropertyName("strict_v2_seen")]
+    public bool StrictV2Seen { get; set; }
 }
 
 internal sealed record LicenseCallHomeRequest(
     [property: JsonPropertyName("registration_id")] string RegistrationId);
+
+internal sealed record LicenseChallengeRequest(
+    [property: JsonPropertyName("registration_id")] string RegistrationId,
+    [property: JsonPropertyName("product_id")] string ProductId,
+    [property: JsonPropertyName("installation_id")] string InstallationId);
+
+internal sealed class LicenseChallengeResponse
+{
+    [JsonPropertyName("challenge")]
+    public string? Challenge { get; set; }
+}
+
+internal sealed class LicenseCallHomeV2Request
+{
+    [JsonPropertyName("registration_id")]
+    public string RegistrationId { get; set; } = string.Empty;
+
+    [JsonPropertyName("product_id")]
+    public string ProductId { get; set; } = string.Empty;
+
+    [JsonPropertyName("installation_id")]
+    public string InstallationId { get; set; } = string.Empty;
+
+    [JsonPropertyName("client_version")]
+    public string ClientVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("build_id")]
+    public string BuildId { get; set; } = string.Empty;
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = string.Empty;
+
+    [JsonPropertyName("protocol_version")]
+    public int ProtocolVersion { get; set; }
+
+    [JsonPropertyName("capabilities")]
+    public string[] Capabilities { get; set; } = [];
+
+    [JsonPropertyName("public_key")]
+    public string PublicKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("proof_jti")]
+    public string ProofJti { get; set; } = string.Empty;
+
+    [JsonPropertyName("challenge")]
+    public string Challenge { get; set; } = string.Empty;
+
+    [JsonPropertyName("proof_signature")]
+    public string ProofSignature { get; set; } = string.Empty;
+}
+
+internal sealed class LicenseDeviceIdentityStore
+{
+    [JsonPropertyName("installation_id")]
+    public string InstallationId { get; set; } = string.Empty;
+
+    [JsonPropertyName("protected_private_key")]
+    public string ProtectedPrivateKey { get; set; } = string.Empty;
+}
+
+internal sealed record LicenseDeviceIdentity(
+    string InstallationId,
+    Ed25519PrivateKeyParameters PrivateKey,
+    string PublicKey);
 
 internal sealed class LicenseCallHomeResponse
 {
@@ -799,13 +1141,44 @@ internal sealed class LicenseSignedPayload
 
     [JsonPropertyName("valid_until")]
     public string? ValidUntil { get; set; }
+
+    [JsonPropertyName("product_id")]
+    public string? ProductId { get; set; }
+
+    [JsonPropertyName("installation_id")]
+    public string? InstallationId { get; set; }
+
+    [JsonPropertyName("request_nonce")]
+    public string? RequestNonce { get; set; }
+
+    [JsonPropertyName("product_status")]
+    public string? ProductStatus { get; set; }
+
+    [JsonPropertyName("license_type")]
+    public string? LicenseType { get; set; }
+
+    [JsonPropertyName("entitlement_expires_at")]
+    public string? EntitlementExpiresAt { get; set; }
+
+    [JsonPropertyName("features")]
+    public string[]? Features { get; set; }
+
+    [JsonPropertyName("enforcement_mode")]
+    public string? EnforcementMode { get; set; }
+
+    [JsonPropertyName("legacy_fallback_allowed")]
+    public bool? LegacyFallbackAllowed { get; set; }
 }
 
 [JsonSourceGenerationOptions(
     WriteIndented = true,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(LicenseCallHomeRequest))]
+[JsonSerializable(typeof(LicenseChallengeRequest))]
+[JsonSerializable(typeof(LicenseChallengeResponse))]
+[JsonSerializable(typeof(LicenseCallHomeV2Request))]
 [JsonSerializable(typeof(LicenseCallHomeResponse))]
+[JsonSerializable(typeof(LicenseDeviceIdentityStore))]
 [JsonSerializable(typeof(LicenseInfoUpdateRequest))]
 [JsonSerializable(typeof(LicenseSignedPayload))]
 [JsonSerializable(typeof(LicenseState))]
