@@ -9652,7 +9652,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static bool IsCachedGameImage(GameCatalogRecord game)
+    private bool IsCachedGameImage(GameCatalogRecord game)
     {
         if (CachedGameImagePath(_storeState, game.GameId) is not null)
             return true;
