@@ -175,6 +175,9 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Sell the final valid ticket and confirm the bundle remains assigned and grey in SimpleLotto Bins while its Rdisplay tile is removed by a snapshot, leaving the display box empty.
    - Repeatedly connect/disconnect or split screens and confirm topology changes send snapshots without invalidating cached images or blacking an entire row.
    - Select a registered display and click `Refresh Screen`; confirm the existing Rdisplay snapshot/image refresh mechanism redraws the screen without restarting Rdisplay.
+   - Upload, fetch, or reuse a cached image for a game shown in multiple boxes and confirm every box for that game redraws while unrelated boxes remain unchanged.
+   - In Settings, confirm the Rdisplay upgrade selector defaults to `Main` and sends the exact selected `Dev`, `Stage`, or `Main` channel to every registered display.
+   - Trigger a channel upgrade against an older Rdisplay that accepts only the compatibility request. Confirm SimpleLotto reports that a restart and retry are required; after restart, retry and confirm the selected channel is acknowledged.
 
 ## Missing Follow-Up Work
 

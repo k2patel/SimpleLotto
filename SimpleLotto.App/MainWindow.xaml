@@ -1816,6 +1816,14 @@
                                                                    Text="Rdisplay upgrade trigger has not run."
                                                                    Style="{StaticResource SlCaptionTextStyle}"
                                                                    TextWrapping="Wrap"/>
+                                                        <ComboBox x:Name="RdisplayUpgradeChannelComboBox"
+                                                                  AutomationProperties.AutomationId="RdisplayUpgradeChannelComboBox"
+                                                                  Header="Rdisplay upgrade channel"
+                                                                  SelectedIndex="2">
+                                                            <x:String>Dev</x:String>
+                                                            <x:String>Stage</x:String>
+                                                            <x:String>Main</x:String>
+                                                        </ComboBox>
                                                         <StackPanel Orientation="Horizontal"
                                                                     Spacing="8">
                                                             <Button x:Name="CheckUpgradeButton"
@@ -1826,6 +1834,7 @@
                                                                     IsEnabled="False"
                                                                     Click="ApplyUpgradeButton_Click"/>
                                                             <Button x:Name="TriggerRdisplayUpgradeButton"
+                                                                    AutomationProperties.AutomationId="TriggerRdisplayUpgradeButton"
                                                                     Content="Upgrade Rdisplay"
                                                                     Click="TriggerRdisplayUpgradeButton_Click"/>
                                                         </StackPanel>

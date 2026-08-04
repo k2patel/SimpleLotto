@@ -212,7 +212,7 @@ public sealed class RdisplayService : IDisposable
 
         var registered = GetDisplay(id)!;
         await PushSnapshotAsync(registered, ct);
-        await PushImageReadyForDisplayAsync(registered, ct);
+        await RefreshAllGameBoxesForDisplayAsync(registered, ct);
         return RdisplayRegisterResult.Ok(registered);
     }
 
@@ -234,7 +234,13 @@ public sealed class RdisplayService : IDisposable
                 : RdisplayActionResult.Fail("Display did not accept the refresh. If the display was reinstalled, deregister it on the display and register again.");
     }
 
-    public async Task<RdisplayActionResult> TriggerUpgradeAsync(long id, CancellationToken ct = default)
+    public Task<RdisplayActionResult> TriggerUpgradeAsync(long id, CancellationToken ct = default) =>
+        TriggerUpgradeAsync(id, null, ct);
+
+    public async Task<RdisplayActionResult> TriggerUpgradeAsync(
+        long id,
+        RdisplayUpgradeChannel? channel,
+        CancellationToken ct = default)
     {
         var display = GetDisplay(id);
         if (display is null)
@@ -243,6 +249,9 @@ public sealed class RdisplayService : IDisposable
             return RdisplayActionResult.Fail("Display is not registered.");
 
         var payload = new JsonObject { ["mode"] = "apply" };
+        var channelName = channel?.ToWireName();
+        if (channelName is not null)
+            payload["channel"] = channelName;
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{display.BaseUrl}/api/display/update")
         {
             Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
@@ -252,10 +261,16 @@ public sealed class RdisplayService : IDisposable
         try
         {
             using var response = await _http.SendAsync(req, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync(ct);
                 return RdisplayActionResult.Fail($"Display rejected upgrade request (HTTP {(int)response.StatusCode}): {Truncate(body, 200)}");
+            }
+
+            if (channelName is not null && !UpgradeResponseAcceptedChannel(body, channelName))
+            {
+                return RdisplayActionResult.Retry(
+                    "The display queued a compatibility upgrade but does not yet support channels. Wait for it to restart, then request the channel again.");
             }
 
             TouchLastSeen(display.Id);
@@ -267,21 +282,53 @@ public sealed class RdisplayService : IDisposable
         }
     }
 
-    public async Task<RdisplayFleetUpgradeResult> TriggerUpgradeForAllRegisteredAsync(CancellationToken ct = default)
+    public Task<RdisplayFleetUpgradeResult> TriggerUpgradeForAllRegisteredAsync(CancellationToken ct = default) =>
+        TriggerUpgradeForAllRegisteredAsync(null, ct);
+
+    public async Task<RdisplayFleetUpgradeResult> TriggerUpgradeForAllRegisteredAsync(
+        RdisplayUpgradeChannel? channel,
+        CancellationToken ct = default)
     {
         var displays = Displays.Where(d => d.IsRegistered).ToList();
         var requested = 0;
         var failed = 0;
+        var retryRequired = 0;
+        string? firstError = null;
         foreach (var display in displays)
         {
-            var result = await TriggerUpgradeAsync(display.Id, ct);
+            var result = await TriggerUpgradeAsync(display.Id, channel, ct);
             if (result.IsSuccess)
                 requested++;
+            else if (result.RetryRequired)
+                retryRequired++;
             else
+            {
                 failed++;
+                firstError ??= result.ErrorMessage;
+            }
         }
 
-        return new RdisplayFleetUpgradeResult(displays.Count, requested, failed);
+        return new RdisplayFleetUpgradeResult(
+            displays.Count, requested, failed, retryRequired, firstError);
+    }
+
+    private static bool UpgradeResponseAcceptedChannel(string body, string channel)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (!document.RootElement.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Object)
+                return false;
+            return data.TryGetProperty("channel_supported", out var supported) &&
+                   supported.ValueKind == JsonValueKind.True &&
+                   data.TryGetProperty("channel", out var accepted) &&
+                   string.Equals(accepted.GetString(), channel, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public async Task<RdisplayActionResult> UnregisterAsync(long id, CancellationToken ct = default)
@@ -439,7 +486,7 @@ public sealed class RdisplayService : IDisposable
     private async Task<bool> PushSnapshotAndImagesAsync(RdisplayRegistration display, CancellationToken ct = default)
     {
         var pushed = await PushSnapshotAsync(display, ct);
-        await PushImageReadyForDisplayAsync(display, ct);
+        await RefreshAllGameBoxesForDisplayAsync(display, ct);
         return pushed;
     }
 
@@ -449,7 +496,7 @@ public sealed class RdisplayService : IDisposable
             ["display_config"] = BuildDisplayConfigDictionary()
         }, ct);
 
-    private async Task PushImageReadyForDisplayAsync(RdisplayRegistration display, CancellationToken ct = default)
+    private async Task RefreshAllGameBoxesForDisplayAsync(RdisplayRegistration display, CancellationToken ct = default)
     {
         var snapshot = BuildSnapshotPayloadForDisplay(display);
         if (!snapshot.TryGetValue("tiles", out var tilesObj) || tilesObj is not IEnumerable tiles)
@@ -475,7 +522,12 @@ public sealed class RdisplayService : IDisposable
         }
     }
 
-    public Task PushImageReadyAsync(string gameId, CancellationToken ct = default)
+    /// <summary>
+    /// Refreshes the shared artwork for <paramref name="gameId"/> on every
+    /// registered Rdisplay currently showing that game. Rdisplay uses one
+    /// cached image per game, so its renderer repaints every matching box.
+    /// </summary>
+    public Task RefreshGameBoxesAsync(string gameId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(gameId))
             return Task.CompletedTask;
@@ -487,6 +539,11 @@ public sealed class RdisplayService : IDisposable
             ["game_id"] = gameId
         }, ct);
     }
+
+    // Compatibility for existing call sites and integrations. New code should
+    // use RefreshGameBoxesAsync, which describes the operator-visible result.
+    public Task PushImageReadyAsync(string gameId, CancellationToken ct = default) =>
+        RefreshGameBoxesAsync(gameId, ct);
 
     private async Task PushTileChangesAsync(
         IReadOnlyList<RdisplayTileState> previousTiles,
@@ -1141,16 +1198,43 @@ public readonly record struct RdisplayRegisterResult(
 
 public readonly record struct RdisplayActionResult(
     bool IsSuccess,
-    string? ErrorMessage)
+    string? ErrorMessage,
+    bool RetryRequired = false)
 {
     public static RdisplayActionResult Ok() =>
-        new(true, null);
+        new(true, null, false);
 
     public static RdisplayActionResult Fail(string message) =>
-        new(false, message);
+        new(false, message, false);
+
+    public static RdisplayActionResult Retry(string message) =>
+        new(false, message, true);
 }
 
-public sealed record RdisplayFleetUpgradeResult(int RegisteredDisplays, int Requested, int Failed);
+public enum RdisplayUpgradeChannel
+{
+    Dev,
+    Stage,
+    Main,
+}
+
+public static class RdisplayUpgradeChannelExtensions
+{
+    public static string ToWireName(this RdisplayUpgradeChannel channel) => channel switch
+    {
+        RdisplayUpgradeChannel.Dev => "dev",
+        RdisplayUpgradeChannel.Stage => "stage",
+        RdisplayUpgradeChannel.Main => "main",
+        _ => throw new ArgumentOutOfRangeException(nameof(channel), channel, null),
+    };
+}
+
+public sealed record RdisplayFleetUpgradeResult(
+    int RegisteredDisplays,
+    int Requested,
+    int Failed,
+    int RetryRequired = 0,
+    string? ErrorMessage = null);
 
 public readonly record struct HardwareProbeResult(
     bool IsSuccess,

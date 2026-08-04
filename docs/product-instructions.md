@@ -554,6 +554,8 @@ Application upgrade rules:
 - Do not add hourly polling or recurring background wakeups for app upgrade checks.
 - Manual Check for Upgrade remains available even when automatic scheduled checks exist.
 - Main-branch pushes publish the latest Windows update manifest automatically. A manually dispatched branch build publishes it only when the operator explicitly enables the publish-update-manifest input.
+- The Rdisplay upgrade action must let the Manager choose the `Dev`, `Stage`, or `Main` release channel and should default to `Main`.
+- A channel-aware Rdisplay upgrade request must include the selected channel. If an older display accepts only the compatibility upgrade, tell the Manager to wait for its restart and retry the selected channel instead of reporting the channel upgrade as complete.
 
 ## License Management and Game Name Sync
 

@@ -5406,17 +5406,33 @@ public sealed partial class MainWindow : Window
 
     private async void TriggerRdisplayUpgradeButton_Click(object sender, RoutedEventArgs e)
     {
+        var channel = RdisplayUpgradeChannelComboBox.SelectedIndex switch
+        {
+            0 => RdisplayUpgradeChannel.Dev,
+            1 => RdisplayUpgradeChannel.Stage,
+            _ => RdisplayUpgradeChannel.Main,
+        };
+        var channelName = channel.ToWireName();
         TriggerRdisplayUpgradeButton.IsEnabled = false;
-        SettingsRdisplayUpgradeStatusText.Text = "Requesting Rdisplay upgrades...";
+        RdisplayUpgradeChannelComboBox.IsEnabled = false;
+        SettingsRdisplayUpgradeStatusText.Text =
+            $"Requesting Rdisplay upgrades on the {channelName} channel...";
         try
         {
-            var result = await _rdisplay.TriggerUpgradeForAllRegisteredAsync();
+            var result = await _rdisplay.TriggerUpgradeForAllRegisteredAsync(channel);
+            var retryText = result.RetryRequired > 0
+                ? $" {result.RetryRequired.ToString(CultureInfo.CurrentCulture)} display{(result.RetryRequired == 1 ? string.Empty : "s")} queued the compatibility upgrade; wait for restart and retry."
+                : string.Empty;
+            var errorText = string.IsNullOrWhiteSpace(result.ErrorMessage)
+                ? string.Empty
+                : $" First error: {result.ErrorMessage}";
             SettingsRdisplayUpgradeStatusText.Text =
-                $"Rdisplay upgrade requested for {result.Requested.ToString(CultureInfo.CurrentCulture)} of {result.RegisteredDisplays.ToString(CultureInfo.CurrentCulture)} registered display{(result.RegisteredDisplays == 1 ? string.Empty : "s")}. Failed: {result.Failed.ToString(CultureInfo.CurrentCulture)}.";
+                $"Rdisplay {channelName} upgrade requested for {result.Requested.ToString(CultureInfo.CurrentCulture)} of {result.RegisteredDisplays.ToString(CultureInfo.CurrentCulture)} registered display{(result.RegisteredDisplays == 1 ? string.Empty : "s")}. Failed: {result.Failed.ToString(CultureInfo.CurrentCulture)}.{retryText}{errorText}";
         }
         finally
         {
             TriggerRdisplayUpgradeButton.IsEnabled = true;
+            RdisplayUpgradeChannelComboBox.IsEnabled = true;
         }
     }
 
@@ -9400,7 +9416,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            await _rdisplay.PushImageReadyAsync(game.GameId);
+            await _rdisplay.RefreshGameBoxesAsync(game.GameId);
             GameCatalogStatusText.Text = $"Image uploaded for game {game.GameId}.";
         }
         catch (Exception ex)
@@ -9568,7 +9584,7 @@ public sealed partial class MainWindow : Window
             }
 
             if (!quiet)
-                await _rdisplay.PushImageReadyAsync(game.GameId);
+                await _rdisplay.RefreshGameBoxesAsync(game.GameId);
             if (!quiet)
                 GameCatalogStatusText.Text = $"Image already cached for game {game.GameId}.";
             return true;
@@ -9615,7 +9631,7 @@ public sealed partial class MainWindow : Window
                     return false;
                 }
 
-                await _rdisplay.PushImageReadyAsync(game.GameId);
+                await _rdisplay.RefreshGameBoxesAsync(game.GameId);
                 if (!quiet)
                     GameCatalogStatusText.Text = $"Image fetched for game {game.GameId}.";
                 return true;
