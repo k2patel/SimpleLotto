@@ -8326,7 +8326,8 @@ public sealed partial class MainWindow : Window
             closing.ActiveBins,
             closing.IntervalId,
             closing.ClosedByActorId,
-            closing.ClosedByActorName);
+            closing.ClosedByActorName,
+            request.ConfiguredTicketPriceCents);
     }
 
     private static ImportLine FromStoredImportLine(StoredImportLine line) =>
@@ -8352,7 +8353,8 @@ public sealed partial class MainWindow : Window
         int activeBinCount,
         long intervalId,
         string closedByActorId,
-        string closedByActorName)
+        string closedByActorName,
+        IReadOnlyList<long>? configuredTicketPriceCents)
     {
         Directory.CreateDirectory(target.Folder);
         var formula = "instant_ticket_sales + online_sale - instant_cashout - online_cashout";
@@ -8421,7 +8423,7 @@ public sealed partial class MainWindow : Window
             currentBundles.Count,
             resolvedBundles.Count,
             activatedBundleCount,
-            request.ConfiguredTicketPriceCents);
+            configuredTicketPriceCents);
     }
 
     private async Task RetryPendingClosingReportsAsync(IReadOnlyList<StoredClosingReportJob> jobs)
