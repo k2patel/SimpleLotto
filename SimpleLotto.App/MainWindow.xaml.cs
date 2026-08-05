@@ -8420,7 +8420,8 @@ public sealed partial class MainWindow : Window
             closedBundles.Count,
             currentBundles.Count,
             resolvedBundles.Count,
-            activatedBundleCount);
+            activatedBundleCount,
+            request.ConfiguredTicketPriceCents);
     }
 
     private async Task RetryPendingClosingReportsAsync(IReadOnlyList<StoredClosingReportJob> jobs)
@@ -8598,7 +8599,8 @@ public sealed partial class MainWindow : Window
         int closedBundleCount,
         int currentBundleCount,
         int resolvedBundleCount,
-        int activatedBundleCount)
+        int activatedBundleCount,
+        IReadOnlyList<long>? configuredTicketPriceCents)
     {
         var pdf = new SimplePdfDocument();
         pdf.AddPage(BuildClosingPdfPage(
@@ -8614,7 +8616,8 @@ public sealed partial class MainWindow : Window
             closedBundleCount,
             currentBundleCount,
             resolvedBundleCount,
-            activatedBundleCount));
+            activatedBundleCount,
+            configuredTicketPriceCents));
         pdf.Save(path);
     }
 
@@ -8631,13 +8634,14 @@ public sealed partial class MainWindow : Window
         int closedBundleCount,
         int currentBundleCount,
         int resolvedBundleCount,
-        int activatedBundleCount)
+        int activatedBundleCount,
+        IReadOnlyList<long>? configuredTicketPriceCents)
     {
         var builder = new StringBuilder();
         var totalSalesCents = instantTicketSalesCents + onlineSaleCents;
         var totalCashoutCents = instantCashoutCents + onlineCashoutCents;
         var ticketCount = sales.Sum(s => s.Quantity);
-        var denominations = PdfDenominations(sales);
+        var denominations = PdfDenominations(sales, configuredTicketPriceCents);
 
         PdfRect(builder, 0, 744, 612, 48, 0.08, 0.16, 0.27, fill: true);
         PdfText(builder, 42, 766, "Shift Report", "F2", 19, 1, 1, 1);
@@ -8682,16 +8686,31 @@ public sealed partial class MainWindow : Window
         return builder.ToString();
     }
 
-    private static IReadOnlyList<PdfDenominationRow> PdfDenominations(IReadOnlyList<SaleLine> sales) =>
-        sales
+    private static IReadOnlyList<PdfDenominationRow> PdfDenominations(
+        IReadOnlyList<SaleLine> sales,
+        IReadOnlyList<long>? configuredTicketPriceCents)
+    {
+        var soldRows = sales
             .Where(s => s.Quantity > 0 && s.Amount > 0)
             .GroupBy(s => Math.Max(1, (int)Math.Round(s.Amount / Math.Max(1, s.Quantity), MidpointRounding.AwayFromZero)))
             .Select(g => new PdfDenominationRow(
                 g.Key,
                 g.Sum(s => s.Quantity),
                 (long)Math.Round(g.Sum(s => s.Amount) * 100m, MidpointRounding.AwayFromZero)))
-            .OrderBy(r => r.Price)
             .ToList();
+        var soldByPrice = soldRows.ToDictionary(row => row.Price);
+        var reportPrices = configuredTicketPriceCents is null
+            ? soldRows.Select(row => row.Price).OrderBy(price => price)
+            : configuredTicketPriceCents
+                .Where(priceCents => priceCents > 0 && priceCents % 100 == 0)
+                .Select(priceCents => checked((int)(priceCents / 100)));
+
+        return reportPrices
+            .Select(price => soldByPrice.TryGetValue(price, out var sold)
+                ? sold
+                : new PdfDenominationRow(price, 0, 0))
+            .ToList();
+    }
 
     private static void PdfMetricCard(StringBuilder builder, double x, double y, double width, string label, string value, double r, double g, double b)
     {
@@ -8711,24 +8730,26 @@ public sealed partial class MainWindow : Window
     {
         PdfRect(builder, x, y, width, height, 0.98, 0.99, 1.0, fill: true);
         PdfRect(builder, x, y, width, height, 0.72, 0.78, 0.86, fill: false);
-        var expectedPrices = new[] { 1, 2, 5, 10, 20, 25, 30, 40, 50 };
-        var byPrice = rows.ToDictionary(r => r.Price);
         var max = Math.Max(1, rows.Select(r => (long?)r.AmountCents).Max() ?? 1);
 
         PdfText(builder, x + width - 66, y + height - 12, "Sales", "F2", 6.8, 0.28, 0.34, 0.42);
         PdfText(builder, x + width - 24, y + height - 12, "Tickets", "F2", 6.8, 0.28, 0.34, 0.42);
         var rowY = y + height - 24;
-        foreach (var price in expectedPrices)
+        var rowStep = rows.Count <= 1
+            ? 14d
+            : Math.Min(14d, (height - 54d) / (rows.Count - 1));
+        var rowFontSize = Math.Clamp(rowStep * 0.56d, 5.2d, 7.7d);
+        var barHeight = Math.Clamp(rowStep * 0.64d, 4d, 9d);
+        foreach (var row in rows)
         {
-            byPrice.TryGetValue(price, out var row);
-            var amount = row?.AmountCents ?? 0;
-            var tickets = row?.TicketCount ?? 0;
-            PdfText(builder, x + 12, rowY + 2, "$" + price.ToString(CultureInfo.InvariantCulture), "F2", 7.7, 0.20, 0.26, 0.34);
+            var amount = row.AmountCents;
+            var tickets = row.TicketCount;
+            PdfText(builder, x + 12, rowY + 2, "$" + row.Price.ToString(CultureInfo.InvariantCulture), "F2", rowFontSize, 0.20, 0.26, 0.34);
             var barWidth = amount <= 0 ? 1 : Math.Max(4, (double)amount / max * (width - 120));
-            PdfRect(builder, x + 42, rowY, barWidth, 9, 0.24, 0.62, 0.44, fill: true);
-            PdfText(builder, x + width - 66, rowY + 2, PdfMoney(amount), "F1", 7.2, 0.20, 0.26, 0.34);
-            PdfText(builder, x + width - 24, rowY + 2, tickets.ToString(CultureInfo.InvariantCulture), "F1", 7.2, 0.20, 0.26, 0.34);
-            rowY -= 14;
+            PdfRect(builder, x + 42, rowY, barWidth, barHeight, 0.24, 0.62, 0.44, fill: true);
+            PdfText(builder, x + width - 66, rowY + 2, PdfMoney(amount), "F1", rowFontSize, 0.20, 0.26, 0.34);
+            PdfText(builder, x + width - 24, rowY + 2, tickets.ToString(CultureInfo.InvariantCulture), "F1", rowFontSize, 0.20, 0.26, 0.34);
+            rowY -= rowStep;
         }
 
         PdfRect(builder, x + 12, y + 17, width - 24, 1, 0.72, 0.78, 0.86, fill: true);

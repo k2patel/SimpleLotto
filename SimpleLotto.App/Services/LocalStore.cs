@@ -692,7 +692,8 @@ public sealed class LocalStore
         {
             Closing = closingRecord,
             Sales = persistedIntervalSales,
-            AuditRecords = reverseAuditRecords
+            AuditRecords = reverseAuditRecords,
+            ConfiguredTicketPriceCents = QueryConfiguredTicketPriceCents(conn, tx)
         };
 
         long closingHistoryId;
@@ -3418,6 +3419,18 @@ public sealed class LocalStore
         return rows;
     }
 
+    private static List<long> QueryConfiguredTicketPriceCents(SqliteConnection conn, SqliteTransaction tx)
+    {
+        var prices = new List<long>();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT DISTINCT price_cents FROM manual_games WHERE price_cents > 0 ORDER BY price_cents";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            prices.Add(reader.GetInt64(0));
+        return prices;
+    }
+
     private static List<string> QueryVoidedSaleKeys(SqliteConnection conn)
     {
         var rows = new List<string>();
@@ -3832,7 +3845,8 @@ public sealed record StoredClosingReportRequest(
     List<StoredImportLine> ResolvedBundles,
     List<string> SelectedEmailAttachments,
     List<StoredAuditRecord>? AuditRecords = null,
-    bool SendEmail = false);
+    bool SendEmail = false,
+    List<long>? ConfiguredTicketPriceCents = null);
 
 public sealed record StoredClosingReverseCorrection(
     string GameId,
