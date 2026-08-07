@@ -193,8 +193,28 @@ public sealed class LocalStore
         return inserted;
     }
 
-    public StoredSaleLine InsertImportAndSale(StoredImportLine import, StoredSaleLine sale)
+    public StoredSaleLine? InsertActivation(
+        StoredImportLine import,
+        StoredSaleLine? sale,
+        long intervalId,
+        string actorId,
+        string actorName)
     {
+        if (!string.Equals(import.Source, "activation", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("An activation placement must use the activation source.");
+        if (import.IsSoldOut)
+            throw new InvalidOperationException("A newly activated bundle must have an available ticket.");
+        if (intervalId <= 0 || string.IsNullOrWhiteSpace(actorId) || string.IsNullOrWhiteSpace(actorName))
+            throw new InvalidOperationException("An activation must identify the open interval and logged-in actor.");
+        if (sale is not null &&
+            (!string.Equals(sale.Source, "activation_gap_fill", StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(import.GameId.Trim(), sale.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(import.BundleId.Trim(), sale.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(import.Bin.Trim(), sale.Bin.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("An activation gap-fill sale must match its bundle placement.");
+        }
+
         using var conn = Open();
         using var tx = conn.BeginTransaction();
 
@@ -215,8 +235,17 @@ public sealed class LocalStore
             importCmd.ExecuteNonQuery();
         }
 
-        var inserted = InsertSaleRow(conn, tx, sale);
-        ClaimSaleTickets(conn, tx, inserted);
+        StoredSaleLine? inserted = null;
+        if (sale is not null)
+        {
+            inserted = InsertSaleRow(conn, tx, sale with
+            {
+                IntervalId = intervalId,
+                ActorId = actorId,
+                ActorName = actorName
+            });
+            ClaimSaleTickets(conn, tx, inserted);
+        }
 
         using (var receivedCmd = conn.CreateCommand())
         {
@@ -231,26 +260,23 @@ public sealed class LocalStore
             receivedCmd.ExecuteNonQuery();
         }
 
-        if (string.Equals(import.Source, "activation", StringComparison.OrdinalIgnoreCase))
-        {
-            using var activationCmd = conn.CreateCommand();
-            activationCmd.Transaction = tx;
-            activationCmd.CommandText = """
-                INSERT INTO activation_events (
-                    activated_at_utc, game_id, bundle_id, bin, source, interval_id, actor_id, actor_name)
-                VALUES (
-                    $activated_at_utc, $game_id, $bundle_id, $bin, $source, $interval_id, $actor_id, $actor_name)
-                """;
-            activationCmd.Parameters.AddWithValue("$activated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-            activationCmd.Parameters.AddWithValue("$game_id", import.GameId);
-            activationCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
-            activationCmd.Parameters.AddWithValue("$bin", import.Bin);
-            activationCmd.Parameters.AddWithValue("$source", import.Source);
-            activationCmd.Parameters.AddWithValue("$interval_id", inserted.IntervalId);
-            activationCmd.Parameters.AddWithValue("$actor_id", inserted.ActorId);
-            activationCmd.Parameters.AddWithValue("$actor_name", inserted.ActorName);
-            activationCmd.ExecuteNonQuery();
-        }
+        using var activationCmd = conn.CreateCommand();
+        activationCmd.Transaction = tx;
+        activationCmd.CommandText = """
+            INSERT INTO activation_events (
+                activated_at_utc, game_id, bundle_id, bin, source, interval_id, actor_id, actor_name)
+            VALUES (
+                $activated_at_utc, $game_id, $bundle_id, $bin, $source, $interval_id, $actor_id, $actor_name)
+            """;
+        activationCmd.Parameters.AddWithValue("$activated_at_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        activationCmd.Parameters.AddWithValue("$game_id", import.GameId);
+        activationCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
+        activationCmd.Parameters.AddWithValue("$bin", import.Bin);
+        activationCmd.Parameters.AddWithValue("$source", import.Source);
+        activationCmd.Parameters.AddWithValue("$interval_id", intervalId);
+        activationCmd.Parameters.AddWithValue("$actor_id", actorId);
+        activationCmd.Parameters.AddWithValue("$actor_name", actorName);
+        activationCmd.ExecuteNonQuery();
 
         tx.Commit();
         return inserted;

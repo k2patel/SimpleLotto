@@ -341,7 +341,7 @@ Bundle activation definition:
 Regular bundle activation:
 
 - Regular bundle activation is separate from the closing reconciliation loop.
-- Regular bundle activation is also separate from the first-time setup initial import. Initial import records opening inventory only and must not create activation gap-fill sales.
+- Regular bundle activation is also separate from the first-time setup initial import. Initial import creates active opening placements but must not create activation events for the current close interval or activation gap-fill sales.
 - During normal inventory/bin workflow, bins may contain multiple active bundles.
 - A bundle can be activated into a bin by scanning bin then bundle, or bundle then bin.
 - The bin scan and bundle/ticket scan that form one activation pair must happen within the configured scan-pair window. The default is 5 seconds.
@@ -359,13 +359,14 @@ Regular bundle activation:
 - Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.
 - After successful activation, the app should give short audio feedback such as `Bundle activated in bin 12`.
 - Activation should trigger cache-first game image lookup for the activated game.
-- The scanned activation ticket is treated as sold during placement, along with any prior tickets in that bundle.
-- This activation treatment is provisional because the barcode alone cannot prove whether the physical ticket was already sold or is still available. A later Closing scan of that physically available ticket is authoritative and must automatically reverse the attributable open-interval activation sale activity.
-- After activation, the active bundle ticket is the next available ticket after the scanned activation ticket and should be shown as current on Rdisplay.
-- During activation, tickets from the first ticket through the scanned activation ticket are recorded as sold/gap-fill sale activity for the current open close interval.
-- This rule applies to any valid ticket serial in the scanned bundle. Ticket `001` and ticket `008` are examples only; the scanned ticket number determines the inclusive sold range and the next available ticket.
+- Game pricing must be complete before regular activation interprets the scanned ticket, because the saved ticket price, automatic bundle total, and global first-ticket mode determine the calculated last ticket.
+- During regular activation, the scanned ticket normally represents the ticket currently available for sale. Tickets before it are recorded as sold/gap-fill activity for the current open close interval, while the scanned ticket itself remains available.
+- Scanning the configured first ticket creates no gap-fill sale and keeps that first ticket available.
+- Scanning the calculated last ticket of an unplaced bundle is the packaged-new-bundle case. Some bundles expose the last-ticket barcode through the packaging instead of the first-ticket barcode; activate that bundle with the configured first ticket available, create no gap-fill sale, and do not mark it sold out.
+- For any valid intermediate activation ticket, record the configured first ticket through one less than the scanned ticket as sold and keep the scanned ticket available. For example, with first ticket `000`, activation scan `005` records `000-004` and keeps `005` available.
+- A later Closing scan compares its physically available ticket with the stored activation baseline and records or corrects only the resulting difference.
 - Placement-created gap-fill sales must use the source label `activation_gap_fill` so reports can distinguish them from normal scanned sales.
-- The gap-fill range follows the configured first-ticket mode: if first ticket is `000` and activation scans `004`, tickets `000-004` are sold and next ticket is `005`; if first ticket is `001`, tickets `001-004` are sold and next ticket is `005`.
+- The gap-fill range follows the configured first-ticket mode: if first ticket is `000` and activation scans intermediate ticket `004`, tickets `000-003` are sold and `004` remains available; if first ticket is `001`, tickets `001-003` are sold and `004` remains available.
 - Regular activation only applies to bundles not currently placed in any bin. Moving an already placed bundle is a separate manual move workflow from the Bins UI.
 - If a clerk scans a bin plus a ticket for a bundle already active in another bin, ignore the placement intent and do not move the bundle automatically.
 - For an already active bundle placement scan, the app should give audio feedback such as `Bundle active in bin 7, move it manually`.
@@ -480,7 +481,7 @@ Closing scan rules:
 - If the scanned current ticket is behind the system's expected current ticket, stage one automatic reversal for that bundle and ticket series. Do not show a separate approval dialog or speak a correction prompt. Finalizing Closing releases attributable claims, records any required void/replacement activity in the current interval, writes the range-level Audit record, and moves the available ticket back to the scanned ticket.
 - If that backward range intersects the beginning or middle of one intact sale, automatically extend the staged reversal through the sale's affected tail and retain only its valid earlier prefix. Do not block merely because the initial range would split an open or previously closed sale.
 - If a backward Closing correction has no ticket claims in its entire correction range, treat it as an inventory-cursor correction: store the scanned current ticket and write an immutable Audit record without inventing or removing a ledger sale. If only part of the range has claims, reverse the attributable claimed tickets and treat the remaining physical range as cursor reconciliation.
-- Closing scan rows must keep normal activation reconciliation quiet. When Closing scans the same ticket used to activate a bundle and only the provisional activation sale needs reconciliation, show only `Scanned` and move on. Show a reverse range only for a genuine sales difference; show a current-ticket change for a zero-claim cursor difference. Keep sale IDs and full accounting details in Audit.
+- Closing scan rows must keep matching activation baselines quiet. When Closing scans the same available ticket stored by activation, show only `Scanned`/current match and move on. Show a reverse range only for a genuine sales difference; show a current-ticket change for a zero-claim cursor difference. Keep sale IDs and full accounting details in Audit.
 - A Closing scan for a placement currently marked sold out is authoritative evidence that the bundle still has an available ticket. Reconcile from the scanned ticket through the configured final ticket, clear `Sold out`, and apply the same claimed, partially claimed, zero-claim, and prior-shift correction rules.
 - Closing evidence is temporary, bundle-scoped state. If the operator closes the scan dialog and then completes a usual sale, activation, gap fill, or regular sold-out correction while that Closing session remains in progress, process that operation normally and exactly once. Its resulting permanent bundle state automatically replaces only that physical bundle's earlier Closing evidence; retain every other bundle's valid evidence.
 - Replacing Closing evidence must remove that bundle's earlier staged forward sale or backward correction so stale evidence cannot claim the same ticket again during finalization. The replacement must not require a rescan. Cancelling Closing later discards only temporary Closing evidence and never rolls back the already completed usual operation.

@@ -2361,11 +2361,11 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        if (!TryBuildActivationGapFillSale(
+        if (!TryBuildActivationPlacement(
                 DateTime.Now,
                 ticket,
                 bin,
-                out var activationSale,
+                out var activation,
                 out var configurationError))
         {
             if (updateDashboardStatus)
@@ -2387,17 +2387,18 @@ public sealed partial class MainWindow : Window
         var line = new ImportLine(
             ticket.GameId,
             ticket.BundleId,
-            activationSale.IsBundleComplete ? ticket.Ticket : activationSale.NextTicket,
+            activation.CurrentTicket,
             bin,
             "activation",
-            activationSale.IsBundleComplete);
-        _imports.Insert(0, line);
-        _sales.Insert(0, activationSale.Sale);
-        if (!SaveImportLineAndSale(line, activationSale.Sale))
-        {
-            _imports.Remove(line);
-            _sales.Remove(activationSale.Sale);
+            IsSoldOut: false);
+        if (!SaveActivation(line, activation.Sale, out var persistedSale))
             return false;
+
+        _imports.Insert(0, line);
+        if (persistedSale is not null)
+        {
+            _sales.Insert(0, persistedSale);
+            _allSales.Insert(0, persistedSale);
         }
 
         var receivedBundle = _receivedBundles.FirstOrDefault(received =>
@@ -2419,24 +2420,35 @@ public sealed partial class MainWindow : Window
         TryRecordAudit(
             "activation",
             "Bundle activated",
-            $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned ticket {ticket.Ticket}, {(activationSale.IsBundleComplete ? "sold out" : $"next {activationSale.NextTicket}")}, bin {bin}");
-        TryRecordAudit(
-            "sale",
-            "Activation sale recorded",
-            $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {bin}, sold {activationSale.Sale.Ticket}, quantity {activationSale.Sale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {activationSale.Sale.AmountText}, {(activationSale.IsBundleComplete ? "sold out" : $"next {activationSale.NextTicket}")}");
+            activation.Kind == ActivationTicketPlacementKind.PackagedLastTicket
+                ? $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned packaged last ticket {ticket.Ticket}, current available reset to {activation.CurrentTicket}, bin {bin}"
+                : $"Game {ticket.GameId}, bundle {ticket.BundleId}, scanned ticket {ticket.Ticket}, current available {activation.CurrentTicket}, bin {bin}");
+        if (persistedSale is not null)
+        {
+            TryRecordAudit(
+                "sale",
+                "Activation sale recorded",
+                $"Game {ticket.GameId}, bundle {ticket.BundleId}, bin {bin}, sold {persistedSale.Ticket}, quantity {persistedSale.Quantity.ToString(CultureInfo.InvariantCulture)}, amount {persistedSale.AmountText}, current available {activation.CurrentTicket}");
+        }
         TryRecordAudit(
             "bin",
             "Bin placement recorded",
-            $"Bin {bin}, game {ticket.GameId}, bundle {ticket.BundleId}, {(activationSale.IsBundleComplete ? "sold out" : $"next ticket {activationSale.NextTicket}")}");
+            $"Bin {bin}, game {ticket.GameId}, bundle {ticket.BundleId}, current ticket {activation.CurrentTicket}");
         if (updateDashboardStatus)
         {
             DashboardScannerStatusText.Text = $"Bundle activated in bin {bin}.";
-            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {activationSale.Sale.Ticket} | Next {activationSale.NextTicket} | Bin {bin}";
+            DashboardLastScanText.Text = persistedSale is null
+                ? $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Current {activation.CurrentTicket} | Bin {bin}"
+                : $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Sold {persistedSale.Ticket} | Current {activation.CurrentTicket} | Bin {bin}";
             ClearDashboardPendingScanPair();
         }
 
-        SalesListView.SelectedItem = activationSale.Sale;
-        StatusText.Text = $"Bundle {ticket.BundleId} activated in bin {bin}. Sold {activationSale.Sale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(activationSale.Sale.Quantity == 1 ? string.Empty : "s")}; next ticket {activationSale.NextTicket}.";
+        SalesListView.SelectedItem = persistedSale;
+        StatusText.Text = persistedSale is null
+            ? activation.Kind == ActivationTicketPlacementKind.PackagedLastTicket
+                ? $"Bundle {ticket.BundleId} activated in bin {bin} from its packaged last-ticket barcode. Current ticket is {activation.CurrentTicket}; no prior sale was recorded."
+                : $"Bundle {ticket.BundleId} activated in bin {bin}. Current ticket is {activation.CurrentTicket}; no prior sale was recorded."
+            : $"Bundle {ticket.BundleId} activated in bin {bin}. Sold {persistedSale.Quantity.ToString(CultureInfo.CurrentCulture)} ticket{(persistedSale.Quantity == 1 ? string.Empty : "s")}; current ticket {activation.CurrentTicket}.";
         _ = SpeakAsync($"Bundle activated in bin {bin}.");
         RefreshTotals();
         RefreshOperationalPages();
@@ -3476,11 +3488,12 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private bool SaveImportLineAndSale(ImportLine importLine, SaleLine saleLine)
+    private bool SaveActivation(ImportLine importLine, SaleLine? saleLine, out SaleLine? persistedSale)
     {
+        persistedSale = null;
         try
         {
-            var inserted = _store.InsertImportAndSale(
+            var inserted = _store.InsertActivation(
                 new StoredImportLine(
                     importLine.GameId,
                     importLine.BundleId,
@@ -3488,15 +3501,16 @@ public sealed partial class MainWindow : Window
                     importLine.Bin,
                     importLine.Source,
                     importLine.IsSoldOut),
-                ToStoredSaleLine(saleLine));
-            var persisted = FromStoredSaleLine(inserted);
-            ReplaceSaleLine(_sales, saleLine, persisted);
-            _allSales.Insert(0, persisted);
+                saleLine is null ? null : ToStoredSaleLine(saleLine),
+                _openIntervalId,
+                _activeActorId,
+                _activeUserName);
+            persistedSale = inserted is null ? null : FromStoredSaleLine(inserted);
             return true;
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Unable to save activation sale to SQLite: {ex.Message}";
+            StatusText.Text = $"Unable to save activation to SQLite: {ex.Message}";
             return false;
         }
     }
@@ -9125,14 +9139,14 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private bool TryBuildActivationGapFillSale(
+    private bool TryBuildActivationPlacement(
         DateTime soldAt,
         ImportTicket ticket,
         string bin,
-        out TicketBackfillSale backfill,
+        out ActivationPlacement activation,
         out string error)
     {
-        backfill = null!;
+        activation = null!;
         error = string.Empty;
         var scannedText = ticket.Ticket.Trim();
         var width = TicketSerialWidth(scannedText);
@@ -9140,38 +9154,47 @@ public sealed partial class MainWindow : Window
             return false;
 
         if (!TryParseTicketSerial(scannedText, out var scannedSerial) ||
-            scannedSerial < firstTicket ||
-            scannedSerial > lastTicket)
+            !ActivationTicketPlacement.TryCreate(
+                scannedSerial,
+                firstTicket,
+                lastTicket,
+                out var placement,
+                out _))
         {
             error = $"Ticket {ticket.Ticket} is outside the configured {FormatTicketSerial(firstTicket, width)}-{FormatTicketSerial(lastTicket, width)} bundle range.";
             return false;
         }
 
-        var quantity = scannedSerial - firstTicket + 1;
-        var startText = FormatTicketSerial(firstTicket, width);
-        var endText = FormatTicketSerial(scannedSerial, width);
-        var soldText = quantity == 1 ? endText : $"{startText}-{endText}";
-        var isComplete = scannedSerial == lastTicket;
+        var currentTicket = FormatTicketSerial(placement.CurrentAvailableSerial, width);
+        if (!placement.HasGapFill)
+        {
+            activation = new ActivationPlacement(placement.Kind, currentTicket, Sale: null);
+            return true;
+        }
+
+        var startText = FormatTicketSerial(placement.FirstSoldSerial, width);
+        var endText = FormatTicketSerial(placement.LastSoldSerial, width);
+        var soldText = placement.Quantity == 1 ? startText : $"{startText}-{endText}";
         var price = GamePriceCents(ticket.GameId) / 100m;
-        var amount = quantity * price;
+        var amount = checked(placement.Quantity * price);
         if (amount <= 0)
         {
             error = $"Game {ticket.GameId} calculated a non-positive activation sale.";
             return false;
         }
 
-        backfill = new TicketBackfillSale(
+        activation = new ActivationPlacement(
+            placement.Kind,
+            currentTicket,
             new SaleLine(
                 soldAt,
                 ticket.GameId,
                 bin,
                 soldText,
-                quantity,
+                placement.Quantity,
                 amount,
                 "activation_gap_fill",
-                ticket.BundleId),
-            isComplete ? endText : FormatTicketSerial(scannedSerial + 1, width),
-            isComplete);
+                ticket.BundleId));
         return true;
     }
 
@@ -11121,6 +11144,11 @@ public sealed partial class MainWindow : Window
         bool InventoryOnly = false);
 
     private sealed record TicketBackfillSale(SaleLine Sale, string NextTicket, bool IsBundleComplete);
+
+    private sealed record ActivationPlacement(
+        ActivationTicketPlacementKind Kind,
+        string CurrentTicket,
+        SaleLine? Sale);
 
     private sealed record TicketBackfillRange(string SoldTicketText, int Quantity, string NextTicket);
 
