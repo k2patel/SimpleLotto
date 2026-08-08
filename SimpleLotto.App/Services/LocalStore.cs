@@ -12,7 +12,7 @@ public sealed class LocalStore
 {
     public const int RecentAuditLogLimit = 200;
 
-    private const int SchemaVersion = 18;
+    private const int SchemaVersion = 19;
     private const string SystemActorId = "system";
     private const string LegacyActorId = "legacy-migration";
     private static readonly object SchemaLock = new();
@@ -478,6 +478,309 @@ public sealed class LocalStore
         return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
+    public StoredClosedBundleRecord? FindRecoverableClosedBundle(string gameId, string bundleId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, closing_history_id, closed_at_utc, game_id, bundle_id, ticket, bin, source, close_reason,
+                   recovered_at_utc, recovered_interval_id, recovered_by_actor_id, recovered_ticket
+            FROM closed_bundle_history
+            WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+              AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+              AND recovered_at_utc IS NULL
+            ORDER BY id DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? ReadClosedBundleRecord(reader) : null;
+    }
+
+    public StoredBundleReconciliationResult RestoreClosedBundle(
+        DateTime occurredAtUtc,
+        long intervalId,
+        string actorId,
+        string actorName,
+        long closedBundleHistoryId,
+        StoredImportLine restoredBundle,
+        int scannedAvailableSerial,
+        int recordedFinalSerial)
+    {
+        if (intervalId <= 0 ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(actorName))
+        {
+            throw new InvalidOperationException("Closed-bundle recovery requires an open interval and actor identity.");
+        }
+        if (restoredBundle.IsSoldOut ||
+            !string.Equals(restoredBundle.Source, "closed_recovery", StringComparison.OrdinalIgnoreCase) ||
+            scannedAvailableSerial < 0 ||
+            recordedFinalSerial < scannedAvailableSerial)
+        {
+            throw new InvalidOperationException("Closed-bundle recovery contains invalid bundle, ticket, or price data.");
+        }
+
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        using (var intervalCheck = conn.CreateCommand())
+        {
+            intervalCheck.Transaction = tx;
+            intervalCheck.CommandText = "SELECT COUNT(*) FROM ledger_intervals WHERE id = $id AND status = 'open'";
+            intervalCheck.Parameters.AddWithValue("$id", intervalId);
+            if (Convert.ToInt32(intervalCheck.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+                throw new InvalidOperationException("The current sales interval is no longer open.");
+        }
+
+        long currentPriceCents;
+        using (var priceCmd = conn.CreateCommand())
+        {
+            priceCmd.Transaction = tx;
+            priceCmd.CommandText = "SELECT price_cents FROM manual_games WHERE trim(game_id) = trim($game_id) COLLATE NOCASE";
+            priceCmd.Parameters.AddWithValue("$game_id", restoredBundle.GameId);
+            var priceResult = priceCmd.ExecuteScalar();
+            currentPriceCents = priceResult is null or DBNull
+                ? 0
+                : Convert.ToInt64(priceResult, CultureInfo.InvariantCulture);
+            if (currentPriceCents <= 0)
+                throw new InvalidOperationException("Closed-bundle recovery requires the current saved Game-table price.");
+        }
+
+        StoredClosedBundleRecord closedBundle;
+        using (var historyCmd = conn.CreateCommand())
+        {
+            historyCmd.Transaction = tx;
+            historyCmd.CommandText = """
+                SELECT id, closing_history_id, closed_at_utc, game_id, bundle_id, ticket, bin, source, close_reason,
+                       recovered_at_utc, recovered_interval_id, recovered_by_actor_id, recovered_ticket
+                FROM closed_bundle_history
+                WHERE id = $id AND recovered_at_utc IS NULL
+                """;
+            historyCmd.Parameters.AddWithValue("$id", closedBundleHistoryId);
+            using var reader = historyCmd.ExecuteReader();
+            closedBundle = reader.Read()
+                ? ReadClosedBundleRecord(reader)
+                : throw new InvalidOperationException("This closed bundle is no longer available for recovery.");
+        }
+
+        if (!string.Equals(closedBundle.GameId.Trim(), restoredBundle.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(closedBundle.BundleId.Trim(), restoredBundle.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(closedBundle.Bin.Trim(), restoredBundle.Bin.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !TryParseTicketSerial(closedBundle.Ticket, out var storedFinalSerial) ||
+            storedFinalSerial != recordedFinalSerial ||
+            !TryParseTicketSerial(restoredBundle.Ticket, out var restoredSerial) ||
+            restoredSerial != scannedAvailableSerial)
+        {
+            throw new InvalidOperationException("Closed-bundle history does not match the scanned physical bundle.");
+        }
+
+        using (var duplicateCmd = conn.CreateCommand())
+        {
+            duplicateCmd.Transaction = tx;
+            duplicateCmd.CommandText = """
+                SELECT
+                    (SELECT COUNT(*) FROM imports
+                     WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                       AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE) +
+                    (SELECT COUNT(*) FROM received_inventory
+                     WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                       AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE)
+                """;
+            duplicateCmd.Parameters.AddWithValue("$game_id", restoredBundle.GameId);
+            duplicateCmd.Parameters.AddWithValue("$bundle_id", restoredBundle.BundleId);
+            if (Convert.ToInt32(duplicateCmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                throw new InvalidOperationException("This physical bundle already exists in current inventory.");
+        }
+
+        var selectedClaims = new List<(int Serial, long SaleId)>();
+        using (var claimsCmd = conn.CreateCommand())
+        {
+            claimsCmd.Transaction = tx;
+            claimsCmd.CommandText = """
+                SELECT ticket_serial, sale_id
+                FROM sale_ticket_claims
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND ticket_serial BETWEEN $first_ticket AND $last_ticket
+                ORDER BY ticket_serial
+                """;
+            claimsCmd.Parameters.AddWithValue("$game_id", restoredBundle.GameId);
+            claimsCmd.Parameters.AddWithValue("$bundle_id", restoredBundle.BundleId);
+            claimsCmd.Parameters.AddWithValue("$first_ticket", scannedAvailableSerial);
+            claimsCmd.Parameters.AddWithValue("$last_ticket", recordedFinalSerial);
+            using var reader = claimsCmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.IsDBNull(1))
+                    throw new InvalidOperationException("A restored ticket has no ledger sale identity.");
+                selectedClaims.Add((reader.GetInt32(0), reader.GetInt64(1)));
+            }
+        }
+
+        var correctedRows = 0;
+        var replacementRows = 0;
+        var restoredTicketCount = 0;
+        if (selectedClaims.Count > 0)
+        {
+            using (var guardCmd = conn.CreateCommand())
+            {
+                guardCmd.Transaction = tx;
+                guardCmd.CommandText = "INSERT INTO ledger_mutation_guard (id, purpose) VALUES (1, 'closing_reverse')";
+                guardCmd.ExecuteNonQuery();
+            }
+
+            foreach (var saleGroup in selectedClaims.GroupBy(claim => claim.SaleId))
+            {
+                var sale = QuerySaleById(conn, tx, saleGroup.Key) ??
+                    throw new InvalidOperationException("A recovered ticket references a missing sale.");
+                if (!string.Equals(sale.GameId.Trim(), restoredBundle.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(sale.BundleId.Trim(), restoredBundle.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                    sale.Quantity <= 0)
+                {
+                    throw new InvalidOperationException("A recovered ticket references an invalid sale or different physical bundle.");
+                }
+                if (QueryCorrectionForSale(conn, tx, sale.Id) is not null)
+                    throw new InvalidOperationException($"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} was already corrected and cannot be recovered again.");
+
+                var allSerials = QueryClaimedSerialsForSale(conn, tx, sale.Id);
+                if (allSerials.Count != sale.Quantity ||
+                    allSerials.Count == 0 ||
+                    allSerials[^1] - allSerials[0] + 1 != allSerials.Count)
+                {
+                    throw new InvalidOperationException($"Sale {sale.Id.ToString(CultureInfo.InvariantCulture)} has incomplete ticket claims.");
+                }
+
+                var selectedSerials = saleGroup.Select(claim => claim.Serial).ToHashSet();
+                var remainingSerials = allSerials.Where(serial => !selectedSerials.Contains(serial)).ToList();
+                if (remainingSerials.Count > 0 &&
+                    (remainingSerials[^1] - remainingSerials[0] + 1 != remainingSerials.Count ||
+                     remainingSerials[^1] >= selectedSerials.Min()))
+                {
+                    throw new InvalidOperationException($"Recovery would split sale {sale.Id.ToString(CultureInfo.InvariantCulture)}.");
+                }
+
+                var correctionAmountCents = checked(currentPriceCents * sale.Quantity);
+                var undo = InsertSaleRow(
+                    conn,
+                    tx,
+                    new StoredSaleLine(
+                        occurredAtUtc,
+                        sale.GameId,
+                        sale.Bin,
+                        sale.Ticket,
+                        -sale.Quantity,
+                        -correctionAmountCents,
+                        "undo",
+                        sale.BundleId,
+                        IntervalId: intervalId,
+                        ActorId: actorId,
+                        ActorName: actorName,
+                        CorrectsSaleId: sale.Id));
+                using (var voidCmd = conn.CreateCommand())
+                {
+                    voidCmd.Transaction = tx;
+                    voidCmd.CommandText = """
+                        INSERT INTO sale_voids (
+                            sale_key, voided_at_utc, original_sale_id, correction_sale_id, actor_id)
+                        VALUES (
+                            $sale_key, $voided_at_utc, $original_sale_id, $correction_sale_id, $actor_id)
+                        """;
+                    voidCmd.Parameters.AddWithValue("$sale_key", $"closed-recovery:{sale.Id.ToString(CultureInfo.InvariantCulture)}");
+                    voidCmd.Parameters.AddWithValue("$voided_at_utc", occurredAtUtc.ToString("O", CultureInfo.InvariantCulture));
+                    voidCmd.Parameters.AddWithValue("$original_sale_id", sale.Id);
+                    voidCmd.Parameters.AddWithValue("$correction_sale_id", undo.Id);
+                    voidCmd.Parameters.AddWithValue("$actor_id", actorId);
+                    voidCmd.ExecuteNonQuery();
+                }
+
+                DeleteTicketClaims(conn, tx, restoredBundle.GameId, restoredBundle.BundleId, allSerials.ToHashSet());
+                restoredTicketCount = checked(restoredTicketCount + selectedSerials.Count);
+                correctedRows++;
+
+                if (remainingSerials.Count == 0)
+                    continue;
+
+                var width = SaleTicketSerialWidth(sale.Ticket);
+                var replacement = InsertSaleRow(
+                    conn,
+                    tx,
+                    new StoredSaleLine(
+                        occurredAtUtc,
+                        sale.GameId,
+                        sale.Bin,
+                        FormatSaleTicketRange(remainingSerials[0], remainingSerials[^1], width),
+                        remainingSerials.Count,
+                        checked(currentPriceCents * remainingSerials.Count),
+                        "normal_sale",
+                        sale.BundleId,
+                        IntervalId: intervalId,
+                        ActorId: actorId,
+                        ActorName: actorName));
+                ClaimSaleTickets(conn, tx, replacement);
+                replacementRows++;
+            }
+
+            using var clearGuardCmd = conn.CreateCommand();
+            clearGuardCmd.Transaction = tx;
+            clearGuardCmd.CommandText = "DELETE FROM ledger_mutation_guard WHERE id = 1";
+            clearGuardCmd.ExecuteNonQuery();
+        }
+
+        using (var importCmd = conn.CreateCommand())
+        {
+            importCmd.Transaction = tx;
+            importCmd.CommandText = """
+                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
+                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, 0, $created_at_utc)
+                """;
+            importCmd.Parameters.AddWithValue("$game_id", restoredBundle.GameId);
+            importCmd.Parameters.AddWithValue("$bundle_id", restoredBundle.BundleId);
+            importCmd.Parameters.AddWithValue("$ticket", restoredBundle.Ticket);
+            importCmd.Parameters.AddWithValue("$bin", restoredBundle.Bin);
+            importCmd.Parameters.AddWithValue("$source", restoredBundle.Source);
+            importCmd.Parameters.AddWithValue("$created_at_utc", occurredAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            importCmd.ExecuteNonQuery();
+        }
+
+        using (var historyCmd = conn.CreateCommand())
+        {
+            historyCmd.Transaction = tx;
+            historyCmd.CommandText = """
+                UPDATE closed_bundle_history
+                SET recovered_at_utc = $recovered_at_utc,
+                    recovered_interval_id = $recovered_interval_id,
+                    recovered_by_actor_id = $recovered_by_actor_id,
+                    recovered_ticket = $recovered_ticket
+                WHERE id = $id AND recovered_at_utc IS NULL
+                """;
+            historyCmd.Parameters.AddWithValue("$recovered_at_utc", occurredAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            historyCmd.Parameters.AddWithValue("$recovered_interval_id", intervalId);
+            historyCmd.Parameters.AddWithValue("$recovered_by_actor_id", actorId);
+            historyCmd.Parameters.AddWithValue("$recovered_ticket", restoredBundle.Ticket);
+            historyCmd.Parameters.AddWithValue("$id", closedBundleHistoryId);
+            if (historyCmd.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("Closed-bundle history changed before recovery could be committed.");
+        }
+
+        var adjustmentCents = checked(-(long)restoredTicketCount * currentPriceCents);
+        var auditRecord = new StoredAuditRecord(
+            occurredAtUtc,
+            "scanner",
+            "Closed bundle restored",
+            actorName,
+            $"Closing history {closedBundle.ClosingHistoryId.ToString(CultureInfo.InvariantCulture)}, game {restoredBundle.GameId}, bundle {restoredBundle.BundleId}, bin {restoredBundle.Bin}, scanned available {restoredBundle.Ticket}, recorded final {closedBundle.Ticket}, current game price {currentPriceCents.ToString(CultureInfo.InvariantCulture)} cents; restored claims {restoredTicketCount.ToString(CultureInfo.InvariantCulture)}, corrected rows {correctedRows.ToString(CultureInfo.InvariantCulture)}, replacement rows {replacementRows.ToString(CultureInfo.InvariantCulture)}, current-shift adjustment {adjustmentCents.ToString(CultureInfo.InvariantCulture)} cents",
+            actorId);
+        InsertAudit(conn, tx, auditRecord);
+
+        tx.Commit();
+        return new StoredBundleReconciliationResult(
+            QuerySales(conn),
+            QueryVoidedSaleKeys(conn),
+            QueryVoidedSaleIds(conn),
+            new List<StoredAuditRecord> { auditRecord });
+    }
+
     public StoredBundleReconciliationResult ReconcileBundleAfterBackwardScan(
         DateTime occurredAtUtc,
         long intervalId,
@@ -644,19 +947,39 @@ public sealed class LocalStore
         StoredClosingRecord closingRecord,
         StoredAuditRecord auditRecord,
         IEnumerable<StoredSaleLine> generatedSales,
-        IEnumerable<StoredImportLine> closedBundles,
+        IEnumerable<StoredClosedBundleLine> closedBundles,
         IEnumerable<StoredImportLine> currentBundles,
         IEnumerable<StoredImportLine> resolvedBundles,
         IEnumerable<StoredClosingReverseCorrection> reverseCorrections,
         StoredClosingReportRequest reportRequest)
     {
         var generated = new List<StoredSaleLine>(generatedSales);
-        var closed = new List<StoredImportLine>(closedBundles);
+        var closedStates = new List<StoredClosedBundleLine>(closedBundles);
+        var closed = closedStates.Select(state => state.Bundle).ToList();
         var current = new List<StoredImportLine>(currentBundles);
         var resolved = new List<StoredImportLine>(resolvedBundles);
         var reversals = new List<StoredClosingReverseCorrection>(reverseCorrections);
         if (reportRequest.Closing != closingRecord)
             throw new InvalidOperationException("Closing report request does not match the closing record.");
+        if (closedStates.Any(state =>
+                !state.Bundle.IsSoldOut ||
+                string.IsNullOrWhiteSpace(state.CloseReason)))
+        {
+            throw new InvalidOperationException("Every closed bundle must be sold out and have an exact close reason.");
+        }
+        var reportClosedKeys = reportRequest.ClosedBundles
+            .Select(bundle => NormalizeLedgerKey(bundle.GameId) + "|" + NormalizeLedgerKey(bundle.BundleId))
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+        var transactionClosedKeys = closed
+            .Select(bundle => NormalizeLedgerKey(bundle.GameId) + "|" + NormalizeLedgerKey(bundle.BundleId))
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+        if (!reportClosedKeys.SequenceEqual(transactionClosedKeys, StringComparer.Ordinal) ||
+            closingRecord.ClosedBundles != closed.Count)
+        {
+            throw new InvalidOperationException("Closing report closed bundles do not match the committed inventory changes.");
+        }
 
         using var conn = Open();
         using var tx = conn.BeginTransaction();
@@ -769,20 +1092,42 @@ public sealed class LocalStore
 
         InsertAudit(conn, tx, auditRecord);
 
-        foreach (var bundle in closed)
+        foreach (var closedState in closedStates)
         {
+            var bundle = closedState.Bundle;
+            using (var historyCmd = conn.CreateCommand())
+            {
+                historyCmd.Transaction = tx;
+                historyCmd.CommandText = """
+                    INSERT INTO closed_bundle_history (
+                        closing_history_id, closed_at_utc, game_id, bundle_id, ticket, bin, source, close_reason)
+                    VALUES (
+                        $closing_history_id, $closed_at_utc, $game_id, $bundle_id, $ticket, $bin, $source, $close_reason)
+                    """;
+                historyCmd.Parameters.AddWithValue("$closing_history_id", closingHistoryId);
+                historyCmd.Parameters.AddWithValue("$closed_at_utc", closedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+                historyCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
+                historyCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
+                historyCmd.Parameters.AddWithValue("$ticket", bundle.Ticket);
+                historyCmd.Parameters.AddWithValue("$bin", bundle.Bin);
+                historyCmd.Parameters.AddWithValue("$source", bundle.Source);
+                historyCmd.Parameters.AddWithValue("$close_reason", closedState.CloseReason);
+                historyCmd.ExecuteNonQuery();
+            }
+
             using var importCmd = conn.CreateCommand();
             importCmd.Transaction = tx;
             importCmd.CommandText = """
                 DELETE FROM imports
-                WHERE game_id = $game_id
-                  AND bundle_id = $bundle_id
-                  AND bin = $bin
+                WHERE trim(game_id) = trim($game_id) COLLATE NOCASE
+                  AND trim(bundle_id) = trim($bundle_id) COLLATE NOCASE
+                  AND trim(bin) = trim($bin) COLLATE NOCASE
                 """;
             importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
             importCmd.Parameters.AddWithValue("$bin", bundle.Bin);
-            importCmd.ExecuteNonQuery();
+            if (importCmd.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("A closed bundle placement changed before finalization could remove it.");
         }
 
         foreach (var bundle in current)
@@ -1996,6 +2341,29 @@ public sealed class LocalStore
             Exec(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_closing_history_business_shift ON closing_history(business_date, shift_sequence) WHERE business_date <> '' AND shift_sequence > 0");
             Exec(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_closing_history_interval ON closing_history(interval_id) WHERE interval_id IS NOT NULL");
             Exec(conn, """
+                CREATE TABLE IF NOT EXISTS closed_bundle_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    closing_history_id INTEGER NOT NULL,
+                    closed_at_utc TEXT NOT NULL,
+                    game_id TEXT NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    ticket TEXT NOT NULL,
+                    bin TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    close_reason TEXT NOT NULL,
+                    recovered_at_utc TEXT NULL,
+                    recovered_interval_id INTEGER NULL,
+                    recovered_by_actor_id TEXT NULL,
+                    recovered_ticket TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (closing_history_id) REFERENCES closing_history(id),
+                    FOREIGN KEY (recovered_interval_id) REFERENCES ledger_intervals(id),
+                    FOREIGN KEY (recovered_by_actor_id) REFERENCES actors(id),
+                    UNIQUE(closing_history_id, game_id, bundle_id)
+                )
+                """);
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closed_bundle_identity ON closed_bundle_history(game_id, bundle_id, recovered_at_utc)");
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_closed_bundle_closing ON closed_bundle_history(closing_history_id)");
+            Exec(conn, """
                 CREATE TABLE IF NOT EXISTS closing_report_outbox (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     business_date TEXT NOT NULL,
@@ -2072,7 +2440,7 @@ public sealed class LocalStore
                 EnsureLedgerRuntimeState(conn);
             DropLedgerIntegrityTriggers(conn);
             CreateLedgerIntegrityTriggers(conn);
-            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Allow audited open-interval Closing reversals while preserving closed ledger history");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Record closed bundles for exact reporting and future transactional recovery");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             SchemaReadyPaths.Add(fullDatabasePath);
         }
@@ -2469,6 +2837,28 @@ public sealed class LocalStore
                 SELECT RAISE(ABORT, 'Closing history is immutable');
             END
             """);
+        Exec(conn, """
+            CREATE TRIGGER IF NOT EXISTS trg_closed_bundle_history_identity_immutable
+            BEFORE UPDATE ON closed_bundle_history
+            WHEN OLD.closing_history_id IS NOT NEW.closing_history_id OR
+                 OLD.closed_at_utc IS NOT NEW.closed_at_utc OR
+                 OLD.game_id IS NOT NEW.game_id OR
+                 OLD.bundle_id IS NOT NEW.bundle_id OR
+                 OLD.ticket IS NOT NEW.ticket OR
+                 OLD.bin IS NOT NEW.bin OR
+                 OLD.source IS NOT NEW.source OR
+                 OLD.close_reason IS NOT NEW.close_reason
+            BEGIN
+                SELECT RAISE(ABORT, 'Closed bundle identity is immutable');
+            END
+            """);
+        Exec(conn, """
+            CREATE TRIGGER IF NOT EXISTS trg_closed_bundle_history_no_delete
+            BEFORE DELETE ON closed_bundle_history
+            BEGIN
+                SELECT RAISE(ABORT, 'Closed bundle history is immutable');
+            END
+            """);
     }
 
     private static void DropLedgerIntegrityTriggers(SqliteConnection conn)
@@ -2490,7 +2880,9 @@ public sealed class LocalStore
             "trg_closed_intervals_immutable",
             "trg_closed_intervals_no_delete",
             "trg_closing_history_append_only_update",
-            "trg_closing_history_append_only_delete"
+            "trg_closing_history_append_only_delete",
+            "trg_closed_bundle_history_identity_immutable",
+            "trg_closed_bundle_history_no_delete"
         };
         foreach (var triggerName in triggerNames)
             Exec(conn, $"DROP TRIGGER IF EXISTS {triggerName}");
@@ -3180,6 +3572,22 @@ public sealed class LocalStore
         return rows;
     }
 
+    private static StoredClosedBundleRecord ReadClosedBundleRecord(SqliteDataReader reader) =>
+        new(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            ReadDateTime(reader.GetString(2)),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.GetString(7),
+            reader.GetString(8),
+            reader.IsDBNull(9) ? null : ReadDateTime(reader.GetString(9)),
+            reader.IsDBNull(10) ? null : reader.GetInt64(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11),
+            reader.GetString(12));
+
     private static List<StoredActivationRecord> QueryActivations(SqliteConnection conn)
     {
         var rows = new List<StoredActivationRecord>();
@@ -3806,6 +4214,23 @@ public sealed record StoreSetup(
 
 public sealed record StoredImportLine(string GameId, string BundleId, string Ticket, string Bin, string Source, bool IsSoldOut = false);
 
+public sealed record StoredClosedBundleLine(StoredImportLine Bundle, string CloseReason);
+
+public sealed record StoredClosedBundleRecord(
+    long Id,
+    long ClosingHistoryId,
+    DateTime ClosedAtUtc,
+    string GameId,
+    string BundleId,
+    string Ticket,
+    string Bin,
+    string Source,
+    string CloseReason,
+    DateTime? RecoveredAtUtc,
+    long? RecoveredIntervalId,
+    string? RecoveredByActorId,
+    string RecoveredTicket);
+
 public sealed record StoredReceivedBundle(string GameId, string BundleId, DateTime ReceivedAtUtc, string Source = "receiving");
 
 public sealed record StoredActivationRecord(
@@ -3867,7 +4292,18 @@ public sealed record StoredClosingReportRequest(
     List<string> SelectedEmailAttachments,
     List<StoredAuditRecord>? AuditRecords = null,
     bool SendEmail = false,
-    List<long>? ConfiguredTicketPriceCents = null);
+    List<long>? ConfiguredTicketPriceCents = null,
+    List<StoredClosingAnomaly>? Anomalies = null);
+
+public sealed record StoredClosingAnomaly(
+    DateTime OccurredAtUtc,
+    string Kind,
+    string Title,
+    string RawScan,
+    string GameId,
+    string BundleId,
+    string Ticket,
+    string Detail);
 
 public sealed record StoredClosingReverseCorrection(
     string GameId,

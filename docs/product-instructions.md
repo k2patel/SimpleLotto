@@ -227,8 +227,9 @@ Bundle completion rules:
 - A staged Closing reversal requires no separate approval dialog or correction audio. When Closing finalizes, release the affected ticket claims and correct the attributable sale activity transactionally, retaining any unaffected prefix of a partially covered sale range. Write one immutable Audit record for the whole Game ID + Bundle ID + ticket range. If the original sale belongs to a prior closed interval, preserve that sale and append its void plus any retained-prefix replacement to the current open interval.
 - A sale can be voided once only. A normal Void Sale is a transactional physical undo and is allowed only for the latest contiguous sale at that bundle's ticket tail: append the auditable reversing ledger entry, release exactly that sale's ticket claims, restore the available-ticket cursor to the sale's first ticket, clear `Sold out`, and refresh Bins and Rdisplay together. Reject an older/out-of-order sale instead of moving the cursor across newer ticket claims. A second void of the same sale and a void of that correction are rejected.
 - Inventory `Open / Active` must let the operator click a bundle's displayed current ticket to edit the ticket that is physically available now. Saving a lower available ticket transactionally restores the inclusive range from the entered ticket through one less than the prior available ticket; for a sold-out bundle, restore through the configured final ticket and reopen it. Saving a higher available ticket records one gap-fill sale from the prior available ticket through one less than the entered ticket. The entered ticket itself remains available, an unchanged active value is a no-op, and values outside the configured bundle range are rejected without changing inventory or sales. Every saved change must update the ledger/claims, Audit, Bins, Inventory, Closing, and Rdisplay together.
-- A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift; retain that bin placement as grey `Sold out` after recording the closing gap-fill range.
-- Closing-generated sold-out handling must be recorded separately from normal scanned sales so reports can explain the difference.
+- A sold-out bundle remains assigned to its bin and grey only until the current shift is successfully closed. Finalizing Closing removes every sold-out placement from current bin/inventory state and retains its exact Game ID, Bundle ID, final ticket, former bin, source, close reason, and closing identity in structured history.
+- A bundle can also be treated as sold out during closing if it is expected but not scanned when the user finalizes the shift. Record its closing gap-fill range, then remove it with the other sold-out placements in the same closing transaction.
+- Closing-generated sold-out handling must be recorded separately from normal scanned sales so reports can explain the difference. `Closed bundles` means every sold-out placement removed by that close: bundles completed earlier in the shift plus bundles automatically completed at finalization.
 
 ## Required Main Menu
 
@@ -397,7 +398,7 @@ Inventory should organize stock and game setup into these tabs, in this order:
 
 The active/open bundle tab should be last. Operators should be able to review active and inactive inventory from the Inventory menu without confusing it with unopened receiving.
 
-Receiving contains unopened bundles that have not been activated into a bin. Once a received bundle is activated, it leaves receiving and becomes an open/active bin record. When all tickets in a bundle are sold, the bundle should no longer appear as an open/active inventory item; it remains as historical database/ledger activity for reporting and audit.
+Receiving contains unopened bundles that have not been activated into a bin. Once a received bundle is activated, it leaves receiving and becomes an open/active bin record. When all tickets in a bundle are sold, it remains grey in its bin for the rest of that shift. Successful Closing removes it from open/active inventory and retains it as historical database/ledger activity for reporting, audit, and eligible future recovery.
 
 Inventory list behavior:
 
@@ -409,6 +410,7 @@ Inventory list behavior:
 - Page size should be calculated from the visible list space so page counts grow or shrink with the window size; do not hard-code one fixed row count.
 - Paging controls must show the current page and total pages when known.
 - The Game Prices section must require a ticket price before a new game type can be used. It must show the hardcoded automatic bundle-total rule without asking the user to enter a bundle total.
+- The saved Game Prices row is the sole price authority for every bundle of that Game ID. A bundle, sale, or closed-bundle history record must not become an independent price source.
 - The Game Prices tab must include a control to view the selected game's currently cached image.
 - From the cached-image view, the user must be able to remove the cached image when it is wrong or no longer wanted. Removing the image should not remove the game ID, game name, ticket price, automatic bundle-total rule, or global ticket-numbering setup.
 
@@ -496,6 +498,9 @@ Closing scan rules:
 - Any tickets/bundles that are part of the system's active bin state but are not scanned during closing are closed out when the user finalizes closing.
 - Any active bundle expected during closing but not scanned is considered sold and should be recorded as gap-fill sold.
 - Unscanned active bundles do not require per-bundle manual input before final submit.
+- Finalization must split the effective closing state into active survivors and sold-out removals. Only active survivors remain in current bins after the transaction. Every sold-out removal is written to structured closed-bundle history and appears in that closing report's closed-bundle collection and count.
+- Reports and closings are immutable snapshots. Later bundle recovery may append current-interval corrections but must never regenerate, rewrite, or change an earlier closing record or its report artifacts.
+- Closing must retain anomaly evidence even after the clerk resolves or discards the working scan row. The immutable report snapshot must include the raw suspicious scanner value, classification/reason, parsed Game ID + Bundle ID + ticket when available, and every Game Information record created or price-changed during Closing.
 - If closing scan evidence includes a bundle that is not activated yet, the user must reconcile it manually before final submit.
 - Manual reconciliation for an unactivated bundle must require the user to choose which bin it belongs to.
 - If the selected bin is not empty, the system must ask what happens to the existing bundle before the new/unactivated bundle can be accepted for that bin.
@@ -519,7 +524,18 @@ Closing scan rules:
 - The sold-out fill created by closing must be distinguishable from ordinary scan sales in audit/reporting.
 - If a bundle reaches its automatically derived bundle total before closing, it is considered complete/sold out.
 - Closing should make unscanned-bundle sold-out consequences clear before final submit.
+- The final confirmation must state both the number of unscanned active bundles receiving an automatic gap-fill and the total sold-out bundles that will be cleared from current bins and retained in history.
 - Closing scan prompts should use real-time text-to-speech so the operator hears the next action immediately.
+
+Closed-bundle recovery rules:
+
+- Automatic recovery applies only to bundles recorded in structured closed-bundle history by a closing completed after this feature is installed. Do not infer or backfill recoverable identities from older reports or unstructured history.
+- A Dashboard scan whose exact Game ID + Bundle ID matches one unrecovered closed-bundle history record restores that bundle automatically. This verified historical identity bypasses the received-inventory and allowed-new-Game-ID admission policies; ordinary new bundles remain subject to those policies.
+- Restore the bundle to its recorded former bin with the scanned ticket available. If that bin is no longer configured, block recovery without changing inventory, sales, claims, or history. The operator may move the restored bundle manually afterward.
+- The scanned available ticket must fit the current Game-table range and cannot be later than the final ticket recorded at Closing. On success, speak `Bundle restored.`
+- Recovery releases claims from the scanned available ticket through the recorded final ticket and retains only any earlier sold prefix. For each affected historical sale, append a full negative correction and any retained-prefix replacement to the current open interval; preserve the original sale and prior closing report.
+- Both the correction and replacement use the currently saved Game Prices ticket price. Example: a historical `012-029` sale recorded at an incorrect `$5` price, a corrected current Game-table price of `$10`, and recovery scan `015` append `-18 / -$180` plus retained prefix `012-014 / +$30`, producing a current-shift net adjustment of `-15 / -$150` while the old closing remains unchanged.
+- Placement restoration, ledger corrections, ticket-claim rebuilding, recovery-history marking, and Audit insertion must commit in one transaction or leave no changes.
 
 Closing page bin status:
 
@@ -912,6 +928,8 @@ Expected closing/report artifacts should follow the `../windowsPOS` pattern unle
 Closing report folder rules:
 
 - Closing finalization must create an on-disk report folder for that specific close interval.
+- The report's `Closed bundles` value and closed-bundle detail rows must come from the same exact set of sold-out placements removed by that closing transaction. A non-empty removed set must never be reported as zero.
+- `anomalies.csv` must contain the immutable anomaly evidence captured during that Closing; it must not be an always-empty placeholder. `shift_summary.csv`, the text report, PDF report, and closing email body must show an anomaly count and a clear `Review anomalies.csv` warning when the count is nonzero. Existing completed reports remain immutable and are not regenerated by this rule.
 - Report folders must be named by local closing date plus that day's shift sequence, for example `2026-07-08_shift-001`, `2026-07-08_shift-002`.
 - The daily shift sequence is scoped to the local closing date. It is not a lifetime counter from first install.
 - The Closing history row for each close must provide an `Open Reports` action that opens that closing's stored report folder.

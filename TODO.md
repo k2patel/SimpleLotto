@@ -145,17 +145,25 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Void the latest tail sale and confirm the negative correction references the original sale ID, its exact physical ticket claims are released transactionally, the bundle cursor returns to the sale's first ticket, and a second void is rejected. Confirm an out-of-order void cannot release claims or move the cursor across a newer sale.
    - Attempt direct update/delete of a sale, ticket claim, activation event, closing-history row, and closed interval and confirm SQLite rejects it.
    - Seed duplicate historical ticket claims, malformed ranges, missing Bundle IDs, summary mismatches, and ambiguous legacy voids. Confirm no financial rows are deleted or rewritten, unresolved data is quarantined in `legacy_unresolved`, structured conflicts are stored, and matching Audit entries are visible after login.
-21. Verify manual bundle movement from Bins:
+21. Verify schema-v19 sold-out closing removal, reporting, and recovery:
+   - Complete one bundle before Closing so it remains grey, leave another active bundle unscanned so Closing automatically gap-fills it, and keep a third bundle active with valid scan evidence. Finalize and confirm the first two placements are removed from current bins/inventory, the third remains active, and the report says `Closed bundles: 2` with both exact Game ID + Bundle ID rows.
+   - Restart and confirm removed bundles remain absent from current inventory while their structured closing identities remain recoverable. Confirm a bundle closed before schema v19 is not automatically recovered.
+   - Enable received-inventory enforcement and a restrictive new-Game-ID starting-digit list. Scan an exact future closed-history identity and confirm recovery bypasses both admission checks, returns to its former bin, and says `Bundle restored.` Scan a different Bundle ID and confirm normal admission policy still applies.
+   - Remove the former bin from the configured range, scan the closed bundle, and confirm recovery is blocked with no inventory, ledger, claims, or history change.
+   - Record historical sale `012-029` at `$5`, close the bundle, correct the Game-table price to `$10`, then recover by scanning available ticket `015`. Confirm the old closing/report is unchanged, the current interval receives `-18 / -$180` and retained prefix `012-014 / +3 / +$30`, claims `015-029` are released, and the restored bundle is active at `015` in its former bin.
+   - Force a failure during recovery and confirm the negative correction, replacement, claims, placement, history recovery marker, and Audit row roll back together.
+   - During Closing, scan a suspicious ticket-shaped barcode for an unplaced Game ID such as `9004`, create that Game Information record during reconciliation, and finalize. Confirm `anomalies.csv` contains the exact raw scan plus parsed IDs and separate `unmatched_bundle_scan` and `game_created_during_closing` evidence. Confirm `shift_summary.csv`, `closing_report.txt`, `closing_report.pdf`, and the email body warn to review anomalies. Resolve or discard the working scan row before finalization and confirm its anomaly evidence remains in the report snapshot.
+22. Verify manual bundle movement from Bins:
    - Selecting a bin alone does not show `Move Bundle`; selecting one bundle card in Bin Details reveals and enables it.
    - `Move Bundle` shows the selected Game ID/Bundle ID, accepts only a whole configured destination bin, rejects the current bin, and provides `OK` and `Cancel`.
    - Cancelling changes nothing. Confirming changes only the active placement bin while preserving current ticket, sold-out state, sales, activation history, and close-interval history.
    - After a successful move, Bins, Inventory, Closing, Rdisplay, and Audit show the destination bin and the old-to-new movement.
-22. Verify the Settings Audit viewport and performance:
+23. Verify the Settings Audit viewport and performance:
    - Seed more than 200 audit rows and confirm startup loads only the latest 200 into UI memory while every row remains stored in SQLite.
    - Confirm the Audit list stays within one screen-height page, long detail text is ellipsized, and Previous/Next changes pages without creating an unbounded outer vertical scroll.
    - Record scanner and workflow audit events while another page is open and confirm the Audit page refresh is deferred until it is opened.
    - Select an Audit row and confirm its complete timestamp/category/user metadata and wrapped detail are readable and copyable in the bounded detail panel.
-23. Verify application-wide operator input safety:
+24. Verify application-wide operator input safety:
    - Paste or scan excessively large, malformed, non-finite, over-precision, and out-of-range values into Online Sale, Online Cashout, Instant Cashout, bin count, game price, scanner timeout, display port, burn-in interval, SMTP port, and move-bin fields. Confirm each value is rejected with the last valid value retained, calculated cards remain responsive, and no exception or partial save occurs.
    - Confirm every static and dialog-created numeric field accepts direct entry without showing increment/decrement spin buttons.
    - During activation, enter and scan bin `configured bin count + 1`. Confirm the dialog remains open, identifies the valid `1..configured bin count` range, and no placement, sale, or activation record is persisted.
@@ -163,14 +171,14 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Focus every empty text, password, and numeric-entry field that shows placeholder text. Confirm the placeholder disappears immediately before typing, returns after focus leaves, and never clears an actual typed or saved value. Repeat in dynamically created activation, add-bundle, Closing reconciliation, game setup, and price dialogs.
    - Send a raw and focused scanner value longer than the supported scan boundary. Confirm the entire scan is rejected once with a visible/audited reason and no retained prefix is processed as a ticket, bin, price, sale, or activation.
    - Repeat Closing finalization after each rejected value and confirm checked money arithmetic prevents a `Decimal`/integer overflow or first-attempt closing crash.
-24. Verify closing time, consolidated Settings audit, and Gmail delivery:
+25. Verify closing time, consolidated Settings audit, and Gmail delivery:
    - Open Finalize Closing, wait at least one minute, then confirm. Verify the closing record and every report period end use the successful confirmation time, not the dialog-open time.
    - Save Email settings once and confirm exactly one searchable `Email settings saved` Audit row is created for the whole button action. Repeat for scanner/display save, scanner pair, and scanner unpair.
    - Configure `smtp.gmail.com`, port `587`, a Gmail address, and its app password. Enter multiple recipients using commas, semicolons, and line breaks; confirm invalid addresses are rejected and duplicates are sent only once.
    - Send a test email and confirm Gmail SMTP acceptance is shown and audited. Also confirm the Manager guidance explains 2-Step Verification/app-password setup and the Clerk guidance says email failure never invalidates Closing.
    - Force DNS, authentication, missing-attachment, and SMTP rejection failures. Confirm each failure is visible, logged, audited without credentials, saved as `email_status.txt`, and shown in Closing history while the completed shift and generated reports remain valid.
    - Complete a Closing with a staged range reversal and confirm `closing_audit.csv` includes the immutable range-level reconciliation record. Confirm the report's period end matches the successful finalization timestamp.
-25. Verify SimpleLotto's Rdisplay sender against the existing WindowsPOS wire contract:
+26. Verify SimpleLotto's Rdisplay sender against the existing WindowsPOS wire contract:
    - Sell a non-final ticket and confirm only a targeted `serial_update` is sent to the display that owns that bin; no snapshot-wide `image_ready` events should be emitted and existing artwork must remain visible.
    - Sell the final valid ticket and confirm the bundle remains assigned and grey in SimpleLotto Bins while its Rdisplay tile is removed by a snapshot, leaving the display box empty.
    - Repeatedly connect/disconnect or split screens and confirm topology changes send snapshots without invalidating cached images or blacking an entire row.

@@ -81,6 +81,7 @@ public sealed partial class MainWindow : Window
     private readonly List<ClosingScanIssue> _closingScanIssues = new();
     private readonly List<ClosingScanSale> _closingScanSales = new();
     private readonly List<ClosingReverseCorrection> _closingReverseCorrections = new();
+    private readonly List<StoredClosingAnomaly> _closingAnomalies = new();
     private bool _closingScanCaptured;
     private readonly SpeechSynthesizer _speechSynthesizer = new();
     private readonly MediaPlayer _speechPlayer = new()
@@ -2179,6 +2180,15 @@ public sealed partial class MainWindow : Window
 
     private async Task PromptForActivationBinAsync(ImportTicket ticket)
     {
+        if (!TryFindRecoverableClosedBundle(ticket, out var closedBundle))
+            return;
+
+        if (closedBundle is not null)
+        {
+            await RestoreClosedBundleAsync(ticket, closedBundle);
+            return;
+        }
+
         var admissionFailure = NewBundleAdmissionFailureFor(ticket);
         if (RejectNewBundleAdmission(ticket, admissionFailure, "activation"))
             return;
@@ -2356,6 +2366,12 @@ public sealed partial class MainWindow : Window
     {
         if (!EnsureLicenseAllowsOperation("activating bundles"))
             return false;
+
+        if (!TryFindRecoverableClosedBundle(ticket, out var closedBundle))
+            return false;
+
+        if (closedBundle is not null)
+            return await RestoreClosedBundleAsync(ticket, closedBundle);
 
         if (!int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
             !IsConfiguredBin(binNumber))
@@ -3871,7 +3887,7 @@ public sealed partial class MainWindow : Window
                 _closingScanIssues.Count == 0 &&
                 _closingUnmatchedTickets.Count == 0 &&
                 TryBuildClosingSoldOutChanges(
-                    ClosingSoldOutBundles(),
+                    ClosingAutoSoldOutCandidates(),
                     DateTime.UtcNow,
                     out var projectedSales,
                     out _,
@@ -5927,6 +5943,139 @@ public sealed partial class MainWindow : Window
             string.Equals(i.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(i.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
 
+    private bool TryFindRecoverableClosedBundle(
+        ImportTicket ticket,
+        out StoredClosedBundleRecord? closedBundle)
+    {
+        try
+        {
+            closedBundle = _store.FindRecoverableClosedBundle(ticket.GameId, ticket.BundleId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(
+                $"Unable to check closed-bundle history for {ticket.GameId}/{ticket.BundleId}.",
+                ex);
+            closedBundle = null;
+            DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} could not be checked against closing history.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | history check failed";
+            StatusText.Text = "Bundle processing stopped because closing history could not be checked.";
+            _ = SpeakAsync("Bundle check failed.");
+            return false;
+        }
+    }
+
+    private async Task<bool> RestoreClosedBundleAsync(
+        ImportTicket ticket,
+        StoredClosedBundleRecord closedBundle)
+    {
+        if (!EnsureLicenseAllowsOperation("restoring closed bundles"))
+            return false;
+
+        try
+        {
+            ClearDashboardPendingScanPair();
+            if (!int.TryParse(closedBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
+                !IsConfiguredBin(binNumber))
+            {
+                DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} cannot be restored because former bin {closedBundle.Bin} is not configured.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | recovery blocked";
+                StatusText.Text = "Closed-bundle recovery requires its former bin to remain configured.";
+                TryRecordAudit(
+                    "scanner",
+                    "Closed bundle recovery blocked",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, closing history {closedBundle.ClosingHistoryId.ToString(CultureInfo.InvariantCulture)}, former bin {closedBundle.Bin} is not configured");
+                _ = SpeakAsync("Bundle recovery blocked.");
+                return false;
+            }
+
+            if (!HasCompleteGameSetup(ticket.GameId))
+            {
+                var setupSaved = await ShowActivationGameSetupDialogAsync(closedBundle.Bin, ticket);
+                if (!setupSaved || !HasCompleteGameSetup(ticket.GameId))
+                {
+                    DashboardScannerStatusText.Text = $"Game setup required for game {ticket.GameId}. Bundle was not restored.";
+                    DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | recovery blocked";
+                    StatusText.Text = "Closed-bundle recovery requires a valid Game-table price.";
+                    _ = SpeakAsync("Game setup required.");
+                    return false;
+                }
+            }
+
+            if (!TryGetBundleTicketRange(ticket.GameId, out var firstTicket, out var currentLastTicket, out var rangeError) ||
+                !TryParseTicketSerial(ticket.Ticket, out var scannedAvailableSerial) ||
+                !TryParseTicketSerial(closedBundle.Ticket, out var recordedFinalSerial) ||
+                scannedAvailableSerial < firstTicket ||
+                scannedAvailableSerial > currentLastTicket ||
+                scannedAvailableSerial > recordedFinalSerial)
+            {
+                var detail = string.IsNullOrWhiteSpace(rangeError)
+                    ? $"Scanned available ticket {ticket.Ticket} does not fit the recoverable range ending at {closedBundle.Ticket}."
+                    : rangeError;
+                DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} could not be restored.";
+                DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | invalid recovery ticket";
+                StatusText.Text = detail;
+                TryRecordAudit(
+                    "scanner",
+                    "Closed bundle recovery blocked",
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, closing history {closedBundle.ClosingHistoryId.ToString(CultureInfo.InvariantCulture)}, scanned {ticket.Ticket}, recorded final {closedBundle.Ticket}: {detail}");
+                _ = SpeakAsync("Verify game information.");
+                return false;
+            }
+
+            var currentPriceCents = GamePriceCents(ticket.GameId);
+            if (currentPriceCents <= 0)
+            {
+                StatusText.Text = "Closed-bundle recovery requires a valid Game-table price.";
+                _ = SpeakAsync("Game setup required.");
+                return false;
+            }
+
+            var width = Math.Max(TicketSerialWidth(ticket.Ticket), TicketSerialWidth(closedBundle.Ticket));
+            var restoredTicket = FormatTicketSerial(scannedAvailableSerial, width);
+            var restoredBundle = new ImportLine(
+                ticket.GameId,
+                ticket.BundleId,
+                restoredTicket,
+                closedBundle.Bin,
+                "closed_recovery",
+                IsSoldOut: false);
+            var result = _store.RestoreClosedBundle(
+                DateTime.UtcNow,
+                _openIntervalId,
+                _activeActorId,
+                _activeUserName,
+                closedBundle.Id,
+                ToStoredImportLine(restoredBundle),
+                scannedAvailableSerial,
+                recordedFinalSerial);
+
+            _imports.Insert(0, restoredBundle);
+            ApplyStoredSales(result.Sales, result.VoidedSaleKeys, result.VoidedSaleIds);
+            foreach (var auditRecord in result.AuditRecords)
+                AddAuditLogRowToUi(auditRecord);
+            CaptureOperationalResultAsClosingEvidence(ticket, restoredBundle);
+
+            DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} restored in bin {closedBundle.Bin}.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | Restored at {restoredTicket} | Bin {closedBundle.Bin}";
+            StatusText.Text = $"Bundle {ticket.BundleId} restored at available ticket {restoredTicket} in its former bin {closedBundle.Bin}.";
+            _ = SpeakAsync("Bundle restored.");
+            RefreshTotals();
+            RefreshOperationalPages();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Closed-bundle recovery failed.", ex);
+            DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} could not be restored.";
+            DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | recovery failed";
+            StatusText.Text = $"Unable to restore closed bundle: {ex.Message}";
+            _ = SpeakAsync("Bundle recovery failed.");
+            return false;
+        }
+    }
+
     private bool PhysicalBundleExists(string gameId, string bundleId) =>
         _imports.Any(bundle =>
             string.Equals(bundle.GameId, gameId, StringComparison.OrdinalIgnoreCase) &&
@@ -6892,6 +7041,7 @@ public sealed partial class MainWindow : Window
         _closingScanIssues.Clear();
         _closingScanSales.Clear();
         _closingReverseCorrections.Clear();
+        _closingAnomalies.Clear();
         _closingScanCaptured = false;
     }
 
@@ -6939,6 +7089,16 @@ public sealed partial class MainWindow : Window
                 var rejectionStatus = admissionFailure == NewBundleAdmissionFailure.GameIdStartingDigit
                     ? "Ignored; invalid Game ID"
                     : "Ignored; bundle not received";
+                AddClosingAnomaly(
+                    admissionFailure == NewBundleAdmissionFailure.GameIdStartingDigit
+                        ? "game_id_rejected"
+                        : "bundle_not_received",
+                    rejectionStatus,
+                    raw,
+                    admissionFailure == NewBundleAdmissionFailure.GameIdStartingDigit
+                        ? $"Game ID {ticket.GameId} did not match the configured allowed starting digits."
+                        : $"Game {ticket.GameId}, bundle {ticket.BundleId} was not present in received inventory.",
+                    ticket);
                 _closingScanRows.Insert(0, new ClosingScanRow(raw, rejectionStatus)
                 {
                     CountsAsTicket = false
@@ -6958,6 +7118,12 @@ public sealed partial class MainWindow : Window
                     _closingUnmatchedTickets.Add(ticket);
                 }
 
+                AddClosingAnomaly(
+                    "unmatched_bundle_scan",
+                    "Closing scan had no active bin",
+                    raw,
+                    $"Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket} had no active placement and required manual reconciliation.",
+                    ticket);
                 _closingScanRows.Insert(0, new ClosingScanRow(raw, "No active bin"));
                 TryRecordAudit(
                     "closing",
@@ -7143,6 +7309,11 @@ public sealed partial class MainWindow : Window
         {
             CountsAsTicket = false
         });
+        AddClosingAnomaly(
+            "unrecognized_scan",
+            "Unrecognized Closing scan",
+            raw,
+            "The raw scanner input was not recognized as a supported ticket or bin barcode.");
         TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
         statusText.Text = $"Scan was not recognized and was ignored: {raw}";
         _ = SpeakAsync("Scan again.");
@@ -7213,8 +7384,34 @@ public sealed partial class MainWindow : Window
                 string.Equals(sale.Source, "activation_gap_fill", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void AddClosingScanIssue(string raw, string title, string detail) =>
+    private void AddClosingScanIssue(string raw, string title, string detail)
+    {
         _closingScanIssues.Add(new ClosingScanIssue(raw, title, detail));
+        AddClosingAnomaly(
+            "closing_scan_issue",
+            title,
+            raw,
+            detail,
+            TryParseImportTicket(raw));
+    }
+
+    private void AddClosingAnomaly(
+        string kind,
+        string title,
+        string rawScan,
+        string detail,
+        ImportTicket? ticket = null)
+    {
+        _closingAnomalies.Add(new StoredClosingAnomaly(
+            DateTime.UtcNow,
+            kind,
+            title,
+            rawScan,
+            ticket?.GameId ?? string.Empty,
+            ticket?.BundleId ?? string.Empty,
+            ticket?.Ticket ?? string.Empty,
+            detail));
+    }
 
     private void ClearClosingRowsForBundle(ImportTicket ticket)
     {
@@ -7233,6 +7430,12 @@ public sealed partial class MainWindow : Window
 
     private void DiscardClosingScanError(ClosingScanRow row)
     {
+        AddClosingAnomaly(
+            "scan_discarded",
+            "Closing scan discarded",
+            row.Raw,
+            $"Operator discarded scan row with status: {row.Status}.",
+            TryParseImportTicket(row.Raw));
         _closingScanRows.Remove(row);
         _closingScanIssues.RemoveAll(issue =>
             string.Equals(issue.Raw, row.Raw, StringComparison.OrdinalIgnoreCase));
@@ -7266,6 +7469,12 @@ public sealed partial class MainWindow : Window
         ImportTicket ticket,
         string reason)
     {
+        AddClosingAnomaly(
+            "scan_discarded",
+            "Closing scan discarded",
+            ticket.Raw,
+            reason,
+            ticket);
         _closingScanIssues.RemoveAll(issue =>
             string.Equals(issue.Raw, ticket.Raw, StringComparison.OrdinalIgnoreCase));
         _closingUnmatchedTickets.RemoveAll(unmatched =>
@@ -7432,10 +7641,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var closedOutCount = ClosingSoldOutBundles().Count;
+        var autoSoldOutCount = ClosingAutoSoldOutCandidates().Count;
+        var alreadySoldOutCount = EffectiveClosingPlacements()
+            .Count(bundle => bundle.IsSoldOut);
+        var closedOutCount = checked(autoSoldOutCount + alreadySoldOutCount);
         ClosingExceptionText.Text = closedOutCount == 0
             ? "All scanned ticket evidence matched active bins. Closing state is ready to finalize."
-            : $"{closedOutCount.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(closedOutCount == 1 ? string.Empty : "s")} will be auto closed out as closing gap-fill sold when finalized.";
+            : $"{closedOutCount.ToString(CultureInfo.CurrentCulture)} sold-out bundle{(closedOutCount == 1 ? string.Empty : "s")} will be cleared from current bins when finalized; {autoSoldOutCount.ToString(CultureInfo.CurrentCulture)} require an automatic closing gap-fill sale.";
     }
 
     private string ClosingGameInformationIssueText(ClosingScanIssue issue)
@@ -7461,7 +7673,7 @@ public sealed partial class MainWindow : Window
             $"Scanned ticket {ticket.Ticket} is outside {rangeText}. Correct this game's ticket price.";
     }
 
-    private List<ImportLine> ClosingSoldOutBundles() =>
+    private List<ImportLine> ClosingAutoSoldOutCandidates() =>
         _imports
             .Where(i => !i.IsSoldOut && !_closingScannedBundleKeys.Contains(BundleKey(i)))
             .GroupBy(i => BundleKey(i), StringComparer.OrdinalIgnoreCase)
@@ -8010,6 +8222,14 @@ public sealed partial class MainWindow : Window
             };
         if (UpsertManualGameRecord(record))
         {
+            AddClosingAnomaly(
+                existingGame is null ? "game_created_during_closing" : "game_price_changed_during_closing",
+                existingGame is null ? "Game created during Closing" : "Game price changed during Closing",
+                ticket.Raw,
+                existingGame is null
+                    ? $"Closing created Game {ticket.GameId} at ticket price {MoneyText(priceCents)} and automatic bundle total {MoneyText(bundlePriceCents)}. Manager review is recommended."
+                    : $"Closing changed Game {ticket.GameId} ticket price from {MoneyText(existingGame.PriceCents)} to {MoneyText(priceCents)}; automatic bundle total is {MoneyText(bundlePriceCents)}.",
+                ticket);
             error = string.Empty;
             return true;
         }
@@ -8229,13 +8449,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var unscannedSoldOutBundles = ClosingSoldOutBundles();
+        var autoSoldOutCandidates = ClosingAutoSoldOutCandidates();
         var closingPreviewAtUtc = DateTime.UtcNow;
         if (!TryBuildClosingSoldOutChanges(
-                unscannedSoldOutBundles,
+                autoSoldOutCandidates,
                 closingPreviewAtUtc,
                 out var soldOutSales,
-                out var soldOutPlacements,
+                out var autoSoldOutPlacements,
                 out var configurationError))
         {
             ClosingStatusText.Text = $"Closing blocked: {configurationError}";
@@ -8245,11 +8465,32 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var currentBundlesForClosing = _closingCurrentPlacements
-            .Concat(soldOutPlacements)
+        var finalPlacements = EffectiveClosingPlacements()
+            .Concat(autoSoldOutPlacements)
             .GroupBy(BundleKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
             .ToList();
+        var resolvedBundleKeys = _closingResolvedPlacements
+            .Select(BundleKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var closedBundlesForClosing = finalPlacements
+            .Where(bundle => bundle.IsSoldOut)
+            .ToList();
+        var currentBundlesForClosing = finalPlacements
+            .Where(bundle => !bundle.IsSoldOut && !resolvedBundleKeys.Contains(BundleKey(bundle)))
+            .ToList();
+        var resolvedBundlesForClosing = finalPlacements
+            .Where(bundle => !bundle.IsSoldOut && resolvedBundleKeys.Contains(BundleKey(bundle)))
+            .ToList();
+        var autoSoldOutKeys = autoSoldOutPlacements
+            .Select(BundleKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var activeBinCount = finalPlacements
+            .Where(bundle => !bundle.IsSoldOut)
+            .Select(bundle => bundle.Bin)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count(bin => int.TryParse(bin, NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
+                          IsConfiguredBin(number));
         if (!TryProjectClosingReverseCorrections(_sales, out var currentSalesAfterReversals, out var reverseError))
         {
             ClosingStatusText.Text = $"Closing blocked: {reverseError}";
@@ -8289,7 +8530,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Finalize shift closing?",
-            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {unscannedSoldOutBundles.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(unscannedSoldOutBundles.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. Sold-out bundles remain assigned and grey in Bins, while their Rdisplay tiles become empty.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
+            Content = $"{_closingScannedBins.Count.ToString(CultureInfo.CurrentCulture)} bin{(_closingScannedBins.Count == 1 ? string.Empty : "s")} scanned. {autoSoldOutCandidates.Count.ToString(CultureInfo.CurrentCulture)} unscanned active bundle{(autoSoldOutCandidates.Count == 1 ? string.Empty : "s")} will be marked sold out with a closing gap-fill sale. {closedBundlesForClosing.Count.ToString(CultureInfo.CurrentCulture)} sold-out bundle{(closedBundlesForClosing.Count == 1 ? string.Empty : "s")} will be cleared from current bins and retained in closing history.{Environment.NewLine}Closing anomalies recorded: {_closingAnomalies.Count.ToString(CultureInfo.CurrentCulture)}{(_closingAnomalies.Count == 0 ? string.Empty : " — review anomalies.csv")}.{Environment.NewLine}Bundles activated this shift: {activatedBundles.ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}{Environment.NewLine}Instant ticket sales: {MoneyText(instantTicketSalesCents)}{Environment.NewLine}Online sale: {MoneyText(onlineSaleCents)}{Environment.NewLine}Instant cashout: {MoneyText(instantCashoutCents)}{Environment.NewLine}Online cashout: {MoneyText(onlineCashoutCents)}{Environment.NewLine}Expected cash: {MoneyText(expectedCashCents)}{Environment.NewLine}{Environment.NewLine}{closingEmailSummary}",
             PrimaryButtonText = "Finalize Closing",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
@@ -8344,7 +8585,7 @@ public sealed partial class MainWindow : Window
             reportTarget.ShiftLabel,
             reportTarget.Folder,
             _closingScannedBins.Count,
-            ActiveClosingBinCount(),
+            activeBinCount,
             currentSalesAfterReversals.Count + generatedSales.Count,
             currentSalesAfterReversals.Sum(s => s.Quantity) + generatedSales.Sum(s => s.Quantity),
             instantTicketSalesCents,
@@ -8352,31 +8593,39 @@ public sealed partial class MainWindow : Window
             onlineCashoutCents,
             instantCashoutCents,
             expectedCashCents,
-            unscannedSoldOutBundles.Count,
+            closedBundlesForClosing.Count,
             currentBundlesForClosing.Count,
-            _closingResolvedPlacements.Count,
+            resolvedBundlesForClosing.Count,
             activatedBundles,
             _openIntervalId,
             _activeActorId,
             _activeUserName);
-        var storedCurrentBundles = currentBundlesForClosing
-            .Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut))
+        var storedClosedBundles = closedBundlesForClosing
+            .Select(bundle => new StoredClosedBundleLine(
+                ToStoredImportLine(bundle),
+                autoSoldOutKeys.Contains(BundleKey(bundle))
+                    ? "auto_sold_out_at_close"
+                    : "sold_out_before_close"))
             .ToList();
-        var storedResolvedBundles = _closingResolvedPlacements
-            .Select(i => new StoredImportLine(i.GameId, i.BundleId, i.Ticket, i.Bin, i.Source, i.IsSoldOut))
+        var storedCurrentBundles = currentBundlesForClosing
+            .Select(ToStoredImportLine)
+            .ToList();
+        var storedResolvedBundles = resolvedBundlesForClosing
+            .Select(ToStoredImportLine)
             .ToList();
         var reportRequest = new StoredClosingReportRequest(
             closingRecord,
             reportSales.Select(ToStoredSaleLine).ToList(),
-            new List<StoredImportLine>(),
+            storedClosedBundles.Select(state => state.Bundle).ToList(),
             storedCurrentBundles,
             storedResolvedBundles,
             selectedEmailAttachments.ToList(),
-            SendEmail: _savedSendClosingEmail);
+            SendEmail: _savedSendClosingEmail,
+            Anomalies: _closingAnomalies.ToList());
         var auditRecord = NewAuditRecord(
             "closing",
             "Shift closed",
-            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {unscannedSoldOutBundles.Count.ToString(CultureInfo.InvariantCulture)} closing-sold-out bundles, {_closingResolvedPlacements.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
+            $"{_closingScannedBins.Count.ToString(CultureInfo.InvariantCulture)} scanned bins, {closedBundlesForClosing.Count.ToString(CultureInfo.InvariantCulture)} closed bundles ({autoSoldOutCandidates.Count.ToString(CultureInfo.InvariantCulture)} automatic closing gap-fills), {resolvedBundlesForClosing.Count.ToString(CultureInfo.InvariantCulture)} resolved bundles, {activatedBundles.ToString(CultureInfo.InvariantCulture)} activated bundles, expected cash {MoneyText(expectedCashCents)}");
         CompleteClosingResult closingResult;
         try
         {
@@ -8385,7 +8634,7 @@ public sealed partial class MainWindow : Window
                 closingRecord,
                 auditRecord,
                 generatedSales.Select(ToStoredSaleLine),
-                Array.Empty<StoredImportLine>(),
+                storedClosedBundles,
                 storedCurrentBundles,
                 storedResolvedBundles,
                 _closingReverseCorrections.Select(correction => new StoredClosingReverseCorrection(
@@ -8408,11 +8657,24 @@ public sealed partial class MainWindow : Window
 
         _lastCloseUtc = closedAtUtc;
         _openIntervalId = closingResult.OpenIntervalId;
+        foreach (var placement in closedBundlesForClosing)
+        {
+            var existing = _imports.FirstOrDefault(bundle =>
+                string.Equals(bundle.GameId, placement.GameId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(bundle.BundleId, placement.BundleId, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+                _imports.Remove(existing);
+        }
         foreach (var placement in currentBundlesForClosing)
             ReplaceImportLine(placement);
-        foreach (var placement in _closingResolvedPlacements)
+        foreach (var placement in resolvedBundlesForClosing)
         {
-            _imports.Add(placement);
+            if (!_imports.Any(bundle =>
+                    string.Equals(bundle.GameId, placement.GameId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(bundle.BundleId, placement.BundleId, StringComparison.OrdinalIgnoreCase)))
+            {
+                _imports.Add(placement);
+            }
             var received = _receivedBundles.FirstOrDefault(bundle =>
                 string.Equals(bundle.GameId, placement.GameId, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(bundle.BundleId, placement.BundleId, StringComparison.OrdinalIgnoreCase));
@@ -8566,6 +8828,7 @@ public sealed partial class MainWindow : Window
             closing.ExpectedCashCents,
             closing.ActivatedBundles,
             request.AuditRecords ?? new List<StoredAuditRecord>(),
+            request.Anomalies ?? new List<StoredClosingAnomaly>(),
             request.SelectedEmailAttachments,
             closing.ScannedBins,
             closing.ActiveBins,
@@ -8593,6 +8856,7 @@ public sealed partial class MainWindow : Window
         long expectedCashCents,
         int activatedBundleCount,
         IReadOnlyList<StoredAuditRecord> auditRecords,
+        IReadOnlyList<StoredClosingAnomaly> anomalies,
         IReadOnlyList<string> selectedEmailAttachments,
         int scannedBinCount,
         int activeBinCount,
@@ -8612,8 +8876,8 @@ public sealed partial class MainWindow : Window
             Path.Combine(target.Folder, "shift_summary.csv"),
             new[]
             {
-                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles", "activated_bundles", "interval_id", "closed_by_actor_id", "closed_by_actor"),
-                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, scannedBinCount.ToString(CultureInfo.InvariantCulture), activeBinCount.ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture), intervalId.ToString(CultureInfo.InvariantCulture), closedByActorId, closedByActorName)
+                CsvLine("shift_label", "period_start", "period_end", "instant_ticket_sales", "online_sale", "instant_cashout", "online_cashout", "expected_cash", "expected_cash_formula", "scanned_bins", "active_bins", "closed_bundles", "current_bundles", "resolved_bundles", "activated_bundles", "anomaly_events", "anomaly_warning", "interval_id", "closed_by_actor_id", "closed_by_actor"),
+                CsvLine(target.ShiftLabel, periodStart, periodEnd, MoneyCsv(instantTicketSalesCents), MoneyCsv(onlineSaleCents), MoneyCsv(instantCashoutCents), MoneyCsv(onlineCashoutCents), MoneyCsv(expectedCashCents), formula, scannedBinCount.ToString(CultureInfo.InvariantCulture), activeBinCount.ToString(CultureInfo.InvariantCulture), closedBundles.Count.ToString(CultureInfo.InvariantCulture), currentBundles.Count.ToString(CultureInfo.InvariantCulture), resolvedBundles.Count.ToString(CultureInfo.InvariantCulture), activatedBundleCount.ToString(CultureInfo.InvariantCulture), anomalies.Count.ToString(CultureInfo.InvariantCulture), anomalies.Count == 0 ? string.Empty : "Review anomalies.csv", intervalId.ToString(CultureInfo.InvariantCulture), closedByActorId, closedByActorName)
             },
             Encoding.UTF8);
 
@@ -8624,7 +8888,7 @@ public sealed partial class MainWindow : Window
         WriteInventoryCsv(Path.Combine(target.Folder, "inventory.csv"), closedBundles, currentBundles, resolvedBundles);
         WritePlacementEventsCsv(Path.Combine(target.Folder, "placement_events.csv"), closedBundles, currentBundles, resolvedBundles);
         WriteBinAssignmentsCsv(Path.Combine(target.Folder, "bin_assignments.csv"), currentBundles, resolvedBundles);
-        WriteAnomaliesCsv(Path.Combine(target.Folder, "anomalies.csv"));
+        WriteAnomaliesCsv(Path.Combine(target.Folder, "anomalies.csv"), anomalies);
         WriteEmailAttachmentsCsv(Path.Combine(target.Folder, "email_attachments.csv"), selectedEmailAttachments);
         File.WriteAllLines(
             Path.Combine(target.Folder, "initialization.csv"),
@@ -8651,7 +8915,7 @@ public sealed partial class MainWindow : Window
             Encoding.UTF8);
         File.WriteAllText(
             Path.Combine(target.Folder, "closing_report.txt"),
-            BuildClosingReportText(target, periodStart, periodEnd, sales, instantTicketSalesCents, onlineSaleCents, onlineCashoutCents, instantCashoutCents, expectedCashCents, closedBundles.Count, currentBundles.Count, resolvedBundles.Count, activatedBundleCount),
+            BuildClosingReportText(target, periodStart, periodEnd, sales, instantTicketSalesCents, onlineSaleCents, onlineCashoutCents, instantCashoutCents, expectedCashCents, closedBundles.Count, currentBundles.Count, resolvedBundles.Count, activatedBundleCount, anomalies.Count),
             Encoding.UTF8);
         WriteClosingPdfReport(
             Path.Combine(target.Folder, "closing_report.pdf"),
@@ -8668,6 +8932,7 @@ public sealed partial class MainWindow : Window
             currentBundles.Count,
             resolvedBundles.Count,
             activatedBundleCount,
+            anomalies.Count,
             configuredTicketPriceCents);
     }
 
@@ -8791,7 +9056,12 @@ public sealed partial class MainWindow : Window
             $"Online sale: {MoneyText(closing.OnlineSaleCents)}{Environment.NewLine}" +
             $"Instant cashout: {MoneyText(closing.InstantCashoutCents)}{Environment.NewLine}" +
             $"Online cashout: {MoneyText(closing.OnlineCashoutCents)}{Environment.NewLine}" +
-            $"Expected cash: {MoneyText(closing.ExpectedCashCents)}{Environment.NewLine}{Environment.NewLine}" +
+            $"Expected cash: {MoneyText(closing.ExpectedCashCents)}{Environment.NewLine}" +
+            $"Closing anomaly events: {(request.Anomalies?.Count ?? 0).ToString(CultureInfo.CurrentCulture)}{Environment.NewLine}" +
+            ((request.Anomalies?.Count ?? 0) > 0
+                ? $"WARNING: Review anomalies.csv for raw suspicious scans and Closing-time Game Information changes.{Environment.NewLine}"
+                : string.Empty) +
+            Environment.NewLine +
             $"Attached reports: {string.Join(", ", request.SelectedEmailAttachments)}";
         var result = await _email.SendAsync(
             configuration,
@@ -8847,6 +9117,7 @@ public sealed partial class MainWindow : Window
         int currentBundleCount,
         int resolvedBundleCount,
         int activatedBundleCount,
+        int anomalyCount,
         IReadOnlyList<long>? configuredTicketPriceCents)
     {
         var pdf = new SimplePdfDocument();
@@ -8864,6 +9135,7 @@ public sealed partial class MainWindow : Window
             currentBundleCount,
             resolvedBundleCount,
             activatedBundleCount,
+            anomalyCount,
             configuredTicketPriceCents));
         pdf.Save(path);
     }
@@ -8882,6 +9154,7 @@ public sealed partial class MainWindow : Window
         int currentBundleCount,
         int resolvedBundleCount,
         int activatedBundleCount,
+        int anomalyCount,
         IReadOnlyList<long>? configuredTicketPriceCents)
     {
         var builder = new StringBuilder();
@@ -8897,6 +9170,19 @@ public sealed partial class MainWindow : Window
         PdfText(builder, 380, 750, "SimpleLotto closing report", "F1", 9, 0.82, 0.9, 1);
 
         PdfText(builder, 42, 724, $"Period: {periodStart} to {periodEnd}", "F1", 9, 0.18, 0.24, 0.32);
+        if (anomalyCount > 0)
+        {
+            PdfText(
+                builder,
+                42,
+                708,
+                $"WARNING: {anomalyCount.ToString(CultureInfo.InvariantCulture)} closing anomaly event{(anomalyCount == 1 ? string.Empty : "s")} - review anomalies.csv",
+                "F2",
+                9,
+                0.68,
+                0.16,
+                0.12);
+        }
 
         PdfMetricCard(builder, 42, 664, 118, "Instant sales", PdfMoney(instantTicketSalesCents), 0.90, 0.96, 0.90);
         PdfMetricCard(builder, 166, 664, 118, "Online sale", PdfMoney(onlineSaleCents), 0.90, 0.94, 1.0);
@@ -9139,7 +9425,7 @@ public sealed partial class MainWindow : Window
         {
             CsvLine("category", "game_id", "bundle_id", "ticket", "bin", "source")
         };
-        lines.AddRange(closedBundles.Select(i => ImportCsvLine("closing_gap_fill_sold", i)));
+        lines.AddRange(closedBundles.Select(i => ImportCsvLine("closed_at_shift_close", i)));
         lines.AddRange(currentBundles.Select(i => ImportCsvLine("current_after_close", i)));
         lines.AddRange(resolvedBundles.Select(i => ImportCsvLine("resolved_during_close", i)));
         File.WriteAllLines(path, lines, Encoding.UTF8);
@@ -9175,12 +9461,23 @@ public sealed partial class MainWindow : Window
         File.WriteAllLines(path, lines, Encoding.UTF8);
     }
 
-    private static void WriteAnomaliesCsv(string path)
+    private static void WriteAnomaliesCsv(
+        string path,
+        IReadOnlyList<StoredClosingAnomaly> anomalies)
     {
         var lines = new List<string>
         {
-            CsvLine("title", "detail")
+            CsvLine("occurred_at_utc", "kind", "title", "raw_scan", "game_id", "bundle_id", "ticket", "detail")
         };
+        lines.AddRange(anomalies.Select(anomaly => CsvLine(
+            anomaly.OccurredAtUtc.ToString("O", CultureInfo.InvariantCulture),
+            anomaly.Kind,
+            anomaly.Title,
+            anomaly.RawScan,
+            anomaly.GameId,
+            anomaly.BundleId,
+            anomaly.Ticket,
+            anomaly.Detail)));
         File.WriteAllLines(path, lines, Encoding.UTF8);
     }
 
@@ -9211,7 +9508,8 @@ public sealed partial class MainWindow : Window
         int closedBundleCount,
         int currentBundleCount,
         int resolvedBundleCount,
-        int activatedBundleCount)
+        int activatedBundleCount,
+        int anomalyCount)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"Closing report: {target.ShiftLabel}");
@@ -9229,6 +9527,9 @@ public sealed partial class MainWindow : Window
         builder.AppendLine($"Current bundles: {currentBundleCount.ToString(CultureInfo.CurrentCulture)}");
         builder.AppendLine($"Resolved bundles: {resolvedBundleCount.ToString(CultureInfo.CurrentCulture)}");
         builder.AppendLine($"Activated bundles: {activatedBundleCount.ToString(CultureInfo.CurrentCulture)}");
+        builder.AppendLine($"Closing anomaly events: {anomalyCount.ToString(CultureInfo.CurrentCulture)}");
+        if (anomalyCount > 0)
+            builder.AppendLine("WARNING: Review anomalies.csv for raw suspicious scans and Closing-time Game Information changes.");
         return builder.ToString();
     }
 
@@ -11142,6 +11443,7 @@ public sealed partial class MainWindow : Window
         {
             "activation" => "Activation",
             "initial_import" => "Opening import",
+            "closed_recovery" => "Closed recovery",
             _ => "Placement"
         };
 
