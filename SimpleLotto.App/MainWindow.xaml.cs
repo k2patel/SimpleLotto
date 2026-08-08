@@ -583,7 +583,33 @@ public sealed partial class MainWindow : Window
 
         _imports.Clear();
         foreach (var line in state.Imports)
-            _imports.Add(new ImportLine(line.GameId, line.BundleId, line.Ticket, line.Bin, line.Source, line.IsSoldOut));
+        {
+            var normalizedTicket = TicketSerialFormatter.NormalizeSingle(line.Ticket);
+            if (!string.Equals(normalizedTicket, line.Ticket, StringComparison.Ordinal))
+            {
+                try
+                {
+                    _store.UpdateImportState(line with { Ticket = normalizedTicket });
+                    AppLog.Info(
+                        $"Normalized active ticket display for game {line.GameId}, bundle {line.BundleId}, bin {line.Bin} from {line.Ticket} to {normalizedTicket}.");
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error(
+                        $"Unable to normalize active ticket display for game {line.GameId}, bundle {line.BundleId}, bin {line.Bin}.",
+                        ex);
+                    normalizedTicket = line.Ticket;
+                }
+            }
+
+            _imports.Add(new ImportLine(
+                line.GameId,
+                line.BundleId,
+                normalizedTicket,
+                line.Bin,
+                line.Source,
+                line.IsSoldOut));
+        }
 
         _receivedBundles.Clear();
         foreach (var bundle in state.ReceivedBundles)
@@ -9422,10 +9448,10 @@ public sealed partial class MainWindow : Window
     }
 
     private static int TicketSerialWidth(string ticket) =>
-        DigitsOnly(ticket).Length;
+        TicketSerialFormatter.GetWidth(ticket);
 
     private static string FormatTicketSerial(int serial, int width) =>
-        serial.ToString("D" + Math.Max(1, width).ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+        TicketSerialFormatter.Format(serial, width);
 
     private static string BundleKey(ImportLine line) =>
         BundleKey(line.GameId, line.BundleId);

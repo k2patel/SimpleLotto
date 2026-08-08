@@ -191,6 +191,7 @@ Ticket barcode parsing:
 - Barcode parsing must use the configured store/state layout strictly; do not guess another state layout after a configured layout fails.
 - Parsed ticket identity must separate game code, bundle/pack number, and ticket serial.
 - Physical bundle identity is `game code + bundle/pack number`; ticket serial identifies the current ticket within that physical bundle.
+- Ticket serials use a minimum three-digit display. Determine a sale range's width from each endpoint rather than the combined range text, and normalize accidental excess leading zeros on active bundle cursors without changing the numeric ticket identity, ticket claims, quantities, or amounts.
 - Physical bundle identity is globally unique in current inventory. The same Game ID + Bundle ID must never appear more than once, even when multiple different bundles are allowed in the same bin.
 - Duplicate bundle scans during initial import or receiving must speak `Duplicate` and must not add, move, sell, activate, audit, or otherwise change the bundle.
 - Storage must enforce physical-bundle uniqueness in addition to UI scan checks. If legacy data contains duplicate active rows, migration must keep the most recently recorded placement, remove the older duplicate rows, and write a system audit entry without changing sales or activation history.

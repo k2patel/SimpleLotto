@@ -1486,18 +1486,13 @@ public sealed class LocalStore
         }
     }
 
-    private static int SaleTicketSerialWidth(string ticket)
-    {
-        var width = 1;
-        foreach (var part in (ticket ?? string.Empty).Split('-', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            width = Math.Max(width, part.Count(char.IsAsciiDigit));
-        return width;
-    }
+    private static int SaleTicketSerialWidth(string ticket) =>
+        TicketSerialFormatter.GetWidth(ticket);
 
     private static string FormatSaleTicketRange(int first, int last, int width)
     {
-        var firstText = first.ToString($"D{Math.Max(1, width).ToString(CultureInfo.InvariantCulture)}", CultureInfo.InvariantCulture);
-        var lastText = last.ToString($"D{Math.Max(1, width).ToString(CultureInfo.InvariantCulture)}", CultureInfo.InvariantCulture);
+        var firstText = TicketSerialFormatter.Format(first, width);
+        var lastText = TicketSerialFormatter.Format(last, width);
         return first == last ? firstText : $"{firstText}-{lastText}";
     }
 
