@@ -120,6 +120,8 @@ public sealed partial class MainWindow : Window
     private int _configuredBinCount = 90;
     private int _globalFirstTicketSerial;
     private int _scanPairTimeoutSeconds = 5;
+    private bool _requireReceivedInventoryForActivation = true;
+    private readonly HashSet<char> _allowedGameIdStartingDigits = new();
     private bool _displayBurnInEnabled = true;
     private int _displayBurnInIntervalMinutes = 15;
     private bool _savedSendClosingEmail;
@@ -190,6 +192,8 @@ public sealed partial class MainWindow : Window
     private const string ScannerPidSettingKey = "barcode_scanner_pid";
     private const string ScannerSerialSettingKey = "barcode_scanner_serial";
     private const string ScanPairTimeoutSettingKey = "scan_pair_timeout_seconds";
+    private const string RequireReceivedInventoryForActivationSettingKey = "require_received_inventory_for_activation";
+    private const string AllowedGameIdStartingDigitsSettingKey = "allowed_game_id_start_digits";
     private const string DisplayBurnInEnabledSettingKey = "display_burn_in_enabled";
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
     private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
@@ -512,6 +516,20 @@ public sealed partial class MainWindow : Window
                 .Select(group => group.Key)
                 .FirstOrDefault();
         _scanPairTimeoutSeconds = Math.Clamp(ReadIntSetting(state, ScanPairTimeoutSettingKey, 5), 1, 30);
+        _requireReceivedInventoryForActivation = ReadBoolSetting(
+            state,
+            RequireReceivedInventoryForActivationSettingKey,
+            true);
+        _allowedGameIdStartingDigits.Clear();
+        if (TryParseAllowedGameIdStartingDigits(
+                ReadSetting(state, AllowedGameIdStartingDigitsSettingKey),
+                out var allowedStartingDigits,
+                out _,
+                out _))
+        {
+            foreach (var digit in allowedStartingDigits)
+                _allowedGameIdStartingDigits.Add(digit);
+        }
         _displayBurnInEnabled = ReadBoolSetting(state, DisplayBurnInEnabledSettingKey, true);
         _displayBurnInIntervalMinutes = Math.Clamp(ReadIntSetting(state, DisplayBurnInIntervalSettingKey, 15), 1, 1440);
         _scannerVid = ReadSetting(state, ScannerVidSettingKey);
@@ -535,6 +553,8 @@ public sealed partial class MainWindow : Window
         BinCountBox.Value = _configuredBinCount;
         GlobalFirstTicketEditComboBox.SelectedIndex = _globalFirstTicketSerial;
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        RequireReceivedInventoryForActivationCheckBox.IsChecked = _requireReceivedInventoryForActivation;
+        AllowedGameIdStartingDigitsBox.Text = FormatAllowedGameIdStartingDigits();
         DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
         _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
@@ -2133,6 +2153,10 @@ public sealed partial class MainWindow : Window
 
     private async Task PromptForActivationBinAsync(ImportTicket ticket)
     {
+        var admissionFailure = NewBundleAdmissionFailureFor(ticket);
+        if (RejectNewBundleAdmission(ticket, admissionFailure, "activation"))
+            return;
+
         ClearDashboardPendingScanPair();
         DashboardScannerStatusText.Text = $"Bundle {ticket.BundleId} is not placed. Enter or scan bin.";
         DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | waiting for bin";
@@ -2342,6 +2366,10 @@ public sealed partial class MainWindow : Window
         {
             return await ReconcileBackwardRegularScanAsync(placedBundle, ticket);
         }
+
+        var admissionFailure = NewBundleAdmissionFailureFor(ticket);
+        if (RejectNewBundleAdmission(ticket, admissionFailure, "activation"))
+            return false;
 
         if (!HasCompleteGameSetup(ticket.GameId))
         {
@@ -4944,6 +4972,9 @@ public sealed partial class MainWindow : Window
         RefreshVersionInformation();
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
+        RequireReceivedInventoryForActivationCheckBox.IsChecked = _requireReceivedInventoryForActivation;
+        AllowedGameIdStartingDigitsBox.Text = FormatAllowedGameIdStartingDigits();
+        ActivationSafetyStatusText.Text = ActivationSafetySummary();
         DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
         RefreshScannerPairingStatus();
@@ -5557,6 +5588,9 @@ public sealed partial class MainWindow : Window
         EmailSettingsTab.Visibility = managerVisibility;
         AuditSettingsTab.Visibility = managerVisibility;
         GameSettingsTab.Visibility = managerVisibility;
+        RequireReceivedInventoryForActivationCheckBox.IsEnabled = IsManager;
+        AllowedGameIdStartingDigitsBox.IsReadOnly = !IsManager;
+        SaveActivationSafetyButton.IsEnabled = IsManager;
 
         SettingsSubtitleText.Text = IsManager
             ? "Store, users, scanner, display, and game setup controls for the current installation."
@@ -5875,6 +5909,65 @@ public sealed partial class MainWindow : Window
             string.Equals(bundle.GameId, gameId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(bundle.BundleId, bundleId, StringComparison.OrdinalIgnoreCase));
 
+    private bool IsReceivedBundle(ImportTicket ticket) =>
+        _receivedBundles.Any(bundle =>
+            string.Equals(bundle.GameId, ticket.GameId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(bundle.BundleId, ticket.BundleId, StringComparison.OrdinalIgnoreCase));
+
+    private NewBundleAdmissionFailure NewBundleAdmissionFailureFor(ImportTicket ticket)
+    {
+        if (FindPlacedBundle(ticket) is not null || IsReceivedBundle(ticket))
+            return NewBundleAdmissionFailure.None;
+
+        if (!IsAllowedNewGameId(ticket.GameId))
+        {
+            return NewBundleAdmissionFailure.GameIdStartingDigit;
+        }
+
+        return _requireReceivedInventoryForActivation
+            ? NewBundleAdmissionFailure.NotReceived
+            : NewBundleAdmissionFailure.None;
+    }
+
+    private bool IsAllowedNewGameId(string gameId) =>
+        _allowedGameIdStartingDigits.Count == 0 ||
+        (!string.IsNullOrWhiteSpace(gameId) &&
+         _allowedGameIdStartingDigits.Contains(gameId[0]));
+
+    private bool RejectNewBundleAdmission(
+        ImportTicket ticket,
+        NewBundleAdmissionFailure failure,
+        string workflow,
+        TextBlock? closingStatus = null)
+    {
+        if (failure == NewBundleAdmissionFailure.None)
+            return false;
+
+        var allowedDigits = FormatAllowedGameIdStartingDigits();
+        var reason = failure == NewBundleAdmissionFailure.GameIdStartingDigit
+            ? $"Game {ticket.GameId} is not allowed. New Game IDs must start with {allowedDigits}."
+            : $"Bundle {ticket.BundleId} is not in received inventory.";
+        var auditReason = failure == NewBundleAdmissionFailure.GameIdStartingDigit
+            ? $"Game ID does not start with an allowed digit ({allowedDigits})"
+            : "Bundle does not match Receiving inventory";
+        var audio = failure == NewBundleAdmissionFailure.GameIdStartingDigit
+            ? "Game invalid."
+            : "Bundle invalid.";
+
+        ClearDashboardPendingScanPair();
+        DashboardScannerStatusText.Text = reason;
+        DashboardLastScanText.Text = $"Game {ticket.GameId} | Bundle {ticket.BundleId} | discarded";
+        StatusText.Text = reason;
+        if (closingStatus is not null)
+            closingStatus.Text = reason + " Scan discarded.";
+        TryRecordAudit(
+            workflow,
+            "New bundle scan discarded",
+            $"Raw scan {ticket.Raw}; Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}; {auditReason}");
+        _ = SpeakAsync(audio);
+        return true;
+    }
+
     private async Task StartReceivingScanWorkflowAsync()
     {
         if (IsWorkflowInteractionBlocked)
@@ -5934,6 +6027,18 @@ public sealed partial class MainWindow : Window
             if (duplicate)
             {
                 _ = SpeakAsync("Duplicate");
+                return;
+            }
+
+            if (!IsAllowedNewGameId(ticket.GameId))
+            {
+                var allowedDigits = FormatAllowedGameIdStartingDigits();
+                statusText.Text = $"Game {ticket.GameId} is not allowed. New Game IDs must start with {allowedDigits}.";
+                TryRecordAudit(
+                    "scanner",
+                    "Receiving scan rejected",
+                    $"Raw scan {ticket.Raw}; Game {ticket.GameId}, bundle {ticket.BundleId}; Game ID does not start with an allowed digit ({allowedDigits})");
+                _ = SpeakAsync("Game invalid.");
                 return;
             }
 
@@ -6454,9 +6559,9 @@ public sealed partial class MainWindow : Window
                     return;
 
                 AppLog.Info($"Closing scan received: {raw}");
-                _closingScanCaptured = true;
                 AppLog.Info($"Closing scan barcode: {raw}");
                 ProcessClosingScanSegment(raw, statusText);
+                UpdateClosingScanCapturedState();
 
                 RefreshDialogTotals();
                 RefreshClosingBins();
@@ -6731,7 +6836,7 @@ public sealed partial class MainWindow : Window
                     "closing",
                     "Closing scan closed",
                     $"Rows {rowCount.ToString(CultureInfo.InvariantCulture)}, scanned bins {scannedBinCount.ToString(CultureInfo.InvariantCulture)}, issues {issueCount.ToString(CultureInfo.InvariantCulture)}, unmatched {unmatchedCount.ToString(CultureInfo.InvariantCulture)}");
-                _closingScanCaptured = true;
+                UpdateClosingScanCapturedState();
                 ClosingStatusText.Text = $"{scannedBinCount.ToString(CultureInfo.CurrentCulture)} bin{(scannedBinCount == 1 ? string.Empty : "s")} scanned. Unscanned active bins remain marked.";
             }
         }
@@ -6765,7 +6870,20 @@ public sealed partial class MainWindow : Window
     }
 
     private int ClosingTicketScanCount() =>
-        _closingScanRows.Count(row => TryParseImportTicket(row.Raw) is not null);
+        _closingScanRows.Count(row => row.CountsAsTicket);
+
+    private void UpdateClosingScanCapturedState()
+    {
+        _closingScanCaptured = ClosingTicketScanCount() > 0 ||
+            _closingScannedBins.Count > 0 ||
+            _closingScannedBundleKeys.Count > 0 ||
+            _closingCurrentPlacements.Count > 0 ||
+            _closingResolvedPlacements.Count > 0 ||
+            _closingScanSales.Count > 0 ||
+            _closingReverseCorrections.Count > 0 ||
+            _closingScanIssues.Count > 0 ||
+            _closingUnmatchedTickets.Count > 0;
+    }
 
     private int ActiveClosingBinCount() =>
         EffectiveClosingPlacements()
@@ -6788,6 +6906,21 @@ public sealed partial class MainWindow : Window
         if (ticket is not null)
         {
             var closingBundle = FindPlacedBundle(ticket);
+            var admissionFailure = NewBundleAdmissionFailureFor(ticket);
+            if (closingBundle is null &&
+                RejectNewBundleAdmission(ticket, admissionFailure, "closing", statusText))
+            {
+                var rejectionStatus = admissionFailure == NewBundleAdmissionFailure.GameIdStartingDigit
+                    ? "Ignored; invalid Game ID"
+                    : "Ignored; bundle not received";
+                _closingScanRows.Insert(0, new ClosingScanRow(raw, rejectionStatus)
+                {
+                    CountsAsTicket = false
+                });
+                UpdateClosingScanCapturedState();
+                return;
+            }
+
             if (closingBundle is null ||
                 !int.TryParse(closingBundle.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var binNumber) ||
                 !IsConfiguredBin(binNumber))
@@ -6970,14 +7103,20 @@ public sealed partial class MainWindow : Window
 
         if (TryParseBinNumber(raw, out var directBin) && IsConfiguredBin(directBin))
         {
-            _closingScanRows.Insert(0, new ClosingScanRow(raw, "Ignored bin scan"));
+            _closingScanRows.Insert(0, new ClosingScanRow(raw, "Ignored bin scan")
+            {
+                CountsAsTicket = false
+            });
             TryRecordAudit("closing", "Closing bin scan ignored", $"Bin {directBin.ToString(CultureInfo.InvariantCulture)}; closing accepts ticket barcodes only");
             statusText.Text = "Closing scan accepts ticket barcodes only. Bin scan ignored.";
             _ = SpeakAsync("Ticket only.");
             return;
         }
 
-        _closingScanRows.Insert(0, new ClosingScanRow(raw, "Unrecognized"));
+        _closingScanRows.Insert(0, new ClosingScanRow(raw, "Unrecognized")
+        {
+            CountsAsTicket = false
+        });
         TryRecordAudit("closing", "Closing scan rejected", $"Unrecognized scan {raw}");
         statusText.Text = $"Scan was not recognized and was ignored: {raw}";
         _ = SpeakAsync("Scan again.");
@@ -7086,11 +7225,39 @@ public sealed partial class MainWindow : Window
         {
             _closingScanCaptured = false;
         }
+        else
+        {
+            UpdateClosingScanCapturedState();
+        }
 
         TryRecordAudit(
             "closing",
             "Closing scan error discarded",
             $"Raw {row.Raw}, status {row.Status}; valid closing evidence retained");
+    }
+
+    private void DiscardClosingPriceOrReconciliationScan(
+        ImportTicket ticket,
+        string reason)
+    {
+        _closingScanIssues.RemoveAll(issue =>
+            string.Equals(issue.Raw, ticket.Raw, StringComparison.OrdinalIgnoreCase));
+        _closingUnmatchedTickets.RemoveAll(unmatched =>
+            string.Equals(unmatched.Raw, ticket.Raw, StringComparison.OrdinalIgnoreCase) &&
+            SamePhysicalBundle(unmatched, ticket));
+
+        foreach (var row in _closingScanRows.Where(row =>
+                     row.CanDiscard &&
+                     string.Equals(row.Raw, ticket.Raw, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            _closingScanRows.Remove(row);
+        }
+
+        UpdateClosingScanCapturedState();
+        TryRecordAudit(
+            "closing",
+            "Closing scan discarded",
+            $"Raw {ticket.Raw}; Game {ticket.GameId}, bundle {ticket.BundleId}, ticket {ticket.Ticket}; {reason}; valid closing evidence retained");
     }
 
     private bool ClosingRowMatchesBundle(ClosingScanRow row, ImportTicket ticket) =>
@@ -7371,6 +7538,7 @@ public sealed partial class MainWindow : Window
                 Title = "Resolve Closing Scan",
                 Content = content,
                 PrimaryButtonText = missingPriceBox is null ? "Use This Bin" : "Save Price and Use Bin",
+                SecondaryButtonText = "Discard Scan",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Primary
             };
@@ -7479,6 +7647,17 @@ public sealed partial class MainWindow : Window
                 _isWorkflowDialogOpen = false;
             }
 
+            if (result == ContentDialogResult.Secondary)
+            {
+                DiscardClosingPriceOrReconciliationScan(
+                    ticket,
+                    missingPriceBox is null
+                        ? "Operator discarded unmatched Closing scan"
+                        : "Operator discarded Closing scan during missing-price setup");
+                ClosingStatusText.Text = $"Discarded scan for game {ticket.GameId}, bundle {ticket.BundleId}.";
+                continue;
+            }
+
             if (result != ContentDialogResult.Primary && selectedBin is null)
             {
                 ClosingStatusText.Text = "Unmatched scan assignment cancelled.";
@@ -7498,7 +7677,17 @@ public sealed partial class MainWindow : Window
             if (!TryValidateClosingTicketPrice(ticket, configuredPriceCents, out var priceError))
             {
                 ClosingStatusText.Text = $"Game {ticket.GameId} requires price verification before bundle {ticket.BundleId} can be assigned: {priceError}";
-                if (!await ShowClosingGameInformationDialogAsync(ticket, resolved))
+                var priceOutcome = await ShowClosingGameInformationDialogAsync(ticket, resolved);
+                if (priceOutcome == ClosingPriceDialogOutcome.Discarded)
+                {
+                    DiscardClosingPriceOrReconciliationScan(
+                        ticket,
+                        "Operator discarded Closing scan during game-price verification");
+                    ClosingStatusText.Text = $"Discarded scan for game {ticket.GameId}, bundle {ticket.BundleId}.";
+                    continue;
+                }
+
+                if (priceOutcome != ClosingPriceDialogOutcome.Saved)
                 {
                     ClosingStatusText.Text = $"Price verification was cancelled or not authorized. Game {ticket.GameId}, bundle {ticket.BundleId} remains unmatched.";
                     TryRecordAudit(
@@ -7579,7 +7768,17 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        if (!await ShowClosingGameInformationDialogAsync(ticket, activeBundle))
+        var outcome = await ShowClosingGameInformationDialogAsync(ticket, activeBundle);
+        if (outcome == ClosingPriceDialogOutcome.Discarded)
+        {
+            DiscardClosingPriceOrReconciliationScan(
+                ticket,
+                "Operator discarded Closing scan during game-price verification");
+            ClosingStatusText.Text = $"Discarded scan for game {ticket.GameId}, bundle {ticket.BundleId}.";
+            return true;
+        }
+
+        if (outcome != ClosingPriceDialogOutcome.Saved)
         {
             ClosingStatusText.Text = "Price correction cancelled. You can continue scanning and return to this issue.";
             return false;
@@ -7597,14 +7796,14 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private async Task<bool> ShowClosingGameInformationDialogAsync(
+    private async Task<ClosingPriceDialogOutcome> ShowClosingGameInformationDialogAsync(
         ImportTicket ticket,
         ImportLine activeBundle)
     {
         if (!RequireManagerAccess("correcting Game Information during closing"))
         {
             ClosingStatusText.Text = "Manager access is required to correct Game Information. You can continue scanning and return to this issue.";
-            return false;
+            return ClosingPriceDialogOutcome.Cancelled;
         }
 
         var existingGame = FindKnownGame(ticket.GameId);
@@ -7670,6 +7869,7 @@ public sealed partial class MainWindow : Window
             Title = "Verify Game Price",
             Content = content,
             PrimaryButtonText = "Save and Recheck",
+            SecondaryButtonText = "Discard Scan",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary
         };
@@ -7711,7 +7911,12 @@ public sealed partial class MainWindow : Window
         try
         {
             var result = await ShowResponsiveDialogAsync(dialog);
-            return result == ContentDialogResult.Primary && saved;
+            if (result == ContentDialogResult.Secondary)
+                return ClosingPriceDialogOutcome.Discarded;
+
+            return result == ContentDialogResult.Primary && saved
+                ? ClosingPriceDialogOutcome.Saved
+                : ClosingPriceDialogOutcome.Cancelled;
         }
         finally
         {
@@ -9859,6 +10064,96 @@ public sealed partial class MainWindow : Window
         ScannerPairingStatusText.Text = "Scanner and display settings saved.";
     }
 
+    private void SaveActivationSafetyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireManagerAccess("activation safety settings"))
+        {
+            ActivationSafetyStatusText.Text = "Manager access is required to change activation safety.";
+            return;
+        }
+
+        if (!TryParseAllowedGameIdStartingDigits(
+                AllowedGameIdStartingDigitsBox.Text,
+                out var allowedDigits,
+                out var normalizedDigits,
+                out var error))
+        {
+            ActivationSafetyStatusText.Text = error;
+            _ = AllowedGameIdStartingDigitsBox.Focus(FocusState.Programmatic);
+            return;
+        }
+
+        var requireReceivedInventory = RequireReceivedInventoryForActivationCheckBox.IsChecked == true;
+        if (!SaveSettings(
+                new Dictionary<string, string>
+                {
+                    [RequireReceivedInventoryForActivationSettingKey] = BoolSetting(requireReceivedInventory),
+                    [AllowedGameIdStartingDigitsSettingKey] = normalizedDigits
+                },
+                "settings",
+                "Activation safety settings saved",
+                $"Received inventory requirement {(requireReceivedInventory ? "enabled" : "disabled")}; allowed new Game ID starting digits {(normalizedDigits.Length == 0 ? "unrestricted" : normalizedDigits)}"))
+        {
+            ActivationSafetyStatusText.Text = "Activation safety settings could not be saved.";
+            return;
+        }
+
+        _requireReceivedInventoryForActivation = requireReceivedInventory;
+        _allowedGameIdStartingDigits.Clear();
+        foreach (var digit in allowedDigits)
+            _allowedGameIdStartingDigits.Add(digit);
+        AllowedGameIdStartingDigitsBox.Text = normalizedDigits;
+        ActivationSafetyStatusText.Text = "Saved. " + ActivationSafetySummary();
+    }
+
+    private static bool TryParseAllowedGameIdStartingDigits(
+        string raw,
+        out IReadOnlyList<char> digits,
+        out string normalized,
+        out string error)
+    {
+        var parsed = new List<char>();
+        normalized = string.Empty;
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            digits = parsed;
+            return true;
+        }
+
+        foreach (var token in raw.Split(',', StringSplitOptions.TrimEntries))
+        {
+            if (token.Length != 1 || token[0] is < '0' or > '9')
+            {
+                digits = Array.Empty<char>();
+                error = "Enter comma-separated single digits, such as 1,9, or leave the field blank.";
+                return false;
+            }
+
+            if (!parsed.Contains(token[0]))
+                parsed.Add(token[0]);
+        }
+
+        normalized = string.Join(",", parsed);
+        digits = parsed;
+        return true;
+    }
+
+    private string FormatAllowedGameIdStartingDigits() =>
+        string.Join(",", _allowedGameIdStartingDigits.OrderBy(digit => digit));
+
+    private string ActivationSafetySummary()
+    {
+        var inventoryRule = _requireReceivedInventoryForActivation
+            ? "New bundles must match Receiving inventory."
+            : "New bundles may be activated without a Receiving record.";
+        var startingDigits = FormatAllowedGameIdStartingDigits();
+        var digitRule = startingDigits.Length == 0
+            ? "New Game ID starting digits are unrestricted."
+            : $"Allowed new Game ID starting digits: {startingDigits}.";
+        return $"{inventoryRule} {digitRule}";
+    }
+
     private async void CheckLicenseButton_Click(object sender, RoutedEventArgs e)
     {
         if (!RequireManagerAccess("license registration"))
@@ -11124,12 +11419,28 @@ public sealed partial class MainWindow : Window
     {
         public string Raw { get; init; } = ScannedText;
 
+        public bool CountsAsTicket { get; init; } = true;
+
         public string DisplayText => $"{ScannedText} — {Status}";
 
         public bool CanDiscard => !Status.StartsWith("Scanned", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record ClosingScanIssue(string Raw, string Title, string Detail);
+
+    private enum NewBundleAdmissionFailure
+    {
+        None,
+        GameIdStartingDigit,
+        NotReceived
+    }
+
+    private enum ClosingPriceDialogOutcome
+    {
+        Cancelled,
+        Saved,
+        Discarded
+    }
 
     private sealed record ClosingScanSale(string BundleKey, SaleLine Sale);
 

@@ -1997,6 +1997,33 @@
                                                     <TextBlock Text="Seconds allowed between a bin scan and a bundle or ticket scan."
                                                                Style="{StaticResource SlCaptionTextStyle}"
                                                                TextWrapping="Wrap"/>
+                                                    <Border Style="{StaticResource SlPanelBorderStyle}">
+                                                        <StackPanel Spacing="8">
+                                                            <TextBlock Text="Activation safety"
+                                                                       Style="{StaticResource SlSectionTitleTextStyle}"/>
+                                                            <CheckBox x:Name="RequireReceivedInventoryForActivationCheckBox"
+                                                                      Content="Require bundles to be received before activation"
+                                                                      IsChecked="True"
+                                                                      AutomationProperties.AutomationId="RequireReceivedInventoryForActivation"/>
+                                                            <TextBox x:Name="AllowedGameIdStartingDigitsBox"
+                                                                     Header="Allowed starting digits for new Game IDs"
+                                                                     PlaceholderText="Example: 1,9"
+                                                                     MaxLength="19"
+                                                                     AutomationProperties.AutomationId="AllowedGameIdStartingDigits"/>
+                                                            <TextBlock Text="Use comma-separated single digits. Leave blank to allow any starting digit. Existing active or received bundles remain valid."
+                                                                       Style="{StaticResource SlCaptionTextStyle}"
+                                                                       TextWrapping="Wrap"/>
+                                                            <Button x:Name="SaveActivationSafetyButton"
+                                                                    Content="Save activation safety"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    Click="SaveActivationSafetyButton_Click"
+                                                                    AutomationProperties.AutomationId="SaveActivationSafety"/>
+                                                            <TextBlock x:Name="ActivationSafetyStatusText"
+                                                                       Text="Manager controls for admitting new bundle identities."
+                                                                       Style="{StaticResource SlCaptionTextStyle}"
+                                                                       TextWrapping="Wrap"/>
+                                                        </StackPanel>
+                                                    </Border>
                                                     <Grid ColumnSpacing="8">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="*"/>
