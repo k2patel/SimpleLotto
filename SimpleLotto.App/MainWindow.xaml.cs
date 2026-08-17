@@ -127,6 +127,7 @@ public sealed partial class MainWindow : Window
     private readonly HashSet<char> _allowedGameIdStartingDigits = new();
     private bool _displayBurnInEnabled = true;
     private int _displayBurnInIntervalMinutes = 15;
+    private bool _displayShowEmptyBins = true;
     private bool _savedSendClosingEmail;
     private readonly List<string> _savedClosingEmailAttachments = new();
     private string _savedSmtpHost = string.Empty;
@@ -198,6 +199,7 @@ public sealed partial class MainWindow : Window
     private const string AllowedGameIdStartingDigitsSettingKey = "allowed_game_id_start_digits";
     private const string DisplayBurnInEnabledSettingKey = "display_burn_in_enabled";
     private const string DisplayBurnInIntervalSettingKey = "display_burn_in_interval_minutes";
+    private const string DisplayShowEmptyBinsSettingKey = "display_show_empty_bins";
     private const string AutomaticUpgradeLastCheckDateSettingKey = "automatic_upgrade_last_check_date";
     private const string GlobalFirstTicketSerialSettingKey = "global_first_ticket_serial";
     private const long StandardBundlePriceCents = 30_000;
@@ -534,6 +536,7 @@ public sealed partial class MainWindow : Window
         }
         _displayBurnInEnabled = ReadBoolSetting(state, DisplayBurnInEnabledSettingKey, true);
         _displayBurnInIntervalMinutes = Math.Clamp(ReadIntSetting(state, DisplayBurnInIntervalSettingKey, 15), 1, 1440);
+        _displayShowEmptyBins = ReadBoolSetting(state, DisplayShowEmptyBinsSettingKey, true);
         _scannerVid = ReadSetting(state, ScannerVidSettingKey);
         _scannerPid = ReadSetting(state, ScannerPidSettingKey);
         _scannerSerial = ReadSetting(state, ScannerSerialSettingKey);
@@ -559,6 +562,7 @@ public sealed partial class MainWindow : Window
         AllowedGameIdStartingDigitsBox.Text = FormatAllowedGameIdStartingDigits();
         DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
+        DisplayShowEmptyBinsToggleSwitch.IsOn = _displayShowEmptyBins;
         _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
         ManagerPasswordBox.Password = string.Empty;
         ClerkNameBox.Text = _clerkName;
@@ -4945,32 +4949,52 @@ public sealed partial class MainWindow : Window
             g => g,
             StringComparer.OrdinalIgnoreCase);
 
-        var tiles = _imports
-            .GroupBy(i => i.Bin, StringComparer.OrdinalIgnoreCase)
-            .Select(g => new
+        var currentByBin = _imports
+            .Select(import => new
             {
-                Bin = int.TryParse(g.Key, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0,
-                Current = CurrentBundleForBin(g)!
+                Import = import,
+                Bin = int.TryParse(import.Bin, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                    ? number
+                    : 0
             })
-            .Where(x => x.Bin > 0)
-            .Select(x => new
+            .Where(item => item.Bin >= 1 && item.Bin <= _configuredBinCount)
+            .GroupBy(item => item.Bin)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(item => item.Import).FirstOrDefault());
+
+        var tiles = new List<RdisplayTileState>(_configuredBinCount);
+        for (var bin = 1; bin <= _configuredBinCount; bin++)
+        {
+            currentByBin.TryGetValue(bin, out var current);
+            if (current is null || current.IsSoldOut)
             {
-                x.Bin,
-                x.Current,
-                Game = gamesById.TryGetValue(x.Current.GameId, out var game) ? game : null
-            })
-            .Select(x =>
-            {
-                var remaining = TicketsRemainingForDisplay(x.Current, x.Game);
-                return new RdisplayTileState(
-                    x.Bin,
-                    x.Current.GameId,
-                    x.Game?.Name ?? $"Game {x.Current.GameId}",
-                    x.Current.Ticket,
-                    PriceCentsForDisplay(x.Game?.PriceCents ?? 0),
-                    remaining,
-                    x.Current.IsSoldOut);
-            });
+                if (_displayShowEmptyBins)
+                {
+                    tiles.Add(new RdisplayTileState(
+                        bin,
+                        RdisplayService.EmptyBinPlaceholderGameId,
+                        "Coming Soon",
+                        string.Empty,
+                        0,
+                        0,
+                        false));
+                }
+
+                continue;
+            }
+
+            var game = gamesById.TryGetValue(current.GameId, out var catalogGame) ? catalogGame : null;
+            var remaining = TicketsRemainingForDisplay(current, game);
+            tiles.Add(new RdisplayTileState(
+                bin,
+                current.GameId,
+                game?.Name ?? $"Game {current.GameId}",
+                current.Ticket,
+                PriceCentsForDisplay(game?.PriceCents ?? 0),
+                remaining,
+                false));
+        }
 
         _rdisplay.UpdateTiles(tiles);
     }
@@ -5032,6 +5056,7 @@ public sealed partial class MainWindow : Window
         ActivationSafetyStatusText.Text = ActivationSafetySummary();
         DisplayBurnInCheckBox.IsChecked = _displayBurnInEnabled;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
+        DisplayShowEmptyBinsToggleSwitch.IsOn = _displayShowEmptyBins;
         RefreshScannerPairingStatus();
         RefreshRegisteredDisplayCards();
         var registered = _registeredDisplayCards.Count;
@@ -10572,17 +10597,19 @@ public sealed partial class MainWindow : Window
         }
 
         var displayBurnInEnabled = DisplayBurnInCheckBox.IsChecked == true;
+        var displayShowEmptyBins = DisplayShowEmptyBinsToggleSwitch.IsOn;
         var settings = new Dictionary<string, string>
         {
             [ScanPairTimeoutSettingKey] = scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
             [DisplayBurnInEnabledSettingKey] = BoolSetting(displayBurnInEnabled),
-            [DisplayBurnInIntervalSettingKey] = displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture)
+            [DisplayBurnInIntervalSettingKey] = displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture),
+            [DisplayShowEmptyBinsSettingKey] = BoolSetting(displayShowEmptyBins)
         };
         if (!SaveSettings(
                 settings,
                 "settings",
                 "Scanner and display settings saved",
-                $"Activation timeout {scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} seconds; burn-in {(displayBurnInEnabled ? "enabled" : "disabled")}; interval {displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture)} minutes"))
+                $"Activation timeout {scanPairTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} seconds; burn-in {(displayBurnInEnabled ? "enabled" : "disabled")}; interval {displayBurnInIntervalMinutes.ToString(CultureInfo.InvariantCulture)} minutes; empty bins {(displayShowEmptyBins ? "shown" : "hidden")}"))
         {
             ScannerPairingStatusText.Text = "Scanner and display settings could not be saved.";
             return;
@@ -10591,9 +10618,12 @@ public sealed partial class MainWindow : Window
         _scanPairTimeoutSeconds = scanPairTimeoutSeconds;
         _displayBurnInEnabled = displayBurnInEnabled;
         _displayBurnInIntervalMinutes = displayBurnInIntervalMinutes;
+        _displayShowEmptyBins = displayShowEmptyBins;
         ScanPairTimeoutBox.Value = _scanPairTimeoutSeconds;
         DisplayBurnInIntervalBox.Value = _displayBurnInIntervalMinutes;
+        DisplayShowEmptyBinsToggleSwitch.IsOn = _displayShowEmptyBins;
         _rdisplay.ConfigureDisplaySettings(_displayBurnInEnabled, _displayBurnInIntervalMinutes);
+        SyncRdisplayTiles();
         SettingsScannerText.Text = $"Scanner: WindowsPOS HID pairing model; activation scan timeout {_scanPairTimeoutSeconds.ToString(CultureInfo.CurrentCulture)} seconds";
         ScannerPairingStatusText.Text = "Scanner and display settings saved.";
     }

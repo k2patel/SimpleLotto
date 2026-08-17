@@ -183,7 +183,9 @@ The latest fixes need verification in the intended Windows WinUI environment bec
    - Complete a Closing with a staged range reversal and confirm `closing_audit.csv` includes the immutable range-level reconciliation record. Confirm the report's period end matches the successful finalization timestamp.
 26. Verify SimpleLotto's Rdisplay sender against the existing WindowsPOS wire contract:
    - Sell a non-final ticket and confirm only a targeted `serial_update` is sent to the display that owns that bin; no snapshot-wide `image_ready` events should be emitted and existing artwork must remain visible.
-   - Sell the final valid ticket and confirm the bundle remains assigned and grey in SimpleLotto Bins while its Rdisplay tile is removed by a snapshot, leaving the display box empty.
+   - With `Show empty bins on Rdisplay` enabled, confirm every configured empty bin and sold-out current bin shows the packaged Coming Soon artwork with exact baked `$0` and `CURRENT 000`, the live bin number remains visible, and dormant bundles are not promoted.
+   - Disable `Show empty bins on Rdisplay`, save Display Settings, and confirm empty and sold-out bins disappear immediately while active game tiles remain unchanged. Restart SimpleLotto and confirm the saved toggle state is retained; repeat with the setting absent and confirm it defaults on.
+   - Enable the setting across multiple registered screens and confirm the first snapshot introduces `game_id: EMPTY` before `image_ready`, each screen receives its configured bin range, and `/api/images/EMPTY` requires a valid display token.
    - Repeatedly connect/disconnect or split screens and confirm topology changes send snapshots without invalidating cached images or blacking an entire row.
    - Select a registered display and click `Refresh Screen`; confirm the existing Rdisplay snapshot/image refresh mechanism redraws the screen without restarting Rdisplay.
    - Upload, fetch, or reuse a cached image for a game shown in multiple boxes and confirm every box for that game redraws while unrelated boxes remain unchanged.

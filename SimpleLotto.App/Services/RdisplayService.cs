@@ -16,6 +16,7 @@ namespace SimpleLotto.App.Services;
 public sealed class RdisplayService : IDisposable
 {
     public const int ApiPort = 5000;
+    public const string EmptyBinPlaceholderGameId = "EMPTY";
     public event EventHandler? DisplaysChanged;
 
     private readonly LocalStore _store;
@@ -48,24 +49,28 @@ public sealed class RdisplayService : IDisposable
 
     public void UpdateTiles(IEnumerable<RdisplayTileState> tiles)
     {
-        // Match WindowsPOS/Rdisplay semantics: completed bundles are absent
-        // from the snapshot, while ordinary sales mutate one existing tile.
+        // Completed real bundles stay absent. The display projection can use
+        // a non-sold-out EMPTY tile when the operator enables placeholders.
         var updatedTiles = tiles
             .Where(tile => !tile.IsSoldOut)
             .OrderBy(tile => tile.BinNumber)
             .ToList();
         List<RdisplayTileState> previousTiles;
         bool forceSnapshot;
+        bool placeholderIntroduced;
         lock (_gate)
         {
             previousTiles = _tiles.ToList();
             forceSnapshot = !_hasTileState;
+            placeholderIntroduced =
+                updatedTiles.Any(IsEmptyBinPlaceholder) &&
+                !_tiles.Any(IsEmptyBinPlaceholder);
             _tiles.Clear();
             _tiles.AddRange(updatedTiles);
             _hasTileState = true;
         }
 
-        _ = PushTileChangesAsync(previousTiles, updatedTiles, forceSnapshot);
+        _ = PushTileChangesAsync(previousTiles, updatedTiles, forceSnapshot, placeholderIntroduced);
     }
 
     public void ConfigureDisplaySettings(bool burnInEnabled, int burnInIntervalMinutes)
@@ -549,11 +554,14 @@ public sealed class RdisplayService : IDisposable
         IReadOnlyList<RdisplayTileState> previousTiles,
         IReadOnlyList<RdisplayTileState> updatedTiles,
         bool forceSnapshot,
+        bool placeholderIntroduced,
         CancellationToken ct = default)
     {
         if (forceSnapshot || RequiresFullSnapshot(previousTiles, updatedTiles))
         {
             await PushToAllAsync(ct);
+            if (placeholderIntroduced)
+                await RefreshGameBoxesAsync(EmptyBinPlaceholderGameId, ct);
             return;
         }
 
@@ -829,18 +837,21 @@ public sealed class RdisplayService : IDisposable
 
     private static Dictionary<string, object?> BuildTile(RdisplayTileState tile)
     {
-        var nextSerial = ParseSerial(tile.Ticket);
+        var isPlaceholder = IsEmptyBinPlaceholder(tile);
         return new Dictionary<string, object?>
         {
             ["tile_index"] = tile.BinNumber,
             ["game_id"] = tile.GameId,
             ["game_name"] = tile.GameName,
             ["bin_label"] = tile.BinNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["next_serial"] = nextSerial,
-            ["tickets_remaining"] = tile.TicketsRemaining,
-            ["price_cents"] = tile.PriceCents
+            ["next_serial"] = isPlaceholder ? null : ParseSerial(tile.Ticket),
+            ["tickets_remaining"] = isPlaceholder ? null : tile.TicketsRemaining,
+            ["price_cents"] = isPlaceholder ? null : tile.PriceCents
         };
     }
+
+    private static bool IsEmptyBinPlaceholder(RdisplayTileState tile) =>
+        string.Equals(tile.GameId, EmptyBinPlaceholderGameId, StringComparison.OrdinalIgnoreCase);
 
     private static int ParseSerial(string ticket)
     {

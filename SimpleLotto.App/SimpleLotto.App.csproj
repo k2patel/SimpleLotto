@@ -37,9 +37,11 @@
     <None Remove="Assets\SimpleLottoLogo.png" />
     <None Remove="Assets\SimpleLottoLogo64.png" />
     <None Remove="Assets\SimpleLottoSplash.png" />
+    <None Remove="Assets\RdisplayComingSoon.png" />
     <Content Include="Assets\SimpleLotto.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\SimpleLottoLogo.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\SimpleLottoLogo64.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\SimpleLottoSplash.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\RdisplayComingSoon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

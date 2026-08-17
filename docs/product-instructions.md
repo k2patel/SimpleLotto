@@ -220,7 +220,7 @@ Ticket numbering rules:
 Bundle completion rules:
 
 - A bundle is complete when its sold ticket count/value reaches the automatically derived bundle total.
-- When the final valid ticket is sold, keep the bundle assigned to its bin and mark it `Sold out`/grey in Bins, but remove its tile from Rdisplay so that display box becomes empty. The stored final ticket remains the final valid ticket; it must never advance to a non-existent serial (for example, `$20`/`$300`, start `000`: `000`-`014`, never `015`).
+- When the final valid ticket is sold, keep the bundle assigned to its bin and mark it `Sold out`/grey in Bins. Rdisplay removes the real-game tile; when `Show empty bins on Rdisplay` is enabled, that bin receives the display-only `EMPTY`/Coming Soon placeholder, and when disabled the display box remains empty. The stored final ticket remains the final valid ticket; it must never advance to a non-existent serial (for example, `$20`/`$300`, start `000`: `000`-`014`, never `015`).
 - The active placement stores the current available ticket, not the last sold ticket. Bins and Rdisplay show that stored current ticket directly. The sales ledger separately records only the ticket or inclusive ticket range actually sold.
 - A ticket serial may be recorded only once for a placed bundle during normal sales/backfill. During Closing, a scanned ticket below the stored current available ticket is authoritative backward physical evidence, not a duplicate-sale rejection: stage one bundle-scoped reversal for the inclusive series from the scanned ticket through one less than the stored current available ticket, and make the scanned ticket the available ticket when Closing commits.
 - A regular scan and a Closing scan give the scanned ticket different meanings. A regular scan identifies the corrected last sold ticket. If an active bundle currently shows `046` available because sales were recorded through `045`, and a regular scan reads `038`, void the accidental sale activity that reaches beyond `038`, append corrected replacement sale activity for any valid retained prefix, restore `039-045` to the bundle, and make `039` the next available ticket. Apply the same rule when the bundle is already marked sold out through `045`; do not reject the scan merely because the placement is grey.
@@ -561,6 +561,7 @@ Settings must include state setup and technical setup:
 - Displays: handles Rdisplay registration, health, config, and diagnostics.
 - Scanner: handles scanner pairing, health, config, and diagnostics.
 - Settings > Scanner and Display should present scanner controls and display registration as two noticeable cards, with registered displays listed below as individual display cards.
+- Settings > Scanner and Display must include `Show empty bins on Rdisplay`, defaulted on and persisted as `display_show_empty_bins`. Saving it refreshes registered displays immediately. When off, empty and sold-out bins remain omitted from Rdisplay.
 - Settings > Users/PIN lets the active Manager or Clerk change their own PIN. This requires the active user's current PIN plus a different, matching four-digit replacement.
 - Only a Manager sees the Clerk reset controls. A Manager may create or reset the optional Clerk login by saving a Clerk name and matching four-digit PIN; the Clerk's previous PIN is not required.
 - PIN changes take effect for the next login without ending the current close interval or forcing the active user to log out.
@@ -656,6 +657,9 @@ SimpleLotto should use the same mechanism as `../windowsPOS` Rdisplay where appl
 - Rdisplay should receive the latest bundle for a bin when multiple bundles are assigned to that bin.
 - Rdisplay tile state should use the calculated ticket range and tickets remaining from the same game/bundle pricing rules used by the Windows UI.
 - Rdisplay image/name data should use the same auto-fetched or manually corrected game setup data from Inventory.
+- When `Show empty bins on Rdisplay` is enabled, every configured bin without a current non-sold-out bundle receives a display-only tile with Game ID `EMPTY`, name `Coming Soon`, and its real bin label. This includes bins whose current placement is sold out; dormant bundles are not promoted. `EMPTY` is never a catalog game, received bundle, inventory placement, or persisted business record.
+- The authenticated `/api/images/EMPTY` endpoint serves the packaged opaque Coming Soon PNG. The PNG contains the exact `$0` and `CURRENT 000` artwork, so `EMPTY` tile payloads suppress live price, serial, and remaining-ticket overlays while retaining the live bin-label overlay.
+- A snapshot that first introduces `EMPTY` must be delivered before its `image_ready` event so existing compatible Rdisplay clients accept the event and fetch the packaged image.
 - The existing `../windowsPOS` Rdisplay client currently understands `license_status` only; it does not render the desired license expiry/grace banner by itself.
 - Any Rdisplay expiry/grace banner needs a deliberate wire-contract migration with explicit banner fields such as expiry date, grace days remaining, banner text, and opacity, plus renderer changes on the display client.
 - Until that migration is implemented, SimpleLotto can only send coarse license status to Rdisplay.

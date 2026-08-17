@@ -170,6 +170,15 @@ public sealed class RdisplayApiHost
 
     private string? ResolveCachedImagePath(string gameId)
     {
+        if (string.Equals(gameId, RdisplayService.EmptyBinPlaceholderGameId, StringComparison.OrdinalIgnoreCase))
+        {
+            var placeholderPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "Assets",
+                "RdisplayComingSoon.png");
+            return File.Exists(placeholderPath) ? placeholderPath : null;
+        }
+
         var cached = CachedGameImagePath(gameId);
         if (cached is not null)
             return cached;

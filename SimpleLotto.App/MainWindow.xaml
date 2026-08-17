@@ -2094,6 +2094,15 @@
                                                     <TextBlock Text="Burn-in protection periodically runs the Rdisplay sweep to reduce image persistence."
                                                                Style="{StaticResource SlCaptionTextStyle}"
                                                                TextWrapping="Wrap"/>
+                                                    <ToggleSwitch x:Name="DisplayShowEmptyBinsToggleSwitch"
+                                                                  Header="Show empty bins on Rdisplay"
+                                                                  OnContent="Shown"
+                                                                  OffContent="Hidden"
+                                                                  IsOn="True"
+                                                                  AutomationProperties.AutomationId="DisplayShowEmptyBinsToggleSwitch"/>
+                                                    <TextBlock Text="Shown empty and sold-out bins use the Coming Soon artwork. Hidden keeps the current empty-box behavior."
+                                                               Style="{StaticResource SlCaptionTextStyle}"
+                                                               TextWrapping="Wrap"/>
                                                     <Button Content="Save Display Settings"
                                                             HorizontalAlignment="Stretch"
                                                             Click="SaveScannerSettingsButton_Click"/>
