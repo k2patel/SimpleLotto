@@ -73,6 +73,8 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<RegisteredDisplayCard> _registeredDisplayCards = new();
     private readonly ConditionalWeakTable<Control, PlaceholderFocusState> _placeholderFocusStates = new();
     private readonly List<GameCatalogRecord> _manualGameCatalog = new();
+    private readonly Dictionary<string, Task<GameImageCacheResult>> _gameImageCacheTasks =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> _closingScannedBins = new();
     private readonly HashSet<string> _closingScannedBundleKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ImportLine> _closingCurrentPlacements = new();
@@ -142,7 +144,6 @@ public sealed partial class MainWindow : Window
     private bool _initialImportComplete;
     private bool _isWindowInitialized;
     private bool _isScannerPaired;
-    private bool _useFocusedScannerCapture;
     private Func<string, bool>? _rawScannerScanOverride;
     private bool _automaticUpgradeCheckRunning;
     private bool _initialLicenseCheckStarted;
@@ -1141,9 +1142,6 @@ public sealed partial class MainWindow : Window
 
     private void ScannerInput_ScanReceived(string raw)
     {
-        if (_useFocusedScannerCapture)
-            return;
-
         try
         {
             if (_activeContentDialog is not null && !_activeContentDialogAllowsScannerInput)
@@ -2594,9 +2592,9 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
             {
-                if (_useFocusedScannerCapture || !_scannerInput.IsActivelyCapturing)
+                if (!_scannerInput.IsActivelyCapturing)
                     ObserveFocusedCommandScanKey(args, priceScanBuffer, scan =>
-                        _scannerScanOverride?.Invoke(scan) == true);
+                        scan.Kind == ScanKind.Price && _scannerScanOverride?.Invoke(scan) == true);
             }),
             handledEventsToo: true);
         var imageUri = existingGame?.ImageUri ?? string.Empty;
@@ -3211,9 +3209,24 @@ public sealed partial class MainWindow : Window
 
     private void RestoreFromTray()
     {
-        ShowWindow(_hwnd, ShowWindowShow);
+        RestoreWindow("SimpleLotto restored.");
+    }
+
+    internal void RestoreFromExternalLaunch()
+    {
+        RestoreWindow("SimpleLotto was already running and has been restored.");
+        AppLog.Info("Restored the primary SimpleLotto window after a redirected launch.");
+    }
+
+    private void RestoreWindow(string status)
+    {
+        if (IsIconic(_hwnd))
+            ShowWindow(_hwnd, ShowWindowRestore);
+        else
+            ShowWindow(_hwnd, ShowWindowShow);
+
         SetForegroundWindow(_hwnd);
-        StatusText.Text = "SimpleLotto restored.";
+        StatusText.Text = status;
     }
 
     private void RestoreForScannerWorkflowDialog(string workflow)
@@ -6150,6 +6163,7 @@ public sealed partial class MainWindow : Window
 
         var stagedRows = new ObservableCollection<ReceivingScanRow>();
         var stagedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var prefetchedGameIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var dialogScanBuffer = new StringBuilder();
         var finishing = false;
         var statusText = new TextBlock
@@ -6225,6 +6239,9 @@ public sealed partial class MainWindow : Window
                 "scanner",
                 "Receiving scan captured",
                 $"Game {ticket.GameId}, bundle {ticket.BundleId}; staged for receiving");
+
+            if (!HasCompleteGameSetup(ticket.GameId) && prefetchedGameIds.Add(ticket.GameId))
+                QueueGameImagePrefetch(ticket.GameId);
         }
 
         var content = new Grid
@@ -6241,7 +6258,10 @@ public sealed partial class MainWindow : Window
         content.AddHandler(
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
-                CaptureGlobalScanKey(args, dialogScanBuffer, AcceptScan, statusText)),
+            {
+                if (!_scannerInput.IsActivelyCapturing)
+                    CaptureGlobalScanKey(args, dialogScanBuffer, AcceptScan, statusText);
+            }),
             handledEventsToo: true);
 
         var promptText = new TextBlock
@@ -6467,11 +6487,15 @@ public sealed partial class MainWindow : Window
         cancelButton.Click += cancelHandler;
         ClosingScanOverlay.SizeChanged += overlaySizeChanged;
         _isWorkflowDialogOpen = true;
-        var previousFocusedScannerCapture = _useFocusedScannerCapture;
-        _useFocusedScannerCapture = true;
+        var previousRawScannerScanOverride = _rawScannerScanOverride;
+        _rawScannerScanOverride = raw =>
+        {
+            AcceptScan(raw);
+            return true;
+        };
         try
         {
-            TryRecordAudit("inventory", "Receiving scan started", "Focused receiving session opened");
+            TryRecordAudit("inventory", "Receiving scan started", "Exclusive receiving session opened");
             ClosingScanOverlayTitleText.Text = "Receive New Inventory";
             ClosingScanOverlayCloseButton.Content = "Update Inventory";
             ClosingScanOverlayContent.Children.Clear();
@@ -6499,7 +6523,7 @@ public sealed partial class MainWindow : Window
             ClosingScanOverlayCloseButton.Content = "Close Scanning";
             ClosingScanOverlayCloseButton.IsEnabled = true;
             dialogScanBuffer.Clear();
-            _useFocusedScannerCapture = previousFocusedScannerCapture;
+            _rawScannerScanOverride = previousRawScannerScanOverride;
             _isWorkflowDialogOpen = false;
         }
     }
@@ -6512,6 +6536,8 @@ public sealed partial class MainWindow : Window
             Header = "Game name",
             Text = GameNameEntryText(existingGame?.Name, bundle.GameId)
         };
+        AutomationProperties.SetAutomationId(nameBox, "ReceivingGameName");
+        AutomationProperties.SetName(nameBox, $"Game {bundle.GameId} name");
         ConfigureSuggestedGameNameBox(nameBox, bundle.GameId);
         var priceBox = new NumberBox
         {
@@ -6522,6 +6548,8 @@ public sealed partial class MainWindow : Window
             LargeChange = 5,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden
         };
+        AutomationProperties.SetAutomationId(priceBox, "ReceivingGamePrice");
+        AutomationProperties.SetName(priceBox, $"Game {bundle.GameId} ticket price");
         ConfigureRequiredWholeDollarPriceBox(priceBox);
         var statusText = new TextBlock
         {
@@ -6533,30 +6561,54 @@ public sealed partial class MainWindow : Window
             UIElement.KeyDownEvent,
             new KeyEventHandler((_, args) =>
             {
-                if (_useFocusedScannerCapture || !_scannerInput.IsActivelyCapturing)
+                if (!_scannerInput.IsActivelyCapturing)
                     ObserveFocusedCommandScanKey(args, priceScanBuffer, scan =>
-                        _scannerScanOverride?.Invoke(scan) == true);
+                        scan.Kind == ScanKind.Price && ApplyPriceScan(scan, rejectUnexpected: false));
             }),
             handledEventsToo: true);
+
+        var dialogContent = new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"Game {bundle.GameId} | Bundle {bundle.BundleId}",
+                    TextWrapping = TextWrapping.Wrap
+                }
+            }
+        };
+        var cachedImagePath = CachedGameImagePath(bundle.GameId);
+        if (cachedImagePath is not null)
+        {
+            var gameImage = new Image
+            {
+                Source = new BitmapImage(new Uri(LocalFileUri(cachedImagePath))),
+                MaxWidth = 360,
+                MaxHeight = 200,
+                Stretch = Stretch.Uniform
+            };
+            AutomationProperties.SetName(gameImage, $"Game {bundle.GameId} ticket image");
+            dialogContent.Children.Add(new Border
+            {
+                Background = ThemeBrush("SlSurfaceAltBrush", ColorBrush(246, 248, 251)),
+                BorderBrush = ThemeBrush("SlBorderBrush", ColorBrush(198, 204, 214)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8),
+                Child = gameImage
+            });
+        }
+        dialogContent.Children.Add(nameBox);
+        dialogContent.Children.Add(priceBox);
+        dialogContent.Children.Add(statusText);
+
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
             Title = "Game setup required",
-            Content = new StackPanel
-            {
-                Spacing = 12,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = $"Game {bundle.GameId} | Bundle {bundle.BundleId}",
-                        TextWrapping = TextWrapping.Wrap
-                    },
-                    nameBox,
-                    priceBox,
-                    statusText
-                }
-            },
+            Content = dialogContent,
             PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary
@@ -6581,21 +6633,38 @@ public sealed partial class MainWindow : Window
         };
         dialog.Opened += (_, _) => _ = priceBox.Focus(FocusState.Programmatic);
 
-        var previousScannerOverride = _scannerScanOverride;
-        _scannerScanOverride = scan =>
+        bool ApplyPriceScan(ClassifiedScan scan, bool rejectUnexpected)
         {
             if (scan.Kind != ScanKind.Price)
             {
-                statusText.Text = "Scan a price label, or enter the ticket price.";
-                TryRecordAudit("scanner", "Receiving price scan rejected", $"Expected price command: {scan.Raw}");
-                _ = SpeakAsync("Scan again.");
-                return true;
+                if (rejectUnexpected)
+                {
+                    statusText.Text = "Scan a price label, or enter the ticket price.";
+                    TryRecordAudit("scanner", "Receiving price scan rejected", $"Expected price command: {scan.Raw}");
+                    _ = SpeakAsync("Scan again.");
+                }
+
+                return rejectUnexpected;
             }
 
             priceBox.Value = (scan.PriceCents ?? 0) / 100d;
             statusText.Text = $"Price {MoneyText(scan.PriceCents ?? 0)} captured.";
             TryRecordAudit("scanner", "Receiving price scan captured", $"Price {MoneyText(scan.PriceCents ?? 0)} for game {bundle.GameId}");
             return true;
+        }
+
+        var previousRawScannerScanOverride = _rawScannerScanOverride;
+        _rawScannerScanOverride = raw =>
+        {
+            if (!TryClassifyScan(raw, out var scan))
+            {
+                statusText.Text = "Scan a price label, or enter the ticket price.";
+                TryRecordAudit("scanner", "Receiving price scan rejected", $"Unrecognized price scan: {raw}");
+                _ = SpeakAsync("Scan again.");
+                return true;
+            }
+
+            return ApplyPriceScan(scan, rejectUnexpected: true);
         };
         try
         {
@@ -6605,7 +6674,7 @@ public sealed partial class MainWindow : Window
         finally
         {
             priceScanBuffer.Clear();
-            _scannerScanOverride = previousScannerOverride;
+            _rawScannerScanOverride = previousRawScannerScanOverride;
         }
 
         if (!TryReadRequiredWholeDollarPrice(priceBox, out var priceCents, out var priceError))
@@ -6621,14 +6690,24 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
+        cachedImagePath = CachedGameImagePath(bundle.GameId);
+        var imageUri = cachedImagePath is null
+            ? existingGame?.ImageUri ?? DefaultGameImageUri
+            : LocalFileUri(cachedImagePath);
+        var imageStatus = cachedImagePath is null
+            ? existingGame?.ImageStatus ?? "Image not uploaded"
+            : string.Equals(existingGame?.ImageStatus, "Image uploaded", StringComparison.OrdinalIgnoreCase)
+                ? existingGame?.ImageStatus ?? "Image cached"
+                : "Image cached";
+
         return UpsertManualGameRecord(new GameCatalogRecord(
             bundle.GameId,
             string.IsNullOrWhiteSpace(nameBox.Text) ? $"Game {bundle.GameId}" : nameBox.Text.Trim(),
             priceCents,
             bundlePriceCents,
             "Receiving",
-            existingGame?.ImageUri ?? DefaultGameImageUri,
-            existingGame?.ImageStatus ?? "Image not uploaded"));
+            imageUri,
+            imageStatus));
     }
 
     private async void StartClosingScanButton_Click(object sender, RoutedEventArgs e)
@@ -10145,35 +10224,130 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> FetchAndApplyGameImageAsync(GameCatalogRecord game, bool quiet = false)
     {
-        Directory.CreateDirectory(GameImageCacheDir);
-
-        var cached = CachedGameImagePath(game.GameId);
-        if (cached is not null)
+        var result = await GetOrStartGameImageCacheTask(game.GameId);
+        if (result.Path is null)
         {
-            if (!UpsertManualGameRecord(game with
-            {
-                ImageUri = LocalFileUri(cached),
-                ImageStatus = "Image cached"
-            }))
-            {
-                if (!quiet)
-                    GameCatalogStatusText.Text = $"Cached image for game {game.GameId} could not be saved to the catalog.";
-                return false;
-            }
-
             if (!quiet)
-                await _rdisplay.RefreshGameBoxesAsync(game.GameId);
-            if (!quiet)
-                GameCatalogStatusText.Text = $"Image already cached for game {game.GameId}.";
-            return true;
+                GameCatalogStatusText.Text = result.Message;
+            return false;
         }
 
-        var urls = OfficialImageUrls(game.GameId, _storeState).ToList();
-        if (urls.Count == 0)
+        var imageStatus = result.WasCached
+            ? string.Equals(game.ImageStatus, "Image uploaded", StringComparison.OrdinalIgnoreCase)
+                ? game.ImageStatus
+                : "Image cached"
+            : "Image fetched";
+        var updated = game with
+        {
+            Source = result.WasCached ? game.Source : "Official",
+            ImageUri = LocalFileUri(result.Path),
+            ImageStatus = imageStatus
+        };
+        if (!UpsertManualGameRecord(updated))
         {
             if (!quiet)
-                GameCatalogStatusText.Text = $"No official image source configured for state {_storeState}.";
+                GameCatalogStatusText.Text = $"Cached image for game {game.GameId} could not be saved to the catalog.";
             return false;
+        }
+
+        if (!result.WasCached || !quiet)
+            await _rdisplay.RefreshGameBoxesAsync(game.GameId);
+        if (!quiet)
+        {
+            GameCatalogStatusText.Text = result.WasCached
+                ? $"Image already cached for game {game.GameId}."
+                : $"Image fetched for game {game.GameId}.";
+        }
+
+        return true;
+    }
+
+    private void QueueGameImagePrefetch(string gameId)
+    {
+        if (string.IsNullOrWhiteSpace(gameId))
+            return;
+
+        var cached = CachedGameImagePath(gameId);
+        if (cached is not null)
+        {
+            AppLog.Info($"Receiving image prefetch cache hit for game {gameId}: {cached}");
+            return;
+        }
+
+        var alreadyRunning = _gameImageCacheTasks.ContainsKey(gameId);
+        _ = GetOrStartGameImageCacheTask(gameId);
+        if (alreadyRunning)
+            AppLog.Info($"Receiving image prefetch already in progress for game {gameId}.");
+        else
+            AppLog.Info($"Receiving image prefetch started for game {gameId}.");
+    }
+
+    private Task<GameImageCacheResult> GetOrStartGameImageCacheTask(string gameId)
+    {
+        var cached = CachedGameImagePath(gameId);
+        if (cached is not null)
+        {
+            return Task.FromResult(new GameImageCacheResult(
+                cached,
+                WasCached: true,
+                $"Image already cached for game {gameId}."));
+        }
+
+        if (_gameImageCacheTasks.TryGetValue(gameId, out var existingTask))
+            return existingTask;
+
+        var task = FetchGameImageToCacheAsync(gameId);
+        _gameImageCacheTasks[gameId] = task;
+        _ = ObserveGameImageCacheTaskAsync(gameId, task);
+        return task;
+    }
+
+    private async Task ObserveGameImageCacheTaskAsync(
+        string gameId,
+        Task<GameImageCacheResult> task)
+    {
+        try
+        {
+            var result = await task;
+            AppLog.Info(result.Path is null
+                ? $"Game image cache unavailable for game {gameId}: {result.Message}"
+                : $"Game image cache ready for game {gameId}: {result.Path}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Game image cache failed for game {gameId}.", ex);
+        }
+        finally
+        {
+            if (_gameImageCacheTasks.TryGetValue(gameId, out var currentTask) &&
+                ReferenceEquals(currentTask, task))
+            {
+                _gameImageCacheTasks.Remove(gameId);
+            }
+        }
+    }
+
+    private async Task<GameImageCacheResult> FetchGameImageToCacheAsync(string gameId)
+    {
+        try
+        {
+            Directory.CreateDirectory(GameImageCacheDir);
+        }
+        catch (Exception ex)
+        {
+            return new GameImageCacheResult(
+                null,
+                WasCached: false,
+                $"Image cache is unavailable for game {gameId}: {ex.Message}");
+        }
+
+        var urls = OfficialImageUrls(gameId, _storeState).ToList();
+        if (urls.Count == 0)
+        {
+            return new GameImageCacheResult(
+                null,
+                WasCached: false,
+                $"No official image source is configured for state {_storeState}.");
         }
 
         foreach (var url in urls)
@@ -10192,37 +10366,64 @@ public sealed partial class MainWindow : Window
                 if (bytes.Length < 1024)
                     continue;
 
-                var extension = contentType.Contains("png", StringComparison.OrdinalIgnoreCase) ? ".png" : ".jpg";
-                var path = GameImageCachePath(game.GameId, extension);
-                DeleteCachedGameImages(game.GameId);
-                await File.WriteAllBytesAsync(path, bytes);
-
-                if (!UpsertManualGameRecord(game with
+                var cached = CachedGameImagePath(gameId);
+                if (cached is not null)
                 {
-                    Source = "Official",
-                    ImageUri = LocalFileUri(path),
-                    ImageStatus = "Image fetched"
-                }))
-                {
-                    if (!quiet)
-                        GameCatalogStatusText.Text = $"Image was fetched for game {game.GameId}, but its catalog record could not be saved.";
-                    return false;
+                    return new GameImageCacheResult(
+                        cached,
+                        WasCached: true,
+                        $"Image already cached for game {gameId}.",
+                        url);
                 }
 
-                await _rdisplay.RefreshGameBoxesAsync(game.GameId);
-                if (!quiet)
-                    GameCatalogStatusText.Text = $"Image fetched for game {game.GameId}.";
-                return true;
+                var extension = contentType.ToLowerInvariant() switch
+                {
+                    "image/png" => ".png",
+                    "image/jpeg" or "image/jpg" => ".jpg",
+                    _ => string.Empty
+                };
+                if (extension.Length == 0)
+                    continue;
+
+                var path = GameImageCachePath(gameId, extension);
+                var downloadPath = $"{path}.{Guid.NewGuid():N}.download";
+                try
+                {
+                    await File.WriteAllBytesAsync(downloadPath, bytes);
+                    cached = CachedGameImagePath(gameId);
+                    if (cached is not null)
+                    {
+                        return new GameImageCacheResult(
+                            cached,
+                            WasCached: true,
+                            $"Image already cached for game {gameId}.",
+                            url);
+                    }
+
+                    File.Move(downloadPath, path, overwrite: true);
+                }
+                finally
+                {
+                    if (File.Exists(downloadPath))
+                        File.Delete(downloadPath);
+                }
+
+                return new GameImageCacheResult(
+                    path,
+                    WasCached: false,
+                    $"Image fetched for game {gameId}.",
+                    url);
             }
-            catch
+            catch (Exception ex)
             {
-                // Try the next official candidate; final status is set below.
+                AppLog.Info($"Image source failed for game {gameId}: {url}. {ex.Message}");
             }
         }
 
-        if (!quiet)
-            GameCatalogStatusText.Text = $"Official image was not found for game {game.GameId}.";
-        return false;
+        return new GameImageCacheResult(
+            null,
+            WasCached: false,
+            $"Official image was not found for game {gameId}.");
     }
 
     private async Task EnsureGameImageCachedForGameAsync(string gameId)
@@ -10266,6 +10467,12 @@ public sealed partial class MainWindow : Window
         var stateCode = state.Trim().ToUpperInvariant();
         var game3 = digits.Length >= 3 ? digits[..3] : digits;
         var game4 = digits.Length >= 4 ? digits[..4] : digits;
+
+        if (stateCode.Length > 0)
+        {
+            yield return $"https://license.k2patel.in/api/v2/games/" +
+                $"{Uri.EscapeDataString(stateCode)}/{Uri.EscapeDataString(digits)}/image";
+        }
 
         if (stateCode == "GA")
             yield return $"https://www.galottery.com/content/dam/portal/images/scratchers-games/{game4}/thumb-lg.png";
@@ -11705,6 +11912,12 @@ public sealed partial class MainWindow : Window
                 "ms-appx:///Assets/SimpleLottoLogo64.png",
                 "Image not cached");
     }
+
+    private sealed record GameImageCacheResult(
+        string? Path,
+        bool WasCached,
+        string Message,
+        string? SourceUrl = null);
 
     private sealed record ClosingBinCard(
         int Number,

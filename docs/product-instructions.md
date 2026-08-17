@@ -49,6 +49,7 @@ Login expectations:
 - Do not add credential-composition rules beyond the four-digit PIN requirement, failed-login delays, or account lockouts.
 - Logging in controls access only. It does not start, end, or otherwise define a financial shift/close interval.
 - SimpleLotto is a single-computer, single-active-user application.
+- SimpleLotto is also single-instance. Launching it again while the primary process is visible, minimized, or hidden in the tray must restore and foreground the existing window. A secondary process must exit before initializing SQLite, scanner capture, the Rdisplay API host, background services, or another tray icon.
 - Only one user is actively operating the application at a time.
 - The active user can access the operational workflow allowed for their role.
 - The active user can run closing at any time.
@@ -685,7 +686,7 @@ Capture, classification, and routing contract:
 
 - There is one scanner routing contract with two capture adapters: paired Raw Input and focused WinUI `KeyDown`. Each adapter identifies one complete Enter-terminated scan before routing it, and only one adapter may own a physical scan at a time.
 - A paired scanner uses a background Raw Input message window filtered to the selected HID device identity (VID/PID/serial). It remains active when the window is unfocused or minimized to the tray and must not capture ordinary keyboard text from another device.
-- While a dedicated Closing workflow is open, it exclusively owns every complete scan from the paired Raw Input device. Closing receives the Enter-terminated raw value before global classification; dashboard sale, activation, import, and other routes must not receive or process it. Focused WinUI `KeyDown` is used for Closing only when paired Raw Input capture is unavailable.
+- While a dedicated Receiving or Closing workflow is open, that workflow exclusively owns every complete scan from the paired Raw Input device. It receives the Enter-terminated raw value before global classification; dashboard sale, activation, import, and other routes must not receive or process it. Focused WinUI `KeyDown` is used for the dedicated workflow only when paired Raw Input capture is unavailable.
 - Receiving and Closing process each Enter-terminated raw barcode exactly once. Do not pass a completed dedicated-workflow barcode through compact import-stream segmentation, and never append another bundle, bin, or inferred numeric segment to it. Compact multi-label segmentation is limited to the initial-import workflow that explicitly supports grouped input.
 - A keyboard-class scanner scan is grouped exactly like the known-good `main` workflow: accumulate every mapped key and dispatch the complete sequence only when the scanner sends Enter (the usual carriage-return keyboard-wedge suffix). Do not split, emit, or discard barcode input using inter-character, burst, or idle timers.
 - A completed raw or focused scanner value longer than the supported scan boundary must be discarded in full, shown as rejected input, and audited once. Never process its retained prefix as a barcode.

@@ -1,6 +1,9 @@
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
 using SimpleLotto.App.Services;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SimpleLotto.App;
@@ -11,7 +14,9 @@ public partial class App : Application
     private readonly RdisplayService _rdisplay;
     private readonly RdisplayApiHost _rdisplayApiHost;
     private readonly SystemSleepPreventionService _sleepPrevention = new();
+    private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
     private Window? _window;
+    private int _redirectedActivationPending;
 
     public App()
     {
@@ -31,12 +36,33 @@ public partial class App : Application
         _window = new MainWindow(_rdisplay, _store);
         _window.Closed += MainWindow_Closed;
         _window.Activate();
+        RestoreRedirectedActivationIfPending();
     }
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         _sleepPrevention.Dispose();
         _window = null;
+    }
+
+    internal void HandleRedirectedActivation(AppActivationArguments? args)
+    {
+        Interlocked.Exchange(ref _redirectedActivationPending, 1);
+        AppLog.Info(
+            $"Primary SimpleLotto instance received redirected {(args is null ? "launch" : args.Kind.ToString())} activation.");
+
+        _ = _dispatcherQueue.TryEnqueue(RestoreRedirectedActivationIfPending);
+    }
+
+    private void RestoreRedirectedActivationIfPending()
+    {
+        if (_window is not MainWindow window)
+            return;
+
+        if (Interlocked.Exchange(ref _redirectedActivationPending, 0) == 0)
+            return;
+
+        window.RestoreFromExternalLaunch();
     }
 
     private async System.Threading.Tasks.Task StartRdisplayApiAsync()
