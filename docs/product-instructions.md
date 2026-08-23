@@ -338,7 +338,7 @@ Bundle activation definition:
 - Activation is based on bin assignment state, not ticket number.
 - A bundle does not have to start at ticket `000` to be activated.
 - If a scanned bundle has no existing record in any bin during normal bin/inventory workflow, the system should treat that scan as a bundle activation candidate.
-- If a bundle is scanned before a bin and is not active, the app should open a focused bin-entry dialog, speak `Enter bin number or scan bin`, and allow a typed bin number or scanned bin barcode to close the dialog and use that bin as the placement location.
+- If a bundle is scanned before a bin and is not active, the app should open a focused activation dialog and speak `Enter bin number or scan bin`. A typed bin number or scanned bin barcode fills the placement location but does not choose `Sell Bundle`; pressing Enter accepts the default `Activate Bundle` action, while bundle sale requires an explicit secondary-button choice.
 - The exception is inventory receiving: bundle scans captured while adding/receiving inventory are receiving records only and must not be treated as activation until the user assigns the bundle to a bin.
 
 Regular bundle activation:
@@ -360,13 +360,16 @@ Regular bundle activation:
 - Choosing `Sell Bundle` during activation atomically records the activation placement and a `bundle_sale` for the entire configured first-through-final ticket range, then retains that new placement as sold out/dormant until Closing. It must not become the bin's displayed current bundle and must not sell, close, move, hide, or otherwise alter an older bundle already in that bin.
 - Selecting a specific bundle card in Bin Details must reveal a `Move Bundle` action. Do not show the move action when no bundle is selected.
 - Selecting a dormant, non-sold-out bundle card in Bin Details must enable `Set Active`. It changes only which bundle is current in that bin; the former current bundle becomes dormant automatically, and ticket position, sold-out state, sales, activation history, and bin assignment remain unchanged.
+- `Set Active` is current-bundle selection, not sold-out recovery. Keep it disabled while the selected placement is marked sold out because selecting a card supplies no physical ticket evidence and must never clear `Sold out`, restore claims, or reverse ledger activity.
+- To reactivate a prematurely sold-out bundle during ordinary operation, scan that bundle's corrected last-sold ticket. A valid backward scan transactionally restores every later ticket, applies the existing claimed/partially claimed/zero-claim correction rules, sets the next ticket as available, and clears `Sold out`. Scanning the configured final ticket merely confirms that the bundle is still correctly sold out and makes no change.
+- Sold-out recovery does not rewrite the bin's explicit current-order selection. After recovery, the bundle is available and may already be current if it retained the bin's highest priority; otherwise it remains dormant until the operator selects it and clicks `Set Active`.
 - `Move Bundle` must open a focused dialog that identifies the selected bundle, requires a whole destination bin number within the configured bin range, and offers `OK` and `Cancel`.
 - A successful manual move changes only the bundle's current bin assignment. Preserve its Game ID, Bundle ID, current ticket, sold-out state, sales, activation history, and close-interval history; refresh Bins, Inventory, Closing, and Rdisplay and audit the old and new bins.
 - Entering the current bin as the destination must keep the dialog open and require a different bin.
 - If the clerk scans or enters a bin number that does not exist, block activation and ask the clerk to scan the bin again or enter the correct bin number.
 - Activation must validate a manually entered or scanned bin against the configured range `1..configured bin count` both when accepting the activation dialog and immediately before persistence.
 - For an invalid bin, the app should give audio feedback such as `Wrong bin`.
-- Once both the bin and unassigned bundle are known, regular activation should complete immediately without an extra confirmation prompt.
+- Once both the bin and unassigned bundle are known, the activation dialog is the only decision point. Enter performs its default `Activate Bundle` action; after either activation action is accepted, do not add another confirmation prompt.
 - After successful activation, the app should give short audio feedback such as `Bundle activated in bin 12`.
 - Activation should trigger cache-first game image lookup for the activated game.
 - Game pricing must be complete before regular activation interprets the scanned ticket, because the saved ticket price, automatic bundle total, and global first-ticket mode determine the calculated last ticket.
@@ -821,6 +824,13 @@ Recommended module boundaries:
 - Persistence: SQLite schema, repositories, migrations, backup/restore, audit trail.
 - Settings: state setup, scanner/display, email, TTS. Game prices, automatic bundle totals, and global ticket numbering remain under Inventory.
 
+Bundle state model and ownership:
+
+- Physical/accounting state and bin-display selection are independent axes. A placement's ticket cursor and `Sold out` flag describe inventory and ledger state; its persisted current order describes only which available placement a bin presents as Current versus Dormant.
+- Scanner reconciliation owns sold-out recovery because the scanned ticket is the required physical evidence. It may update the cursor, claims, corrective ledger rows, and `Sold out` state atomically, but it must preserve explicit current order.
+- The Bins `Set Active` command owns only current-order selection. It may promote an available dormant placement and demote the former current placement, but it must not change ticket position, sales, claims, sold-out state, activation history, or bin assignment.
+- Rdisplay resolves each bin from the highest-priority non-sold-out placement. If none exists, it follows the configured empty/sold-out display behavior; it must never promote a sold-out placement merely because that placement was selected previously.
+
 Dependency rules:
 
 - UI code should call application services, not write directly to SQLite.
@@ -837,6 +847,7 @@ Transaction and consistency rules:
 - The closing transaction must persist a pending report/outbox job containing an immutable snapshot of the report inputs. Report files are generated only after that transaction commits; generation failure must leave the shift closed and the job retryable after restart.
 - Scan capture can be append-only during the dialog. Reconciliation applies business changes after scan collection.
 - Closed intervals are immutable; later fixes are corrective actions in a later/current open interval.
+- Regular backward-scan recovery of a sold-out placement must commit its cursor, `Sold out` flag, ticket-claim reconciliation, corrective ledger rows, and Audit records together. Current-order selection remains unchanged by that transaction.
 
 SQLite/schema requirements for first deliverable:
 
