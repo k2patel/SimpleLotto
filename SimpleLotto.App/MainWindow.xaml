@@ -702,6 +702,13 @@
                                                     Visibility="Collapsed"
                                                     IsEnabled="False"
                                                     Click="MoveSelectedBundleButton_Click"/>
+                                            <Button x:Name="SetSelectedBundleActiveButton"
+                                                    Content="Set Active"
+                                                    AutomationProperties.AutomationId="SetSelectedBundleActiveButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    Visibility="Collapsed"
+                                                    IsEnabled="False"
+                                                    Click="SetSelectedBundleActiveButton_Click"/>
                                             <Button x:Name="AddBundleToBinButton"
                                                     Content="Add Bundle"
                                                     HorizontalAlignment="Stretch"

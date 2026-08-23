@@ -321,7 +321,7 @@ Dashboard bin behavior:
 - When the user opens a bin, do not show the game photo as the primary detail. Show a summary of each bundle in that bin.
 - Bundle summary must include price, lotto name, game ID, bundle ID, and ticket range/status.
 - Multiple bundles in one bin should use a slightly darker visual treatment than a normal single-bundle bin so the operator can distinguish it quickly.
-- The current/latest bundle for a bin is whichever bundle was scanned most recently for that bin.
+- The current/latest bundle for a bin is whichever bundle was scanned most recently for that bin, unless the operator explicitly selects another available bundle with `Set Active`.
 - Older bundles in the same bin become dormant for display purposes.
 
 ### Bins
@@ -355,7 +355,11 @@ Regular bundle activation:
 - When a clerk activates a bundle, the bin can be identified either by scanning the bin barcode or by entering/selecting the bin number on screen.
 - Scanning the bin and entering/selecting the bin number are equivalent activation inputs; either one satisfies the bin-identification requirement.
 - The Bins detail panel should provide an Add Bundle action for the selected bin so the clerk can activate a scanned bundle directly into that bin without scanning the bin barcode again.
+- The bundle activation dialog must keep `Activate Bundle` as its primary/default action. Pressing Enter performs ordinary activation. `Sell Bundle` is a deliberate secondary choice and must never run from Enter or an ordinary bin scan.
+- Bundle activation must show the destination bin and ticket price together. Reuse and lock a valid saved Game price; when the Game ID has no valid saved price, require and persist a valid whole-dollar ticket price before placing or selling the bundle.
+- Choosing `Sell Bundle` during activation atomically records the activation placement and a `bundle_sale` for the entire configured first-through-final ticket range, then retains that new placement as sold out/dormant until Closing. It must not become the bin's displayed current bundle and must not sell, close, move, hide, or otherwise alter an older bundle already in that bin.
 - Selecting a specific bundle card in Bin Details must reveal a `Move Bundle` action. Do not show the move action when no bundle is selected.
+- Selecting a dormant, non-sold-out bundle card in Bin Details must enable `Set Active`. It changes only which bundle is current in that bin; the former current bundle becomes dormant automatically, and ticket position, sold-out state, sales, activation history, and bin assignment remain unchanged.
 - `Move Bundle` must open a focused dialog that identifies the selected bundle, requires a whole destination bin number within the configured bin range, and offers `OK` and `Cancel`.
 - A successful manual move changes only the bundle's current bin assignment. Preserve its Game ID, Bundle ID, current ticket, sold-out state, sales, activation history, and close-interval history; refresh Bins, Inventory, Closing, and Rdisplay and audit the old and new bins.
 - Entering the current bin as the destination must keep the dialog open and require a different bin.

@@ -12,7 +12,7 @@ public sealed class LocalStore
 {
     public const int RecentAuditLogLimit = 200;
 
-    private const int SchemaVersion = 19;
+    private const int SchemaVersion = 20;
     private const string SystemActorId = "system";
     private const string LegacyActorId = "legacy-migration";
     private static readonly object SchemaLock = new();
@@ -170,8 +170,11 @@ public sealed class LocalStore
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
-            VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc)
+            INSERT INTO imports (
+                game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc, current_order)
+            VALUES (
+                $game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc,
+                (SELECT COALESCE(MAX(current_order), 0) + 1 FROM imports))
             """;
         cmd.Parameters.AddWithValue("$game_id", line.GameId);
         cmd.Parameters.AddWithValue("$bundle_id", line.BundleId);
@@ -202,17 +205,19 @@ public sealed class LocalStore
     {
         if (!string.Equals(import.Source, "activation", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("An activation placement must use the activation source.");
-        if (import.IsSoldOut)
-            throw new InvalidOperationException("A newly activated bundle must have an available ticket.");
+        var isBundleSale = string.Equals(sale?.Source, "bundle_sale", StringComparison.OrdinalIgnoreCase);
+        if (import.IsSoldOut != isBundleSale)
+            throw new InvalidOperationException("Only an explicit bundle sale may activate a sold-out placement.");
         if (intervalId <= 0 || string.IsNullOrWhiteSpace(actorId) || string.IsNullOrWhiteSpace(actorName))
             throw new InvalidOperationException("An activation must identify the open interval and logged-in actor.");
         if (sale is not null &&
-            (!string.Equals(sale.Source, "activation_gap_fill", StringComparison.OrdinalIgnoreCase) ||
+            ((!string.Equals(sale.Source, "activation_gap_fill", StringComparison.OrdinalIgnoreCase) &&
+              !isBundleSale) ||
              !string.Equals(import.GameId.Trim(), sale.GameId.Trim(), StringComparison.OrdinalIgnoreCase) ||
              !string.Equals(import.BundleId.Trim(), sale.BundleId.Trim(), StringComparison.OrdinalIgnoreCase) ||
              !string.Equals(import.Bin.Trim(), sale.Bin.Trim(), StringComparison.OrdinalIgnoreCase)))
         {
-            throw new InvalidOperationException("An activation gap-fill sale must match its bundle placement.");
+            throw new InvalidOperationException("An activation sale must use an allowed source and match its bundle placement.");
         }
 
         using var conn = Open();
@@ -222,8 +227,18 @@ public sealed class LocalStore
         {
             importCmd.Transaction = tx;
             importCmd.CommandText = """
-                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
-                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc)
+                INSERT INTO imports (
+                    game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc, current_order)
+                VALUES (
+                    $game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc,
+                    CASE
+                        WHEN $is_sold_out = 1
+                            THEN (SELECT CASE
+                                WHEN MIN(current_order) IS NULL OR MIN(current_order) >= 0 THEN -1
+                                ELSE MIN(current_order) - 1
+                            END FROM imports)
+                        ELSE (SELECT COALESCE(MAX(current_order), 0) + 1 FROM imports)
+                    END)
                 """;
             importCmd.Parameters.AddWithValue("$game_id", import.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", import.BundleId);
@@ -437,6 +452,25 @@ public sealed class LocalStore
         cmd.Parameters.AddWithValue("$current_bin", currentBin);
         if (cmd.ExecuteNonQuery() == 0)
             throw new InvalidOperationException("Active bundle was not found in its current bin.");
+    }
+
+    public void SetImportBundleCurrent(string gameId, string bundleId, string bin)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE imports
+            SET current_order = (SELECT COALESCE(MAX(current_order), 0) + 1 FROM imports)
+            WHERE game_id = $game_id
+              AND bundle_id = $bundle_id
+              AND bin = $bin
+              AND is_sold_out = 0
+            """;
+        cmd.Parameters.AddWithValue("$game_id", gameId);
+        cmd.Parameters.AddWithValue("$bundle_id", bundleId);
+        cmd.Parameters.AddWithValue("$bin", bin);
+        if (cmd.ExecuteNonQuery() == 0)
+            throw new InvalidOperationException("Available bundle was not found in its current bin.");
     }
 
     public int? GetHighestClaimedTicketSerial(string gameId, string bundleId)
@@ -731,8 +765,11 @@ public sealed class LocalStore
         {
             importCmd.Transaction = tx;
             importCmd.CommandText = """
-                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
-                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, 0, $created_at_utc)
+                INSERT INTO imports (
+                    game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc, current_order)
+                VALUES (
+                    $game_id, $bundle_id, $ticket, $bin, $source, 0, $created_at_utc,
+                    (SELECT COALESCE(MAX(current_order), 0) + 1 FROM imports))
                 """;
             importCmd.Parameters.AddWithValue("$game_id", restoredBundle.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", restoredBundle.BundleId);
@@ -1155,8 +1192,11 @@ public sealed class LocalStore
             using var importCmd = conn.CreateCommand();
             importCmd.Transaction = tx;
             importCmd.CommandText = """
-                INSERT INTO imports (game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc)
-                VALUES ($game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc)
+                INSERT INTO imports (
+                    game_id, bundle_id, ticket, bin, source, is_sold_out, created_at_utc, current_order)
+                VALUES (
+                    $game_id, $bundle_id, $ticket, $bin, $source, $is_sold_out, $created_at_utc,
+                    (SELECT COALESCE(MAX(current_order), 0) + 1 FROM imports))
                 """;
             importCmd.Parameters.AddWithValue("$game_id", bundle.GameId);
             importCmd.Parameters.AddWithValue("$bundle_id", bundle.BundleId);
@@ -2166,13 +2206,17 @@ public sealed class LocalStore
                     bin TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'initial_import',
                     is_sold_out INTEGER NOT NULL DEFAULT 0,
-                    created_at_utc TEXT NOT NULL
+                    created_at_utc TEXT NOT NULL,
+                    current_order INTEGER NOT NULL DEFAULT 0
                 )
                 """);
             EnsureColumn(conn, "imports", "source", "TEXT NOT NULL DEFAULT 'initial_import'");
             EnsureColumn(conn, "imports", "is_sold_out", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(conn, "imports", "current_order", "INTEGER NOT NULL DEFAULT 0");
+            Exec(conn, "UPDATE imports SET current_order = id WHERE current_order = 0");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bundle ON imports(game_id, bundle_id)");
             Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_bin ON imports(bin)");
+            Exec(conn, "CREATE INDEX IF NOT EXISTS idx_imports_current_order ON imports(current_order DESC, id DESC)");
             Exec(conn, """
                 CREATE TABLE IF NOT EXISTS received_inventory (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2440,7 +2484,7 @@ public sealed class LocalStore
                 EnsureLedgerRuntimeState(conn);
             DropLedgerIntegrityTriggers(conn);
             CreateLedgerIntegrityTriggers(conn);
-            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Record closed bundles for exact reporting and future transactional recovery");
+            RecordSchemaMigration(conn, SchemaVersion, previousSchemaVersion, "Allow explicit current-bundle selection within a bin");
             Exec(conn, $"INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '{SchemaVersion.ToString(CultureInfo.InvariantCulture)}')");
             SchemaReadyPaths.Add(fullDatabasePath);
         }
@@ -3544,7 +3588,7 @@ public sealed class LocalStore
     {
         var rows = new List<StoredImportLine>();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT game_id, bundle_id, ticket, bin, source, is_sold_out FROM imports ORDER BY id DESC";
+        cmd.CommandText = "SELECT game_id, bundle_id, ticket, bin, source, is_sold_out FROM imports ORDER BY current_order DESC, id DESC";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             rows.Add(new StoredImportLine(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetInt32(5) != 0));
